@@ -13,3 +13,10 @@ auth:
   username: owner
   password_hash_file: /run/netstorage-secrets/app_password_hash
   session_key_file: /run/netstorage-secrets/session_key
+database:
+  host: postgres
+  port: 5432
+  name: netstorage
+  username: netstorage
+  password_file: /run/netstorage-secrets/postgres_password
+  ssl_mode: disable

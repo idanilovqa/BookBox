@@ -1,2 +1,3 @@
 deploy/entrypoint-api.sh text eol=lf
+deploy/entrypoint-worker.sh text eol=lf
 android/gradlew text eol=lf

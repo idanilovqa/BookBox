@@ -4,7 +4,9 @@
 !server/**
 !deploy/
 !deploy/Dockerfile.api
+!deploy/Dockerfile.worker
 !deploy/entrypoint-api.sh
+!deploy/entrypoint-worker.sh
 
 # Explicit permanent guards for sensitive or heavyweight paths.
 .git

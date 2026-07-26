@@ -39,6 +39,9 @@ $gitAttributeLines = @(Get-Content -LiteralPath $gitAttributes)
 if ($gitAttributeLines -cnotcontains 'deploy/entrypoint-api.sh text eol=lf') {
     throw 'The API entrypoint is not protected from CRLF conversion.'
 }
+if ($gitAttributeLines -cnotcontains 'deploy/entrypoint-worker.sh text eol=lf') {
+    throw 'The worker entrypoint is not protected from CRLF conversion.'
+}
 $environmentExample = Join-Path $repo 'deploy\.env.example'
 $environmentExampleLines = @(Get-Content -LiteralPath $environmentExample)
 if ($environmentExampleLines -cnotcontains 'NETSTORAGE_BIND_ADDRESS=127.0.0.1') {
@@ -65,7 +68,10 @@ $library = Join-Path $scratch 'library'
 $secrets = Join-Path $scratch 'secrets'
 $config = Join-Path $scratch 'config.yml'
 $envFile = Join-Path $scratch '.env'
-$ownedImage = "${project}-netstorage-api:latest"
+$ownedImages = @(
+    "${project}-netstorage-api:latest"
+    "${project}-netstorage-catalog-worker:latest"
+)
 $cleanupRequired = $false
 $primaryError = $null
 $baselineRunning = @(& docker ps -q)
@@ -108,9 +114,13 @@ function Assert-NoOwnedResources {
     $containers = @(Invoke-Docker @('ps', '-aq', '--filter', $filter))
     $networks = @(Invoke-Docker @('network', 'ls', '-q', '--filter', $filter))
     $volumes = @(Invoke-Docker @('volume', 'ls', '-q', '--filter', $filter))
-    $images = @(& docker image ls --quiet $ownedImage 2>&1)
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Could not inspect the owned smoke image.'
+    $images = @()
+    foreach ($ownedImage in $ownedImages) {
+        $imageIDs = @(& docker image ls --quiet $ownedImage 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not inspect the owned smoke image: $ownedImage"
+        }
+        $images += $imageIDs
     }
     if (
         $containers.Count -ne 0 -or
@@ -125,18 +135,6 @@ function Assert-NoOwnedResources {
 try {
     New-Item -ItemType Directory -Force $library, $secrets | Out-Null
     New-Item -ItemType Directory -Force (Join-Path $library 'Author\Book') | Out-Null
-    [IO.File]::WriteAllBytes(
-        (Join-Path $library 'Author\Book\chapter.m4b'),
-        [Text.Encoding]::UTF8.GetBytes('synthetic audiobook data')
-    )
-    $fixedTimestamp = [DateTime]::SpecifyKind(
-        [DateTime]::Parse('2020-01-02T03:04:05'),
-        [DateTimeKind]::Utc
-    )
-    Get-ChildItem -LiteralPath $library -Recurse -Force |
-        Sort-Object FullName -Descending |
-        ForEach-Object { $_.LastWriteTimeUtc = $fixedTimestamp }
-    $before = Get-SourceSnapshot $library
 
     $configText = @"
 listen: ":8443"
@@ -154,15 +152,19 @@ auth:
   username: owner
   password_hash_file: /run/netstorage-secrets/app_password_hash
   session_key_file: /run/netstorage-secrets/session_key
+database:
+  host: postgres
+  port: 5432
+  name: netstorage
+  username: netstorage
+  password_file: /run/netstorage-secrets/postgres_password
+  ssl_mode: disable
 "@
     [IO.File]::WriteAllText($config, $configText, [Text.UTF8Encoding]::new($false))
 
-    $salt = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes('0123456789abcdef')).TrimEnd('=')
-    $digest = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes('0123456789abcdef0123456789abcdef')).TrimEnd('=')
-    $passwordHash = '$argon2id$v=19$m=65536,t=3,p=2$' + $salt + '$' + $digest
     [IO.File]::WriteAllText(
         (Join-Path $secrets 'app_password_hash.txt'),
-        $passwordHash,
+        'pending-build-generated-hash',
         [Text.UTF8Encoding]::new($false)
     )
     [IO.File]::WriteAllBytes(
@@ -192,7 +194,46 @@ auth:
 
     $composeArgs = @('compose', '--env-file', $envFile, '-p', $project, '-f', $compose)
     $cleanupRequired = $true
-    Invoke-Docker ($composeArgs + @('up', '-d', '--build', '--wait', '--wait-timeout', '180')) | Out-Null
+    Invoke-Docker ($composeArgs + @('build')) | Out-Null
+
+    $adminInput = "smoke-password`nsmoke-password`n"
+    $passwordHashOutput = @(
+        $adminInput |
+            & docker run --rm -i --network none --read-only `
+                --entrypoint /usr/local/bin/netstorage-admin `
+                $ownedImages[0] hash-password --stdin 2>&1
+    )
+    if ($LASTEXITCODE -ne 0 -or $passwordHashOutput.Count -ne 1) {
+        throw "Could not generate the smoke password hash:`n$($passwordHashOutput -join [Environment]::NewLine)"
+    }
+    $passwordHash = $passwordHashOutput[0].ToString().Trim()
+    if ($passwordHash -notmatch '^\$argon2id\$') {
+        throw 'The admin tool returned an invalid password hash.'
+    }
+    [IO.File]::WriteAllText(
+        (Join-Path $secrets 'app_password_hash.txt'),
+        $passwordHash,
+        [Text.UTF8Encoding]::new($false)
+    )
+
+    Invoke-Docker ($composeArgs + @(
+        'run', '--rm', '--no-deps', '--entrypoint', 'ffmpeg',
+        'netstorage-catalog-worker',
+        '-hide_banner', '-loglevel', 'error',
+        '-f', 'lavfi', '-i', 'anullsrc=channel_layout=mono:sample_rate=8000',
+        '-t', '0.25', '-c:a', 'aac', '-y',
+        '/library/audiobooks/Author/Book/chapter.m4a'
+    )) | Out-Null
+    $fixedTimestamp = [DateTime]::SpecifyKind(
+        [DateTime]::Parse('2020-01-02T03:04:05'),
+        [DateTimeKind]::Utc
+    )
+    Get-ChildItem -LiteralPath $library -Recurse -Force |
+        Sort-Object FullName -Descending |
+        ForEach-Object { $_.LastWriteTimeUtc = $fixedTimestamp }
+    $before = Get-SourceSnapshot $library
+
+    Invoke-Docker ($composeArgs + @('up', '-d', '--wait', '--wait-timeout', '180')) | Out-Null
 
     $publishedPorts = @(
         Invoke-Docker ($composeArgs + @('port', 'netstorage-api', '8443')) |
@@ -238,7 +279,51 @@ auth:
         throw 'The API copied-secret tmpfs is missing.'
     }
 
-    foreach ($secretName in @('app_password_hash', 'session_key')) {
+    $workerID = (Invoke-Docker ($composeArgs + @(
+        'ps', '-q', 'netstorage-catalog-worker'
+    )) | Select-Object -First 1).Trim()
+    if (-not $workerID) {
+        throw 'Compose did not return a catalog worker container ID.'
+    }
+    $workerInspection = (Invoke-Docker @('inspect', $workerID) | ConvertFrom-Json)[0]
+    $workerAudioMount = @(
+        $workerInspection.Mounts |
+            Where-Object Destination -eq '/library/audiobooks'
+    )
+    if ($workerAudioMount.Count -ne 1 -or $workerAudioMount[0].RW -ne $true) {
+        throw 'The catalog worker audiobook bind is missing or read-only.'
+    }
+    if ($workerInspection.HostConfig.ReadonlyRootfs -ne $true) {
+        throw 'The catalog worker root filesystem is not read-only.'
+    }
+    if ($workerInspection.Config.User -ne '10001:10001') {
+        throw "Unexpected catalog worker user: $($workerInspection.Config.User)"
+    }
+    if (@($workerInspection.HostConfig.CapDrop) -notcontains 'ALL') {
+        throw 'The catalog worker does not drop all capabilities.'
+    }
+    if (@($workerInspection.HostConfig.SecurityOpt) -notcontains 'no-new-privileges:true') {
+        throw 'The catalog worker does not enable no-new-privileges.'
+    }
+    if ($workerInspection.HostConfig.Init -ne $true) {
+        throw 'The catalog worker does not enable an init process.'
+    }
+    if (@($workerInspection.NetworkSettings.Ports.PSObject.Properties).Count -ne 0) {
+        throw 'The catalog worker unexpectedly publishes a port.'
+    }
+    $workerDatabaseMode = (Invoke-Docker @(
+        'exec', $workerID, 'stat', '-c', '%a %u %g',
+        '/run/netstorage-secrets/postgres_password'
+    ) | Select-Object -First 1).Trim()
+    if ($workerDatabaseMode -ne '600 10001 10001') {
+        throw "The worker database secret has unexpected mode/owner: $workerDatabaseMode"
+    }
+
+    foreach ($secretName in @(
+        'app_password_hash',
+        'session_key',
+        'postgres_password'
+    )) {
         $mode = (Invoke-Docker @(
             'exec', $apiID, 'stat', '-c', '%a %u %g',
             "/run/netstorage-secrets/$secretName"
@@ -249,12 +334,22 @@ auth:
     }
     $sourceHashDigest = (Get-FileHash -LiteralPath (Join-Path $secrets 'app_password_hash.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
     $sourceKeyDigest = (Get-FileHash -LiteralPath (Join-Path $secrets 'session_key.bin') -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sourceDatabaseDigest = (Get-FileHash -LiteralPath (Join-Path $secrets 'postgres_password.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
     $containerHashLine = @(Invoke-Docker @('exec', $apiID, 'sha256sum', '/run/netstorage-secrets/app_password_hash'))[0].ToString()
     $containerKeyLine = @(Invoke-Docker @('exec', $apiID, 'sha256sum', '/run/netstorage-secrets/session_key'))[0].ToString()
+    $containerDatabaseLine = @(Invoke-Docker @('exec', $apiID, 'sha256sum', '/run/netstorage-secrets/postgres_password'))[0].ToString()
+    $workerDatabaseLine = @(Invoke-Docker @('exec', $workerID, 'sha256sum', '/run/netstorage-secrets/postgres_password'))[0].ToString()
     $containerHashDigest = ($containerHashLine -split '\s+')[0]
     $containerKeyDigest = ($containerKeyLine -split '\s+')[0]
-    if ($containerHashDigest -ne $sourceHashDigest -or $containerKeyDigest -ne $sourceKeyDigest) {
-        throw 'A copied API secret differs from its source.'
+    $containerDatabaseDigest = ($containerDatabaseLine -split '\s+')[0]
+    $workerDatabaseDigest = ($workerDatabaseLine -split '\s+')[0]
+    if (
+        $containerHashDigest -ne $sourceHashDigest -or
+        $containerKeyDigest -ne $sourceKeyDigest -or
+        $containerDatabaseDigest -ne $sourceDatabaseDigest -or
+        $workerDatabaseDigest -ne $sourceDatabaseDigest
+    ) {
+        throw 'A copied container secret differs from its source.'
     }
 
     Invoke-Docker @('exec', $apiID, 'test', '-w', '/var/lib/netstorage/tls') | Out-Null
@@ -280,6 +375,52 @@ auth:
         throw "Unexpected API health response: $health"
     }
 
+    $loginFile = Join-Path $scratch 'login.json'
+    [IO.File]::WriteAllText(
+        $loginFile,
+        '{"username":"owner","password":"smoke-password"}',
+        [Text.UTF8Encoding]::new($false)
+    )
+    $loginBody = @(
+        & curl.exe --fail --silent --show-error --insecure `
+            --header 'Content-Type: application/json' `
+            --data-binary "@$loginFile" `
+            "https://127.0.0.1:$port/v1/session"
+    )
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The smoke login request failed.'
+    }
+    $accessToken = (($loginBody -join '') | ConvertFrom-Json).accessToken
+    if (-not $accessToken) {
+        throw 'The smoke login response did not contain an access token.'
+    }
+
+    $books = $null
+    for ($attempt = 0; $attempt -lt 60; $attempt++) {
+        $booksBody = @(
+            & curl.exe --fail --silent --show-error --insecure `
+                --header "Authorization: Bearer $accessToken" `
+                "https://127.0.0.1:$port/v1/books?limit=10"
+        )
+        if ($LASTEXITCODE -ne 0) {
+            throw 'The authenticated catalog request failed.'
+        }
+        $books = ($booksBody -join '') | ConvertFrom-Json
+        if (@($books.items).Count -gt 0) {
+            break
+        }
+        Start-Sleep -Seconds 1
+    }
+    if (@($books.items).Count -ne 1) {
+        $workerLogs = Invoke-Docker ($composeArgs + @(
+            'logs', '--no-color', 'netstorage-catalog-worker'
+        ))
+        throw "The startup scan did not index exactly one audiobook:`n$($workerLogs -join [Environment]::NewLine)"
+    }
+    if ($books.items[0].sourceFolder -ne 'Author/Book') {
+        throw "The indexed audiobook has an unexpected source folder: $($books.items[0].sourceFolder)"
+    }
+
     $after = Get-SourceSnapshot $library
     $sourceDifferences = @(Compare-Object $before $after)
     if ($sourceDifferences.Count -ne 0) {
@@ -289,7 +430,24 @@ auth:
         throw "The synthetic audiobook source tree changed:`n$differenceText"
     }
 } catch {
-    $primaryError = $_
+    $caught = $_
+    $primaryError = $caught
+    if ($cleanupRequired) {
+        try {
+            $composeStatus = Invoke-Docker ($composeArgs + @('ps', '--all'))
+            $composeLogs = Invoke-Docker ($composeArgs + @(
+                'logs', '--no-color', '--tail', '200'
+            ))
+            $primaryError = [Exception]::new(
+                "$($caught.Exception.Message)`nCompose status:`n" +
+                "$($composeStatus -join [Environment]::NewLine)`nCompose logs:`n" +
+                "$($composeLogs -join [Environment]::NewLine)",
+                $caught.Exception
+            )
+        } catch {
+            Write-Warning "Could not capture failed smoke diagnostics: $_"
+        }
+    }
 } finally {
     if ($cleanupRequired) {
         try {
@@ -302,19 +460,21 @@ auth:
             }
         }
     }
-    $ownedImageID = @(& docker image ls --quiet $ownedImage 2>&1)
-    if ($LASTEXITCODE -ne 0) {
-        if ($null -eq $primaryError) {
-            $primaryError = 'Could not inspect the owned smoke image.'
-        }
-    } elseif ($ownedImageID.Count -gt 0) {
-        try {
-            Invoke-Docker @('image', 'rm', $ownedImage) | Out-Null
-        } catch {
+    foreach ($ownedImage in $ownedImages) {
+        $ownedImageID = @(& docker image ls --quiet $ownedImage 2>&1)
+        if ($LASTEXITCODE -ne 0) {
             if ($null -eq $primaryError) {
-                $primaryError = $_
-            } else {
-                Write-Warning $_
+                $primaryError = "Could not inspect the owned smoke image: $ownedImage"
+            }
+        } elseif ($ownedImageID.Count -gt 0) {
+            try {
+                Invoke-Docker @('image', 'rm', $ownedImage) | Out-Null
+            } catch {
+                if ($null -eq $primaryError) {
+                    $primaryError = $_
+                } else {
+                    Write-Warning $_
+                }
             }
         }
     }
@@ -357,4 +517,4 @@ if ($null -ne $primaryError) {
     throw $primaryError
 }
 
-Write-Host "PASS: $project was healthy, read-only, nonroot, source-preserving, and fully removed."
+Write-Host "PASS: $project indexed one real audiobook, preserved its source, and was fully removed."

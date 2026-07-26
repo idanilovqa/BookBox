@@ -52,6 +52,7 @@ services:
         source: tls_data
         target: /var/lib/netstorage
     secrets:
+      - postgres_password
       - source: app_password_hash
         target: app_password_hash.source
       - source: session_key
@@ -79,6 +80,52 @@ services:
         max-size: 10m
         max-file: "3"
 
+  netstorage-catalog-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.worker
+    restart: unless-stopped
+    init: true
+    user: "10001:10001"
+    volumes:
+      # Explicitly approved risk: Docker grants this worker mount-level write
+      # access to the whole library. The worker code limits writes to validated
+      # cover.jpg/folder.jpg/front.jpg variants, but the mount itself cannot
+      # enforce filename-only permissions.
+      - type: bind
+        source: "${NETSTORAGE_LIBRARY_PATH:?Set NETSTORAGE_LIBRARY_PATH in deploy/.env}"
+        target: /library/audiobooks
+      - type: bind
+        source: "${NETSTORAGE_CONFIG_HOST_FILE:?Set NETSTORAGE_CONFIG_HOST_FILE in deploy/.env}"
+        target: /etc/netstorage/config.yml
+        read_only: true
+      - type: volume
+        source: cover_cache
+        target: /var/lib/netstorage/covers
+      - type: volume
+        source: cover_backups
+        target: /var/lib/netstorage/backups
+    secrets:
+      - postgres_password
+    environment:
+      NETSTORAGE_COVER_BACKUP_ROOT: /var/lib/netstorage/backups
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,mode=1777
+      - /run/netstorage-secrets:rw,nosuid,nodev,noexec,mode=0700,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
 secrets:
   postgres_password:
     file: "${NETSTORAGE_POSTGRES_PASSWORD_HOST_FILE:?Set NETSTORAGE_POSTGRES_PASSWORD_HOST_FILE in deploy/.env}"
@@ -90,3 +137,5 @@ secrets:
 volumes:
   postgres_data:
   tls_data:
+  cover_cache:
+  cover_backups:
