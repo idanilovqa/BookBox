@@ -10,6 +10,7 @@ import (
 
 	"netstorage.local/server/internal/config"
 	"netstorage.local/server/internal/httpapi"
+	"netstorage.local/server/internal/library"
 )
 
 const version = "dev"
@@ -33,13 +34,29 @@ func run(args []string, insecureTestHTTP bool) error {
 	if err != nil {
 		return err
 	}
+	handler, err := buildHandler(cfg, version)
+	if err != nil {
+		return err
+	}
 
 	server := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           httpapi.New(httpapi.Dependencies{Version: version}),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return serve(server, insecureTestHTTP)
+}
+
+func buildHandler(cfg config.Config, buildVersion string) (http.Handler, error) {
+	resolver, err := library.NewResolver(cfg.Roots)
+	if err != nil {
+		return nil, err
+	}
+	return httpapi.New(httpapi.Dependencies{
+		Version: buildVersion,
+		Roots:   cfg.Roots,
+		Browser: library.NewBrowser(resolver),
+	}), nil
 }
 
 func serve(server *http.Server, insecureTestHTTP bool) error {
