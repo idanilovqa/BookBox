@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"netstorage.local/server/internal/auth"
 	"netstorage.local/server/internal/config"
 	"netstorage.local/server/internal/library"
+	"netstorage.local/server/internal/transfer"
 )
 
 type Dependencies struct {
@@ -22,6 +24,9 @@ type Dependencies struct {
 	Tokens           *auth.TokenManager
 	Limiter          *auth.LoginLimiter
 	Logger           *slog.Logger
+	Resolver         *library.Resolver
+	TransferBuilder  ManifestBuilder
+	FileSigner       *transfer.FileSigner
 }
 
 type route struct {
@@ -47,6 +52,7 @@ func New(deps Dependencies) http.Handler {
 }
 
 func routes(deps Dependencies) []route {
+	gate := newManifestGate(128)
 	return []route{
 		{
 			method: "GET",
@@ -81,8 +87,20 @@ func routes(deps Dependencies) []route {
 			path:    "/v1/browse",
 			handler: browseHandler(deps.Browser),
 		},
+		{
+			method:  "POST",
+			path:    "/v1/transfers/manifest",
+			handler: manifestHandler(deps.TransferBuilder, gate),
+		},
+		{
+			method:  "GET",
+			path:    "/v1/files/{fileId}",
+			handler: fileHandler(deps.Resolver, deps.FileSigner),
+		},
 	}
 }
+
+type accessSubjectContextKey struct{}
 
 func requireAccessToken(tokens *auth.TokenManager, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -97,12 +115,23 @@ func requireAccessToken(tokens *auth.TokenManager, next http.Handler) http.Handl
 			writeBearerUnauthorized(w)
 			return
 		}
-		if _, err := tokens.ValidateAccess(fields[1]); err != nil {
+		claims, err := tokens.ValidateAccess(fields[1])
+		if err != nil {
 			writeBearerUnauthorized(w)
 			return
 		}
-		next.ServeHTTP(w, request)
+		ctx := context.WithValue(
+			request.Context(),
+			accessSubjectContextKey{},
+			claims.Subject,
+		)
+		next.ServeHTTP(w, request.WithContext(ctx))
 	})
+}
+
+func accessSubject(ctx context.Context) (string, bool) {
+	subject, ok := ctx.Value(accessSubjectContextKey{}).(string)
+	return subject, ok && subject != ""
 }
 
 func writeBearerUnauthorized(w http.ResponseWriter) {

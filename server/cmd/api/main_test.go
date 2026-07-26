@@ -124,6 +124,13 @@ func TestBuildHandlerWiresAuthenticatedConfiguredRootsAndBrowser(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "Book"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(
+		filepath.Join(root, "Book", "chapter.mp3"),
+		[]byte("chapter"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
 	hash, err := auth.HashPassword("secret", auth.ArgonParams{
 		MemoryKiB: 64, Iterations: 1, Parallelism: 1,
 	})
@@ -169,6 +176,27 @@ func TestBuildHandlerWiresAuthenticatedConfiguredRootsAndBrowser(t *testing.T) {
 		} else if test.target != "/v1/roots" && !strings.Contains(body, test.want) {
 			t.Fatalf("%s body = %q, want substring %q", test.target, body, test.want)
 		}
+	}
+
+	manifestRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/transfers/manifest",
+		strings.NewReader(
+			`{"selections":[{"rootId":"audiobooks","relativePath":"Book","kind":"folder"}]}`,
+		),
+	)
+	manifestRequest.Header.Set("Authorization", "Bearer "+pair.AccessToken)
+	manifestRequest.Header.Set("Content-Type", "application/json")
+	manifestResponse := httptest.NewRecorder()
+	handler.ServeHTTP(manifestResponse, manifestRequest)
+	if manifestResponse.Code != http.StatusOK ||
+		!strings.Contains(manifestResponse.Body.String(), `"fileId"`) ||
+		!strings.Contains(manifestResponse.Body.String(), `"destinationPath":"Book/chapter.mp3"`) {
+		t.Fatalf(
+			"manifest response = %d %s",
+			manifestResponse.Code,
+			manifestResponse.Body.String(),
+		)
 	}
 }
 

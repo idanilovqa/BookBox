@@ -16,6 +16,7 @@ import (
 	"netstorage.local/server/internal/httpapi"
 	"netstorage.local/server/internal/library"
 	"netstorage.local/server/internal/tlsidentity"
+	"netstorage.local/server/internal/transfer"
 )
 
 const version = "dev"
@@ -93,6 +94,10 @@ func buildHandler(
 	if err != nil {
 		return nil, nil, err
 	}
+	fileSigner, err := transfer.NewFileSigner(secrets.SessionKey)
+	if err != nil {
+		return nil, nil, err
+	}
 	handler := httpapi.New(httpapi.Dependencies{
 		Version:          buildVersion,
 		Roots:            cfg.Roots,
@@ -103,6 +108,9 @@ func buildHandler(
 		Tokens:           tokens,
 		Limiter:          auth.NewLoginLimiter(10000, time.Now),
 		Logger:           logger,
+		Resolver:         resolver,
+		TransferBuilder:  transfer.NewBuilder(resolver, fileSigner),
+		FileSigner:       fileSigner,
 	})
 	return handler, tokens, nil
 }
