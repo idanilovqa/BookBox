@@ -50,13 +50,14 @@ type JobRepository interface {
 }
 
 type Worker struct {
-	Repo        JobRepository
-	Roots       []config.Root
-	WorkerID    string
-	Handlers    map[string]Handler
-	Clock       func() time.Time
-	Wait        func(context.Context, time.Duration) error
-	GracePeriod time.Duration
+	Repo         JobRepository
+	Roots        []config.Root
+	WorkerID     string
+	Handlers     map[string]Handler
+	Clock        func() time.Time
+	Wait         func(context.Context, time.Duration) error
+	GracePeriod  time.Duration
+	ScanInterval time.Duration
 }
 
 func (worker *Worker) Run(ctx context.Context) error {
@@ -76,12 +77,16 @@ func (worker *Worker) Run(ctx context.Context) error {
 	if gracePeriod <= 0 {
 		gracePeriod = DefaultGracePeriod
 	}
+	scanInterval := worker.ScanInterval
+	if scanInterval <= 0 {
+		scanInterval = ScanInterval
+	}
 
 	now := clock().UTC()
 	if err := worker.scheduleScans(ctx, now); err != nil {
 		return fmt.Errorf("schedule startup scans: %w", err)
 	}
-	nextScan := now.Add(ScanInterval)
+	nextScan := now.Add(scanInterval)
 
 	for {
 		if ctx.Err() != nil {
@@ -93,7 +98,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 				return fmt.Errorf("schedule periodic scans: %w", err)
 			}
 			for !nextScan.After(now) {
-				nextScan = nextScan.Add(ScanInterval)
+				nextScan = nextScan.Add(scanInterval)
 			}
 		}
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -85,7 +86,11 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	providers, err := metadataProviders()
+	options, err := workerOptionsFromEnvironment()
+	if err != nil {
+		return err
+	}
+	providers, err := metadataProviders(options)
 	if err != nil {
 		return err
 	}
@@ -111,9 +116,10 @@ func run(args []string) error {
 	}
 	host, _ := os.Hostname()
 	runtime := &worker.Worker{
-		Repo:     repository,
-		Roots:    cfg.Roots,
-		WorkerID: strings.TrimSpace(host) + ":" + uuid.NewString(),
+		Repo:         repository,
+		Roots:        cfg.Roots,
+		WorkerID:     strings.TrimSpace(host) + ":" + uuid.NewString(),
+		ScanInterval: options.scanInterval,
 		Handlers: map[string]worker.Handler{
 			catalog.JobScanRoot:     scanHandler,
 			catalog.JobEnrichBook:   enrichHandler,
@@ -129,8 +135,51 @@ func run(args []string) error {
 	return runtime.Run(ctx)
 }
 
-func metadataProviders() ([]metadata.Provider, error) {
-	openLibrary, err := metadata.NewOpenLibrary("", nil)
+type workerOptions struct {
+	scanInterval       time.Duration
+	openLibraryBaseURL string
+	googleBooksBaseURL string
+}
+
+func workerOptionsFromEnvironment() (workerOptions, error) {
+	options := workerOptions{
+		scanInterval:       worker.ScanInterval,
+		openLibraryBaseURL: strings.TrimSpace(os.Getenv("NETSTORAGE_OPENLIBRARY_BASE_URL")),
+		googleBooksBaseURL: strings.TrimSpace(os.Getenv("NETSTORAGE_GOOGLE_BOOKS_BASE_URL")),
+	}
+	if raw := strings.TrimSpace(os.Getenv("NETSTORAGE_SCAN_INTERVAL")); raw != "" {
+		interval, err := time.ParseDuration(raw)
+		if err != nil || interval <= 0 || interval > 24*time.Hour {
+			return workerOptions{}, errors.New("NETSTORAGE_SCAN_INTERVAL is invalid")
+		}
+		options.scanInterval = interval
+	}
+	for variable, baseURL := range map[string]string{
+		"NETSTORAGE_OPENLIBRARY_BASE_URL":  options.openLibraryBaseURL,
+		"NETSTORAGE_GOOGLE_BOOKS_BASE_URL": options.googleBooksBaseURL,
+	} {
+		if err := validateProviderBaseURL(baseURL); err != nil {
+			return workerOptions{}, fmt.Errorf("%s is invalid", variable)
+		}
+	}
+	return options, nil
+}
+
+func validateProviderBaseURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Host == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("provider base URL is unsafe")
+	}
+	return nil
+}
+
+func metadataProviders(options workerOptions) ([]metadata.Provider, error) {
+	openLibrary, err := metadata.NewOpenLibrary(options.openLibraryBaseURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +203,7 @@ func metadataProviders() ([]metadata.Provider, error) {
 	if strings.ContainsAny(key, "\r\n") {
 		return nil, errors.New("Google Books API key file is invalid")
 	}
-	googleBooks, err := metadata.NewGoogleBooks("", key, nil)
+	googleBooks, err := metadata.NewGoogleBooks(options.googleBooksBaseURL, key, nil)
 	if err != nil {
 		return nil, err
 	}

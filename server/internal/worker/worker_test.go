@@ -54,6 +54,37 @@ func TestWorkerSchedulesStartupAndSixHourScans(t *testing.T) {
 	}
 }
 
+func TestWorkerUsesConfiguredScanInterval(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	ctx, cancel := context.WithCancel(context.Background())
+	repository := &jobRepositoryFake{}
+	configured := 5 * time.Second
+	waits := 0
+	runtime := &Worker{
+		Repo:         repository,
+		Roots:        []config.Root{{ID: "audio"}},
+		WorkerID:     "test-worker",
+		ScanInterval: configured,
+		Clock:        func() time.Time { return now },
+		Wait: func(context.Context, time.Duration) error {
+			waits++
+			if waits == 1 {
+				now = now.Add(configured)
+				return nil
+			}
+			cancel()
+			return context.Canceled
+		},
+	}
+
+	if err := runtime.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := repository.enqueuedRoots, []string{"audio", "audio"}; !slices.Equal(got, want) {
+		t.Fatalf("scheduled roots = %v, want %v", got, want)
+	}
+}
+
 func TestWorkerStopsClaimsAndCancelsCurrentHandlerAfterGracePeriod(t *testing.T) {
 	job := catalog.WorkerJob{
 		ID: uuid.New(), Kind: catalog.JobEnrichBook, LeaseToken: uuid.New(),
