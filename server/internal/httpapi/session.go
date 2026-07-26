@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-
-	"netstorage.local/server/internal/auth"
 )
 
 const maxSessionBodyBytes = 4096
@@ -35,7 +33,8 @@ func loginHandler(deps Dependencies) http.Handler {
 			return
 		}
 		limitUsername := deps.Username
-		if allowed, retry := deps.Limiter.Allow(limitUsername, request.RemoteAddr); !allowed {
+		reservation, allowed, retry := deps.Limiter.Reserve(limitUsername, request.RemoteAddr)
+		if !allowed {
 			seconds := int64(math.Ceil(retry.Seconds()))
 			if seconds < 1 {
 				seconds = 1
@@ -47,8 +46,13 @@ func loginHandler(deps Dependencies) http.Handler {
 			}})
 			return
 		}
+		defer reservation.Cancel()
 
-		passwordOK, err := auth.VerifyPassword(deps.PasswordHash, input.Password)
+		passwordOK, err := deps.PasswordVerifier.Verify(
+			request.Context(),
+			deps.PasswordHash,
+			input.Password,
+		)
 		if err != nil {
 			writeInternalError(w)
 			return
@@ -58,16 +62,16 @@ func loginHandler(deps Dependencies) http.Handler {
 			strings.TrimSpace(deps.Username),
 		)
 		if !passwordOK || !usernameOK {
-			deps.Limiter.RecordFailure(limitUsername, request.RemoteAddr)
+			reservation.Failure()
 			writeInvalidCredentials(w)
 			return
 		}
-		deps.Limiter.RecordSuccess(limitUsername, request.RemoteAddr)
 		pair, err := deps.Tokens.Issue(deps.Username)
 		if err != nil {
 			writeInternalError(w)
 			return
 		}
+		reservation.Success()
 		writeJSON(w, http.StatusOK, pair)
 	})
 }

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -170,6 +171,145 @@ func TestTokenManagerRotationIsConcurrencySafe(t *testing.T) {
 	wait.Wait()
 }
 
+func TestIssueUsesOneKeyGenerationAcrossPairAndRotate(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	oldKey := testSessionKey("i")
+	reader := newGatedReader()
+	reader.arm(2)
+	manager, err := newTokenManagerWithRandom(oldKey, func() time.Time { return now }, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	issued := make(chan Pair, 1)
+	issueErrors := make(chan error, 1)
+	go func() {
+		pair, issueErr := manager.Issue("owner")
+		issued <- pair
+		issueErrors <- issueErr
+	}()
+	<-reader.entered
+	rotated := make(chan error, 1)
+	rotateStarted := make(chan struct{})
+	go func() {
+		close(rotateStarted)
+		rotated <- manager.Rotate(testSessionKey("j"))
+	}()
+	<-rotateStarted
+	assertDoesNotComplete(t, rotated, "Rotate returned while Issue was in progress")
+	close(reader.release)
+	pair := <-issued
+	if err := <-issueErrors; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-rotated; err != nil {
+		t.Fatal(err)
+	}
+
+	oldManager, err := NewTokenManager(oldKey, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oldManager.ValidateAccess(pair.AccessToken); err != nil {
+		t.Fatalf("access token was not signed by Issue generation: %v", err)
+	}
+	if _, err := oldManager.Refresh(pair.RefreshToken); err != nil {
+		t.Fatalf("refresh token was not signed by Issue generation: %v", err)
+	}
+}
+
+func TestRefreshCannotMintAfterRotateReturns(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	oldKey := testSessionKey("k")
+	reader := newGatedReader()
+	manager, err := newTokenManagerWithRandom(oldKey, func() time.Time { return now }, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := manager.Issue("owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader.arm(3)
+
+	refreshed := make(chan Pair, 1)
+	refreshErrors := make(chan error, 1)
+	go func() {
+		pair, refreshErr := manager.Refresh(original.RefreshToken)
+		refreshed <- pair
+		refreshErrors <- refreshErr
+	}()
+	<-reader.entered
+	rotated := make(chan error, 1)
+	rotateStarted := make(chan struct{})
+	go func() {
+		close(rotateStarted)
+		rotated <- manager.Rotate(testSessionKey("l"))
+	}()
+	<-rotateStarted
+	assertDoesNotComplete(t, rotated, "Rotate returned while Refresh was in progress")
+	close(reader.release)
+	pair := <-refreshed
+	if err := <-refreshErrors; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-rotated; err != nil {
+		t.Fatal(err)
+	}
+	oldManager, err := NewTokenManager(oldKey, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oldManager.ValidateAccess(pair.AccessToken); err != nil {
+		t.Fatalf("refreshed access token escaped the refresh generation: %v", err)
+	}
+}
+
+func TestValidateAccessCannotCompleteOldGenerationAfterRotateReturns(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	manager, err := NewTokenManager(testSessionKey("m"), func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := manager.Issue("owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	manager.now = func() time.Time {
+		once.Do(func() { close(entered) })
+		<-release
+		return now
+	}
+
+	validated := make(chan error, 1)
+	go func() {
+		_, validateErr := manager.ValidateAccess(pair.AccessToken)
+		validated <- validateErr
+	}()
+	<-entered
+	rotated := make(chan error, 1)
+	rotateStarted := make(chan struct{})
+	go func() {
+		close(rotateStarted)
+		rotated <- manager.Rotate(testSessionKey("n"))
+	}()
+	<-rotateStarted
+	assertDoesNotComplete(t, rotated, "Rotate returned while ValidateAccess was in progress")
+	close(release)
+	if err := <-validated; err != nil {
+		t.Fatalf("in-flight validation failed: %v", err)
+	}
+	if err := <-rotated; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ValidateAccess(pair.AccessToken); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("post-rotation validation error = %v, want ErrInvalidToken", err)
+	}
+}
+
 func withClaims(original Claims, change func(*Claims)) Claims {
 	copy := original
 	copy.Audience = append(jwt.ClaimStrings(nil), original.Audience...)
@@ -188,4 +328,52 @@ func signTestToken(t *testing.T, method jwt.SigningMethod, key []byte, claims Cl
 
 func testSessionKey(fill string) []byte {
 	return []byte(strings.Repeat(fill, 32))
+}
+
+type gatedReader struct {
+	mu      sync.Mutex
+	reads   int
+	blockAt int
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newGatedReader() *gatedReader {
+	return &gatedReader{}
+}
+
+func (reader *gatedReader) arm(read int) {
+	reader.mu.Lock()
+	reader.blockAt = read
+	reader.entered = make(chan struct{}, 1)
+	reader.release = make(chan struct{})
+	reader.mu.Unlock()
+}
+
+func (reader *gatedReader) Read(buffer []byte) (int, error) {
+	reader.mu.Lock()
+	reader.reads++
+	shouldBlock := reader.reads == reader.blockAt
+	entered := reader.entered
+	release := reader.release
+	reader.mu.Unlock()
+	if shouldBlock {
+		entered <- struct{}{}
+		<-release
+	}
+	for index := range buffer {
+		buffer[index] = byte(index + 1)
+	}
+	return len(buffer), nil
+}
+
+var _ io.Reader = (*gatedReader)(nil)
+
+func assertDoesNotComplete(t *testing.T, result <-chan error, message string) {
+	t.Helper()
+	select {
+	case err := <-result:
+		t.Fatalf("%s: %v", message, err)
+	case <-time.After(150 * time.Millisecond):
+	}
 }

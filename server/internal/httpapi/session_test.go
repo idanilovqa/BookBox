@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -212,6 +213,103 @@ func TestStatusResponseWriterForwardsOnlyFirstHeader(t *testing.T) {
 	}
 }
 
+func TestLoginAtomicallyLimitsSameKeyBeforeArgonVerification(t *testing.T) {
+	entered := make(chan struct{}, 6)
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	api := newSessionAPIWithVerifier(t, auth.NewPasswordVerifier(10, func(_, _ string) (bool, error) {
+		entered <- struct{}{}
+		<-release
+		return false, nil
+	}))
+
+	responses := make(chan int, 6)
+	var ready sync.WaitGroup
+	ready.Add(6)
+	start := make(chan struct{})
+	for index := 0; index < 6; index++ {
+		go func() {
+			ready.Done()
+			<-start
+			responses <- postLoginFrom(api, "192.0.2.1:1000").Code
+		}()
+	}
+	ready.Wait()
+	close(start)
+	for index := 0; index < 5; index++ {
+		<-entered
+	}
+	select {
+	case <-entered:
+		t.Fatal("more than five same-key requests entered password verification")
+	case status := <-responses:
+		if status != http.StatusTooManyRequests {
+			t.Fatalf("sixth concurrent login status = %d, want 429", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sixth same-key request did not fail closed")
+	}
+	close(release)
+	for index := 0; index < 5; index++ {
+		if status := <-responses; status != http.StatusUnauthorized {
+			t.Fatalf("completed failed login status = %d, want 401", status)
+		}
+	}
+}
+
+func TestLoginCapsArgonVerificationAcrossDistinctIPs(t *testing.T) {
+	entered := make(chan struct{}, 3)
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	api := newSessionAPIWithVerifier(t, auth.NewPasswordVerifier(2, func(_, _ string) (bool, error) {
+		entered <- struct{}{}
+		<-release
+		return false, nil
+	}))
+
+	responses := make(chan int, 3)
+	var ready sync.WaitGroup
+	ready.Add(3)
+	start := make(chan struct{})
+	for index := 1; index <= 3; index++ {
+		remote := fmt.Sprintf("192.0.2.%d:1000", index)
+		go func() {
+			ready.Done()
+			<-start
+			responses <- postLoginFrom(api, remote).Code
+		}()
+	}
+	ready.Wait()
+	close(start)
+	<-entered
+	<-entered
+	select {
+	case <-entered:
+		t.Fatal("third distinct-IP request bypassed the verifier cap")
+	case <-time.After(150 * time.Millisecond):
+	}
+	release <- struct{}{}
+	<-entered
+	close(release)
+	for index := 0; index < 3; index++ {
+		if status := <-responses; status != http.StatusUnauthorized {
+			t.Fatalf("failed login status = %d, want 401", status)
+		}
+	}
+}
+
 type countingHeaderWriter struct {
 	header   http.Header
 	statuses []int
@@ -257,6 +355,40 @@ func newSessionAPI(t *testing.T, logger *slog.Logger) (http.Handler, *auth.Token
 func postJSON(handler http.Handler, target, body string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func newSessionAPIWithVerifier(t *testing.T, verifier *auth.PasswordVerifier) http.Handler {
+	t.Helper()
+	hash, err := auth.HashPassword("secret", auth.ArgonParams{
+		MemoryKiB: 64, Iterations: 1, Parallelism: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := auth.NewTokenManager([]byte(strings.Repeat("v", 32)), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return New(Dependencies{
+		Username:         "owner",
+		PasswordHash:     hash,
+		PasswordVerifier: verifier,
+		Tokens:           manager,
+		Limiter:          auth.NewLoginLimiter(10000, time.Now),
+	})
+}
+
+func postLoginFrom(handler http.Handler, remoteAddress string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/session",
+		strings.NewReader(`{"username":"owner","password":"wrong"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.RemoteAddr = remoteAddress
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response

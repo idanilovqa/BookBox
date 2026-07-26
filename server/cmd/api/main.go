@@ -94,14 +94,15 @@ func buildHandler(
 		return nil, nil, err
 	}
 	handler := httpapi.New(httpapi.Dependencies{
-		Version:      buildVersion,
-		Roots:        cfg.Roots,
-		Browser:      library.NewBrowser(resolver),
-		Username:     cfg.Auth.Username,
-		PasswordHash: secrets.PasswordHash,
-		Tokens:       tokens,
-		Limiter:      auth.NewLoginLimiter(10000, time.Now),
-		Logger:       logger,
+		Version:          buildVersion,
+		Roots:            cfg.Roots,
+		Browser:          library.NewBrowser(resolver),
+		Username:         cfg.Auth.Username,
+		PasswordHash:     secrets.PasswordHash,
+		PasswordVerifier: auth.ProductionPasswordVerifier,
+		Tokens:           tokens,
+		Limiter:          auth.NewLoginLimiter(10000, time.Now),
+		Logger:           logger,
 	})
 	return handler, tokens, nil
 }

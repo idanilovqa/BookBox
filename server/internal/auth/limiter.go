@@ -15,7 +15,9 @@ const (
 
 type loginBucket struct {
 	failures int
+	inflight int
 	expires  time.Time
+	id       uint64
 }
 
 type LoginLimiter struct {
@@ -23,6 +25,14 @@ type LoginLimiter struct {
 	buckets    map[string]loginBucket
 	maxEntries int
 	now        func() time.Time
+	nextID     uint64
+}
+
+type LoginReservation struct {
+	limiter *LoginLimiter
+	key     string
+	bucket  uint64
+	once    sync.Once
 }
 
 func NewLoginLimiter(maxEntries int, now func() time.Time) *LoginLimiter {
@@ -39,51 +49,92 @@ func NewLoginLimiter(maxEntries int, now func() time.Time) *LoginLimiter {
 	}
 }
 
-func (limiter *LoginLimiter) Allow(username, remoteAddress string) (bool, time.Duration) {
-	now := limiter.now()
-	key := loginBucketKey(username, remoteAddress)
-	limiter.mu.Lock()
-	defer limiter.mu.Unlock()
-	limiter.removeExpired(now)
-	if bucket, exists := limiter.buckets[key]; exists {
-		if bucket.failures >= loginFailureLimit {
-			return false, bucket.expires.Sub(now)
-		}
-		return true, 0
-	}
-	if len(limiter.buckets) >= limiter.maxEntries {
-		return false, loginWindow
-	}
-	return true, 0
-}
-
-func (limiter *LoginLimiter) RecordFailure(username, remoteAddress string) {
+func (limiter *LoginLimiter) Reserve(
+	username string,
+	remoteAddress string,
+) (*LoginReservation, bool, time.Duration) {
 	now := limiter.now()
 	key := loginBucketKey(username, remoteAddress)
 	limiter.mu.Lock()
 	defer limiter.mu.Unlock()
 	limiter.removeExpired(now)
 	bucket, exists := limiter.buckets[key]
+	if exists && bucket.failures+bucket.inflight >= loginFailureLimit {
+		retry := bucket.expires.Sub(now)
+		if retry <= 0 {
+			retry = loginWindow
+		}
+		return nil, false, retry
+	}
 	if !exists {
 		if len(limiter.buckets) >= limiter.maxEntries {
-			return
+			return nil, false, loginWindow
 		}
-		bucket.expires = now.Add(loginWindow)
+		limiter.nextID++
+		bucket = loginBucket{expires: now.Add(loginWindow), id: limiter.nextID}
 	}
-	bucket.failures++
+	bucket.inflight++
 	limiter.buckets[key] = bucket
+	return &LoginReservation{limiter: limiter, key: key, bucket: bucket.id}, true, 0
 }
 
-func (limiter *LoginLimiter) RecordSuccess(username, remoteAddress string) {
-	key := loginBucketKey(username, remoteAddress)
-	limiter.mu.Lock()
-	delete(limiter.buckets, key)
-	limiter.mu.Unlock()
+func (reservation *LoginReservation) Failure() {
+	reservation.finish(reservationFailure)
+}
+
+func (reservation *LoginReservation) Success() {
+	reservation.finish(reservationSuccess)
+}
+
+func (reservation *LoginReservation) Cancel() {
+	reservation.finish(reservationCancel)
+}
+
+type reservationResult uint8
+
+const (
+	reservationFailure reservationResult = iota
+	reservationSuccess
+	reservationCancel
+)
+
+func (reservation *LoginReservation) finish(result reservationResult) {
+	if reservation == nil || reservation.limiter == nil {
+		return
+	}
+	reservation.once.Do(func() {
+		limiter := reservation.limiter
+		now := limiter.now()
+		limiter.mu.Lock()
+		defer limiter.mu.Unlock()
+		bucket, exists := limiter.buckets[reservation.key]
+		if !exists || bucket.id != reservation.bucket {
+			return
+		}
+		if result == reservationSuccess {
+			delete(limiter.buckets, reservation.key)
+			return
+		}
+		if bucket.inflight > 0 {
+			bucket.inflight--
+		}
+		if result == reservationFailure {
+			if !now.Before(bucket.expires) {
+				bucket.expires = now.Add(loginWindow)
+			}
+			bucket.failures++
+		}
+		if bucket.failures == 0 && bucket.inflight == 0 {
+			delete(limiter.buckets, reservation.key)
+			return
+		}
+		limiter.buckets[reservation.key] = bucket
+	})
 }
 
 func (limiter *LoginLimiter) removeExpired(now time.Time) {
 	for key, bucket := range limiter.buckets {
-		if !now.Before(bucket.expires) {
+		if !now.Before(bucket.expires) && bucket.inflight == 0 {
 			delete(limiter.buckets, key)
 		}
 	}

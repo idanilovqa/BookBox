@@ -13,14 +13,15 @@ import (
 )
 
 type Dependencies struct {
-	Version      string
-	Roots        []config.Root
-	Browser      *library.Browser
-	Username     string
-	PasswordHash string
-	Tokens       *auth.TokenManager
-	Limiter      *auth.LoginLimiter
-	Logger       *slog.Logger
+	Version          string
+	Roots            []config.Root
+	Browser          *library.Browser
+	Username         string
+	PasswordHash     string
+	PasswordVerifier *auth.PasswordVerifier
+	Tokens           *auth.TokenManager
+	Limiter          *auth.LoginLimiter
+	Logger           *slog.Logger
 }
 
 type route struct {

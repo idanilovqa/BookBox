@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -35,6 +36,50 @@ var ProductionArgonParams = ArgonParams{
 	MemoryKiB:   65536,
 	Iterations:  3,
 	Parallelism: 2,
+}
+
+type PasswordVerifier struct {
+	slots  chan struct{}
+	verify func(string, string) (bool, error)
+}
+
+var ProductionPasswordVerifier = NewPasswordVerifier(2, VerifyPassword)
+
+func NewPasswordVerifier(
+	maxConcurrent int,
+	verify func(encoded, candidate string) (bool, error),
+) *PasswordVerifier {
+	if maxConcurrent <= 0 {
+		maxConcurrent = 1
+	}
+	if verify == nil {
+		verify = VerifyPassword
+	}
+	return &PasswordVerifier{
+		slots:  make(chan struct{}, maxConcurrent),
+		verify: verify,
+	}
+}
+
+func (verifier *PasswordVerifier) Verify(
+	ctx context.Context,
+	encoded string,
+	candidate string,
+) (bool, error) {
+	if verifier == nil {
+		verifier = ProductionPasswordVerifier
+	}
+	select {
+	case verifier.slots <- struct{}{}:
+		defer func() { <-verifier.slots }()
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+	ok, err := verifier.verify(encoded, candidate)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return false, contextErr
+	}
+	return ok, err
 }
 
 func HashPassword(password string, params ArgonParams) (string, error) {

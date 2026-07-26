@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -41,32 +42,54 @@ type Pair struct {
 }
 
 type TokenManager struct {
-	mu  sync.RWMutex
-	key []byte
-	now func() time.Time
+	mu     sync.RWMutex
+	key    []byte
+	now    func() time.Time
+	random io.Reader
 }
 
 func NewTokenManager(key []byte, now func() time.Time) (*TokenManager, error) {
+	return newTokenManagerWithRandom(key, now, rand.Reader)
+}
+
+func newTokenManagerWithRandom(
+	key []byte,
+	now func() time.Time,
+	random io.Reader,
+) (*TokenManager, error) {
 	if len(key) != sessionKeyBytes {
 		return nil, ErrInvalidSessionKey
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return &TokenManager{key: append([]byte(nil), key...), now: now}, nil
+	if random == nil {
+		random = rand.Reader
+	}
+	return &TokenManager{
+		key:    append([]byte(nil), key...),
+		now:    now,
+		random: random,
+	}, nil
 }
 
 func (manager *TokenManager) Issue(subject string) (Pair, error) {
 	if subject == "" {
 		return Pair{}, ErrInvalidSubject
 	}
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.issueLocked(subject)
+}
+
+func (manager *TokenManager) issueLocked(subject string) (Pair, error) {
 	now := manager.now().UTC()
 	accessExpiry := now.Add(accessTokenTTL)
-	access, err := manager.sign(subject, TokenKindAccess, now, accessExpiry)
+	access, err := manager.signLocked(subject, TokenKindAccess, now, accessExpiry)
 	if err != nil {
 		return Pair{}, err
 	}
-	refresh, err := manager.sign(subject, TokenKindRefresh, now, now.Add(refreshTokenTTL))
+	refresh, err := manager.signLocked(subject, TokenKindRefresh, now, now.Add(refreshTokenTTL))
 	if err != nil {
 		return Pair{}, err
 	}
@@ -78,15 +101,19 @@ func (manager *TokenManager) Issue(subject string) (Pair, error) {
 }
 
 func (manager *TokenManager) ValidateAccess(encoded string) (*Claims, error) {
-	return manager.validate(encoded, TokenKindAccess)
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.validateLocked(encoded, TokenKindAccess)
 }
 
 func (manager *TokenManager) Refresh(encoded string) (Pair, error) {
-	claims, err := manager.validate(encoded, TokenKindRefresh)
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	claims, err := manager.validateLocked(encoded, TokenKindRefresh)
 	if err != nil {
 		return Pair{}, err
 	}
-	return manager.Issue(claims.Subject)
+	return manager.issueLocked(claims.Subject)
 }
 
 func (manager *TokenManager) Rotate(key []byte) error {
@@ -99,9 +126,9 @@ func (manager *TokenManager) Rotate(key []byte) error {
 	return nil
 }
 
-func (manager *TokenManager) sign(subject, kind string, now, expiry time.Time) (string, error) {
+func (manager *TokenManager) signLocked(subject, kind string, now, expiry time.Time) (string, error) {
 	identifier := make([]byte, tokenIdentifierSz)
-	if _, err := rand.Read(identifier); err != nil {
+	if _, err := io.ReadFull(manager.random, identifier); err != nil {
 		return "", fmt.Errorf("generate token id: %w", err)
 	}
 	claims := Claims{
@@ -115,16 +142,10 @@ func (manager *TokenManager) sign(subject, kind string, now, expiry time.Time) (
 			ID:        base64.RawURLEncoding.EncodeToString(identifier),
 		},
 	}
-	manager.mu.RLock()
-	key := append([]byte(nil), manager.key...)
-	manager.mu.RUnlock()
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(key)
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(manager.key)
 }
 
-func (manager *TokenManager) validate(encoded, expectedKind string) (*Claims, error) {
-	manager.mu.RLock()
-	key := append([]byte(nil), manager.key...)
-	manager.mu.RUnlock()
+func (manager *TokenManager) validateLocked(encoded, expectedKind string) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(
 		encoded,
@@ -133,7 +154,7 @@ func (manager *TokenManager) validate(encoded, expectedKind string) (*Claims, er
 			if token.Method != jwt.SigningMethodHS256 {
 				return nil, ErrInvalidToken
 			}
-			return key, nil
+			return manager.key, nil
 		},
 		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 		jwt.WithIssuer(tokenIssuer),

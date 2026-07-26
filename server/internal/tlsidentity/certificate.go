@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -19,6 +20,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	creationMarkerMagic = "netstorage-tls-creation-v1"
+	creationMarkerStale = 5 * time.Minute
 )
 
 var (
@@ -34,7 +40,24 @@ type Identity struct {
 	SHA256Fingerprint string
 }
 
+type creationMarker struct {
+	Magic      string    `json:"magic"`
+	CertPath   string    `json:"certPath"`
+	KeyPath    string    `json:"keyPath"`
+	StartedAt  time.Time `json:"startedAt"`
+	Phase      string    `json:"phase"`
+	KeySHA256  string    `json:"keySHA256,omitempty"`
+	CertSHA256 string    `json:"certSHA256,omitempty"`
+}
+
 func Ensure(certPath, keyPath string, hosts []string) (Identity, error) {
+	same, err := samePath(certPath, keyPath)
+	if err != nil {
+		return Identity{}, err
+	}
+	if same {
+		return Identity{}, ErrInvalidIdentity
+	}
 	dnsNames, ipAddresses, err := classifyHosts(hosts)
 	if err != nil {
 		return Identity{}, err
@@ -42,6 +65,17 @@ func Ensure(certPath, keyPath string, hosts []string) (Identity, error) {
 
 	ensureMu.Lock()
 	defer ensureMu.Unlock()
+
+	if err := os.MkdirAll(filepath.Dir(certPath), 0o700); err != nil {
+		return Identity{}, fmt.Errorf("create certificate directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
+		return Identity{}, fmt.Errorf("create key directory: %w", err)
+	}
+	lockPath := certPath + ".lock"
+	if err := recoverCreation(lockPath, certPath, keyPath, time.Now().UTC()); err != nil {
+		return Identity{}, err
+	}
 
 	certInfo, certExists, err := identityFileInfo(certPath)
 	if err != nil {
@@ -58,25 +92,22 @@ func Ensure(certPath, keyPath string, hosts []string) (Identity, error) {
 		return loadIdentity(certPath, keyPath, certInfo, keyInfo)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(certPath), 0o700); err != nil {
-		return Identity{}, fmt.Errorf("create certificate directory: %w", err)
+	marker := creationMarker{
+		Magic:     creationMarkerMagic,
+		CertPath:  certPath,
+		KeyPath:   keyPath,
+		StartedAt: time.Now().UTC(),
+		Phase:     "started",
 	}
-	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
-		return Identity{}, fmt.Errorf("create key directory: %w", err)
+	if err := createCreationMarker(lockPath, marker); err != nil {
+		return Identity{}, err
 	}
-	lockPath := certPath + ".lock"
-	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, os.ErrExist) {
-		return Identity{}, ErrIdentityCreationLocked
-	}
-	if err != nil {
-		return Identity{}, fmt.Errorf("create identity lock: %w", err)
-	}
-	if err := lock.Close(); err != nil {
-		_ = os.Remove(lockPath)
-		return Identity{}, fmt.Errorf("close identity lock: %w", err)
-	}
-	defer os.Remove(lockPath)
+	publishedKey := false
+	defer func() {
+		if !publishedKey {
+			_ = os.Remove(lockPath)
+		}
+	}()
 
 	certificatePEM, keyPEM, err := generateIdentity(dnsNames, ipAddresses, time.Now().UTC())
 	if err != nil {
@@ -92,6 +123,14 @@ func Ensure(certPath, keyPath string, hosts []string) (Identity, error) {
 		return Identity{}, err
 	}
 	defer os.Remove(keyTemporary)
+	keyDigest := sha256.Sum256(keyPEM)
+	certDigest := sha256.Sum256(certificatePEM)
+	marker.Phase = "prepared"
+	marker.KeySHA256 = hex.EncodeToString(keyDigest[:])
+	marker.CertSHA256 = hex.EncodeToString(certDigest[:])
+	if err := replaceCreationMarker(lockPath, marker); err != nil {
+		return Identity{}, err
+	}
 
 	if _, exists, err := identityFileInfo(certPath); err != nil || exists {
 		if err != nil {
@@ -108,15 +147,26 @@ func Ensure(certPath, keyPath string, hosts []string) (Identity, error) {
 	if err := os.Rename(keyTemporary, keyPath); err != nil {
 		return Identity{}, fmt.Errorf("publish TLS key: %w", err)
 	}
+	publishedKey = true
 	if err := syncDirectory(filepath.Dir(keyPath)); err != nil {
-		_ = os.Remove(keyPath)
+		if removeErr := os.Remove(keyPath); removeErr == nil {
+			publishedKey = false
+		}
 		return Identity{}, err
 	}
 	if err := os.Rename(certTemporary, certPath); err != nil {
-		_ = os.Remove(keyPath)
+		if removeErr := os.Remove(keyPath); removeErr == nil {
+			publishedKey = false
+		}
 		return Identity{}, fmt.Errorf("publish TLS certificate: %w", err)
 	}
 	if err := syncDirectory(filepath.Dir(certPath)); err != nil {
+		return Identity{}, err
+	}
+	if err := os.Remove(lockPath); err != nil {
+		return Identity{}, fmt.Errorf("remove TLS creation marker: %w", err)
+	}
+	if err := syncDirectory(filepath.Dir(lockPath)); err != nil {
 		return Identity{}, err
 	}
 
@@ -129,6 +179,142 @@ func Ensure(certPath, keyPath string, hosts []string) (Identity, error) {
 		return Identity{}, err
 	}
 	return loadIdentity(certPath, keyPath, certInfo, keyInfo)
+}
+
+func recoverCreation(lockPath, certPath, keyPath string, now time.Time) error {
+	info, exists, infoErr := identityFileInfo(lockPath)
+	if infoErr != nil {
+		return ErrIdentityCreationLocked
+	}
+	if !exists {
+		return nil
+	}
+	if info.Size() > 4096 {
+		return ErrIdentityCreationLocked
+	}
+	raw, err := os.ReadFile(lockPath)
+	if err != nil {
+		return ErrIdentityCreationLocked
+	}
+	var marker creationMarker
+	if err := json.Unmarshal(raw, &marker); err != nil ||
+		marker.Magic != creationMarkerMagic ||
+		filepath.Clean(marker.CertPath) != filepath.Clean(certPath) ||
+		filepath.Clean(marker.KeyPath) != filepath.Clean(keyPath) ||
+		marker.StartedAt.IsZero() {
+		return nil
+	}
+	_, certExists, certErr := identityFileInfo(certPath)
+	if certErr != nil {
+		return certErr
+	}
+	_, keyExists, keyErr := identityFileInfo(keyPath)
+	if keyErr != nil {
+		return keyErr
+	}
+	if certExists && keyExists {
+		return removeCreationMarker(lockPath)
+	}
+	if now.Sub(marker.StartedAt) < creationMarkerStale {
+		return ErrIdentityCreationLocked
+	}
+	if !certExists && !keyExists {
+		return removeCreationMarker(lockPath)
+	}
+	if !certExists && keyExists && marker.Phase == "prepared" && marker.KeySHA256 != "" {
+		rawKey, readErr := os.ReadFile(keyPath)
+		if readErr != nil {
+			return readErr
+		}
+		digest := sha256.Sum256(rawKey)
+		if strings.EqualFold(marker.KeySHA256, hex.EncodeToString(digest[:])) {
+			if err := os.Remove(keyPath); err != nil {
+				return err
+			}
+			if err := syncDirectory(filepath.Dir(keyPath)); err != nil {
+				return err
+			}
+			return removeCreationMarker(lockPath)
+		}
+	}
+	return nil
+}
+
+func createCreationMarker(path string, marker creationMarker) error {
+	raw, err := json.Marshal(marker)
+	if err != nil {
+		return err
+	}
+	temporary, err := writeTemporary(path, raw, 0o600)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary)
+	err = os.Link(temporary, path)
+	if errors.Is(err, os.ErrExist) {
+		return ErrIdentityCreationLocked
+	}
+	if err != nil {
+		return fmt.Errorf("create identity marker: %w", err)
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = os.Remove(path)
+		}
+	}()
+	if err := syncDirectory(filepath.Dir(path)); err != nil {
+		return err
+	}
+	success = true
+	return nil
+}
+
+func replaceCreationMarker(path string, marker creationMarker) error {
+	raw, err := json.Marshal(marker)
+	if err != nil {
+		return err
+	}
+	temporary, err := writeTemporary(path, raw, 0o600)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary)
+	if err := os.Rename(temporary, path); err != nil {
+		return fmt.Errorf("replace identity marker: %w", err)
+	}
+	return syncDirectory(filepath.Dir(path))
+}
+
+func removeCreationMarker(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return syncDirectory(filepath.Dir(path))
+}
+
+func samePath(left, right string) (bool, error) {
+	leftAbsolute, err := filepath.Abs(left)
+	if err != nil {
+		return false, err
+	}
+	rightAbsolute, err := filepath.Abs(right)
+	if err != nil {
+		return false, err
+	}
+	leftAbsolute = filepath.Clean(leftAbsolute)
+	rightAbsolute = filepath.Clean(rightAbsolute)
+	if leftAbsolute == rightAbsolute {
+		return true, nil
+	}
+	leftParent, leftErr := filepath.EvalSymlinks(filepath.Dir(leftAbsolute))
+	rightParent, rightErr := filepath.EvalSymlinks(filepath.Dir(rightAbsolute))
+	if leftErr == nil && rightErr == nil {
+		leftResolved := filepath.Join(leftParent, filepath.Base(leftAbsolute))
+		rightResolved := filepath.Join(rightParent, filepath.Base(rightAbsolute))
+		return leftResolved == rightResolved, nil
+	}
+	return false, nil
 }
 
 func classifyHosts(hosts []string) ([]string, []net.IP, error) {

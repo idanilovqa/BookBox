@@ -1,15 +1,20 @@
 package tlsidentity
 
 import (
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestEnsureCreatesReusablePrivateIdentityWithExpectedSANs(t *testing.T) {
@@ -150,6 +155,126 @@ func TestEnsureConcurrentFirstCreationReturnsOneIdentity(t *testing.T) {
 	}
 }
 
+func TestEnsureRecoversStaleOwnedCreationMarkerWithoutPublishedPair(t *testing.T) {
+	cert, key := identityPaths(t.TempDir())
+	writeCreationMarkerForTest(t, cert, key, time.Now().Add(-time.Hour), "started", "")
+
+	if _, err := Ensure(cert, key, []string{"localhost"}); err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	if _, err := os.Stat(cert + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale marker remains: %v", err)
+	}
+}
+
+func TestEnsureTreatsFreshOwnedCreationMarkerAsActive(t *testing.T) {
+	cert, key := identityPaths(t.TempDir())
+	writeCreationMarkerForTest(t, cert, key, time.Now(), "started", "")
+
+	if _, err := Ensure(cert, key, []string{"localhost"}); !errors.Is(err, ErrIdentityCreationLocked) {
+		t.Fatalf("Ensure() error = %v, want ErrIdentityCreationLocked", err)
+	}
+	if _, err := os.Stat(cert); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Ensure published certificate behind active marker: %v", err)
+	}
+}
+
+func TestEnsureRecoversOnlyOwnedKeyFromInterruptedPublication(t *testing.T) {
+	sourceCert, sourceKey := identityPaths(filepath.Join(t.TempDir(), "source"))
+	if _, err := Ensure(sourceCert, sourceKey, []string{"localhost"}); err != nil {
+		t.Fatal(err)
+	}
+	originalKey, err := os.ReadFile(sourceKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cert, key := identityPaths(t.TempDir())
+	copyFile(t, sourceKey, key, 0o600)
+	keyDigest := sha256.Sum256(originalKey)
+	writeCreationMarkerForTest(
+		t,
+		cert,
+		key,
+		time.Now().Add(-time.Hour),
+		"prepared",
+		hex.EncodeToString(keyDigest[:]),
+	)
+	if _, err := Ensure(cert, key, []string{"localhost"}); err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	recoveredKey, err := os.ReadFile(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(recoveredKey) == string(originalKey) {
+		t.Fatal("interrupted owned key was reused instead of replaced")
+	}
+}
+
+func TestEnsurePreservesUnexplainedPartialIdentity(t *testing.T) {
+	sourceCert, sourceKey := identityPaths(filepath.Join(t.TempDir(), "source"))
+	if _, err := Ensure(sourceCert, sourceKey, []string{"localhost"}); err != nil {
+		t.Fatal(err)
+	}
+	cert, key := identityPaths(t.TempDir())
+	copyFile(t, sourceKey, key, 0o600)
+	writeCreationMarkerForTest(
+		t,
+		cert,
+		key,
+		time.Now().Add(-time.Hour),
+		"prepared",
+		strings.Repeat("0", sha256.Size*2),
+	)
+
+	if _, err := Ensure(cert, key, []string{"localhost"}); !errors.Is(err, ErrIncompleteIdentity) {
+		t.Fatalf("Ensure() error = %v, want ErrIncompleteIdentity", err)
+	}
+	if _, err := os.Stat(key); err != nil {
+		t.Fatalf("unexplained key was removed: %v", err)
+	}
+}
+
+func TestEnsureRejectsIdenticalCertificateAndKeyPathsWithoutWriting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "identity.pem")
+	if _, err := Ensure(path, path, []string{"localhost"}); !errors.Is(err, ErrInvalidIdentity) {
+		t.Fatalf("Ensure() error = %v, want ErrInvalidIdentity", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Ensure wrote identical cert/key path: %v", err)
+	}
+}
+
+func TestEnsureRejectsSymlinkAliasedIdenticalPaths(t *testing.T) {
+	realDirectory := t.TempDir()
+	aliasDirectory := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(realDirectory, aliasDirectory); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	cert := filepath.Join(realDirectory, "identity.pem")
+	key := filepath.Join(aliasDirectory, "identity.pem")
+	if _, err := Ensure(cert, key, []string{"localhost"}); !errors.Is(err, ErrInvalidIdentity) {
+		t.Fatalf("Ensure() error = %v, want ErrInvalidIdentity", err)
+	}
+	if _, err := os.Stat(cert); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Ensure wrote through symlink-aliased path: %v", err)
+	}
+}
+
+func TestEnsureFailsClosedForUnrecognizedMarker(t *testing.T) {
+	cert, key := identityPaths(t.TempDir())
+	if err := os.WriteFile(cert+".lock", []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Ensure(cert, key, []string{"localhost"}); !errors.Is(err, ErrIdentityCreationLocked) {
+		t.Fatalf("Ensure() error = %v, want ErrIdentityCreationLocked", err)
+	}
+	if raw, err := os.ReadFile(cert + ".lock"); err != nil || string(raw) != "{" {
+		t.Fatalf("unrecognized marker changed: %q, %v", raw, err)
+	}
+}
+
 func identityPaths(directory string) (string, string) {
 	return filepath.Join(directory, "server.crt"), filepath.Join(directory, "server.key")
 }
@@ -192,4 +317,32 @@ func containsIP(addresses []net.IP, target net.IP) bool {
 		}
 	}
 	return false
+}
+
+func writeCreationMarkerForTest(
+	t *testing.T,
+	certPath string,
+	keyPath string,
+	startedAt time.Time,
+	phase string,
+	keySHA256 string,
+) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(certPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"magic":     "netstorage-tls-creation-v1",
+		"certPath":  certPath,
+		"keyPath":   keyPath,
+		"startedAt": startedAt.UTC(),
+		"phase":     phase,
+		"keySHA256": keySHA256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(certPath+".lock", raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
