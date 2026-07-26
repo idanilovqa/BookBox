@@ -31,11 +31,14 @@ type Repository interface {
 	FinishScan(context.Context, uuid.UUID, ScanResult) error
 	ReplaceInferredBooks(context.Context, string, []InferredBook) error
 	ListBooks(context.Context, BookQuery) (Page[Book], error)
+	ListCatalogFilters(context.Context) (FilterSnapshot, error)
 	GetBook(context.Context, uuid.UUID) (BookDetail, error)
+	GetGroupingContext(context.Context, uuid.UUID) (GroupingContext, error)
 	SaveMatches(context.Context, uuid.UUID, []MetadataMatch) error
 	ConfirmMatch(context.Context, uuid.UUID, uuid.UUID) error
 	SaveGrouping(context.Context, GroupingCorrection) error
 	Enqueue(context.Context, WorkerJob) error
+	EnqueueDeduplicated(context.Context, WorkerJob, string) (WorkerJob, error)
 	ClaimJob(context.Context, string, time.Time) (WorkerJob, error)
 	CompleteJob(context.Context, uuid.UUID, uuid.UUID, error) error
 	RecordCoverEvent(context.Context, CoverEvent) error

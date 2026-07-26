@@ -18,6 +18,7 @@ type Selection struct {
 	RootID       string `json:"rootId"`
 	RelativePath string `json:"relativePath"`
 	Kind         string `json:"kind"`
+	BookID       string `json:"bookId,omitempty"`
 }
 
 type Request struct {

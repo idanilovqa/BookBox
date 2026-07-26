@@ -14,8 +14,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"netstorage.local/server/internal/auth"
+	"netstorage.local/server/internal/catalog"
 	"netstorage.local/server/internal/config"
+	"netstorage.local/server/internal/database"
 	"netstorage.local/server/internal/testpostgres"
 )
 
@@ -240,6 +243,62 @@ func TestOpenCatalogDatabaseMigratesAndSyncsConfiguredRoots(t *testing.T) {
 	}
 	if !tableExists || !rootExists {
 		t.Fatalf("startup migration table=%v root=%v", tableExists, rootExists)
+	}
+}
+
+func TestBuildHandlerWiresPostgresCatalogIntoAuthenticatedBooksRoute(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if err := database.Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	repository := catalog.NewPostgresRepository(pool)
+	if err := repository.SyncRoots(ctx, []catalog.LibraryRoot{{
+		ID: "audiobooks", DisplayName: "Audiobooks",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	bookID := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		insert into books(
+			id,root_id,source_folder,grouping_key,title,authors,
+			metadata_source,confidence,review_state
+		)
+		values($1,'audiobooks','Book','folder-key','Dune',
+		       array['Frank Herbert'],'local',0.8,'unreviewed')
+	`, bookID); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	hash, err := auth.HashPassword("secret", auth.ArgonParams{
+		MemoryKiB: 64, Iterations: 1, Parallelism: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, manager, err := buildHandler(config.Config{
+		Roots: []config.Root{{
+			ID: "audiobooks", Name: "Audiobooks", ContainerPath: root,
+		}},
+		Auth: config.Auth{Username: "owner"},
+	}, config.Secrets{
+		PasswordHash: hash, SessionKey: []byte(strings.Repeat("k", 32)),
+	}, "test", slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := manager.Issue("owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/books", nil)
+	request.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), bookID.String()) ||
+		!strings.Contains(response.Body.String(), `"filters"`) {
+		t.Fatalf("books = %d %s", response.Code, response.Body)
 	}
 }
 

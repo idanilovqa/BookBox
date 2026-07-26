@@ -27,6 +27,9 @@ type Dependencies struct {
 	Resolver         *library.Resolver
 	TransferBuilder  ManifestBuilder
 	FileSigner       *transfer.FileSigner
+	Catalog          CatalogRepository
+	MetadataMatcher  MetadataMatcher
+	Now              func() time.Time
 }
 
 type route struct {
@@ -86,6 +89,56 @@ func routes(deps Dependencies) []route {
 			method:  "GET",
 			path:    "/v1/browse",
 			handler: browseHandler(deps.Browser),
+		},
+		{
+			method:  "GET",
+			path:    "/v1/books",
+			handler: booksHandler(deps.Catalog),
+		},
+		{
+			method:  "GET",
+			path:    "/v1/books/{bookId}",
+			handler: bookDetailHandler(deps.Catalog),
+		},
+		{
+			method:  "GET",
+			path:    "/v1/books/{bookId}/files",
+			handler: bookFilesHandler(deps.Catalog),
+		},
+		{
+			method:  "GET",
+			path:    "/v1/books/{bookId}/cover",
+			handler: bookCoverHandler(deps.Catalog, deps.Resolver),
+		},
+		{
+			method:  "GET",
+			path:    "/v1/catalog/filters",
+			handler: catalogFiltersHandler(deps.Catalog),
+		},
+		{
+			method:  "POST",
+			path:    "/v1/catalog/matches/search",
+			handler: matchSearchHandler(deps.Catalog, deps.MetadataMatcher),
+		},
+		{
+			method:  "PUT",
+			path:    "/v1/books/{bookId}/match",
+			handler: confirmMatchHandler(deps.Catalog),
+		},
+		{
+			method:  "GET",
+			path:    "/v1/books/{bookId}/grouping",
+			handler: groupingContextHandler(deps.Catalog),
+		},
+		{
+			method:  "PUT",
+			path:    "/v1/books/{bookId}/grouping",
+			handler: groupingHandler(deps.Catalog),
+		},
+		{
+			method:  "POST",
+			path:    "/v1/catalog/rescan",
+			handler: rescanHandler(deps.Catalog, deps.Roots, deps.Now),
 		},
 		{
 			method:  "POST",

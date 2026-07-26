@@ -58,8 +58,8 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 	if err := pool.QueryRow(ctx, "select count(*) from schema_migrations").Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 1 {
-		t.Fatalf("schema migration rows = %d, want 1", applied)
+	if applied != 2 {
+		t.Fatalf("schema migration rows = %d, want 2", applied)
 	}
 
 	var rejectsCrossRootScan bool
@@ -98,5 +98,60 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 		values ($1, 'two', 'Book/file.m4b', 1, $2, $3)
 	`, uuid.New(), time.Now().UTC(), scanID); err == nil {
 		t.Fatal("source_files accepted a scan run belonging to another root")
+	}
+}
+
+func TestMigrateUpgradesVersionOneWorkerJobsForDeduplication(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+		create table schema_migrations (
+			version bigint primary key,
+			applied_at timestamptz not null default now()
+		);
+		insert into schema_migrations(version) values (1);
+		create table worker_jobs (
+			id uuid primary key,
+			kind text not null,
+			payload jsonb not null default '{}'::jsonb,
+			status text not null default 'queued',
+			run_after timestamptz not null default now(),
+			attempts integer not null default 0,
+			max_attempts integer not null default 5,
+			locked_at timestamptz,
+			locked_by text,
+			lease_until timestamptz,
+			lease_token uuid,
+			last_error text,
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now()
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var columnExists bool
+	if err := pool.QueryRow(ctx, `
+		select exists (
+			select 1
+			from information_schema.columns
+			where table_schema='public'
+			  and table_name='worker_jobs'
+			  and column_name='dedupe_key'
+		)
+	`).Scan(&columnExists); err != nil {
+		t.Fatal(err)
+	}
+	var indexExists bool
+	if err := pool.QueryRow(ctx, `
+		select to_regclass('public.worker_jobs_active_dedupe') is not null
+	`).Scan(&indexExists); err != nil {
+		t.Fatal(err)
+	}
+	if !columnExists || !indexExists {
+		t.Fatalf("dedupe upgrade column=%v index=%v", columnExists, indexExists)
 	}
 }

@@ -10,8 +10,10 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -532,6 +534,208 @@ func (repository *PostgresRepository) GetBook(
 	return detail, nil
 }
 
+func (repository *PostgresRepository) GetGroupingContext(
+	ctx context.Context,
+	bookID uuid.UUID,
+) (GroupingContext, error) {
+	if repository == nil || repository.pool == nil || bookID == uuid.Nil {
+		return GroupingContext{}, ErrInvalidData
+	}
+	transaction, err := repository.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return GroupingContext{}, fmt.Errorf("begin grouping context: %w", err)
+	}
+	defer transaction.Rollback(ctx)
+
+	result := GroupingContext{BookID: bookID}
+	if err := transaction.QueryRow(ctx, `
+		select root_id, source_folder
+		from books
+		where id=$1 and missing_at is null
+	`, bookID).Scan(&result.RootID, &result.SourceFolder); err != nil {
+		return GroupingContext{}, mapNotFound(err, "load grouping context book")
+	}
+
+	fileRows, err := transaction.Query(ctx, `
+		select id, root_id, relative_path, size, modified_at,
+		       coalesce(sha256,''), media, scan_run_id, missing_at
+		from source_files
+		where root_id=$1
+		  and missing_at is null
+		  and (
+		      ($2='' and position('/' in relative_path)=0)
+		      or (
+		          $2<>''
+		          and left(relative_path, length($2)+1)=$2 || '/'
+		          and position('/' in substring(relative_path from length($2)+2))=0
+		      )
+		  )
+		order by relative_path, id
+	`, result.RootID, result.SourceFolder)
+	if err != nil {
+		return GroupingContext{}, fmt.Errorf("list grouping context files: %w", err)
+	}
+	for fileRows.Next() {
+		file, scanErr := scanSourceFile(fileRows)
+		if scanErr != nil {
+			fileRows.Close()
+			return GroupingContext{}, scanErr
+		}
+		if isAudioPath(file.RelativePath) {
+			result.Files = append(result.Files, file)
+		}
+	}
+	if err := fileRows.Err(); err != nil {
+		fileRows.Close()
+		return GroupingContext{}, fmt.Errorf("iterate grouping context files: %w", err)
+	}
+	fileRows.Close()
+
+	bookRows, err := transaction.Query(ctx, `
+		select id, title, grouping_key
+		from books
+		where root_id=$1 and source_folder=$2 and missing_at is null
+		order by lower(title), title, id
+	`, result.RootID, result.SourceFolder)
+	if err != nil {
+		return GroupingContext{}, fmt.Errorf("list grouping context books: %w", err)
+	}
+	bookIndexes := make(map[uuid.UUID]int)
+	for bookRows.Next() {
+		var sibling GroupingContextBook
+		if err := bookRows.Scan(
+			&sibling.BookID,
+			&sibling.Title,
+			&sibling.GroupingKey,
+		); err != nil {
+			bookRows.Close()
+			return GroupingContext{}, fmt.Errorf("scan grouping context book: %w", err)
+		}
+		sibling.FileIDs = []uuid.UUID{}
+		bookIndexes[sibling.BookID] = len(result.Books)
+		result.Books = append(result.Books, sibling)
+	}
+	if err := bookRows.Err(); err != nil {
+		bookRows.Close()
+		return GroupingContext{}, fmt.Errorf("iterate grouping context books: %w", err)
+	}
+	bookRows.Close()
+
+	assignmentRows, err := transaction.Query(ctx, `
+		select bf.book_id, f.id, f.relative_path
+		from books b
+		join book_files bf on bf.book_id=b.id and bf.root_id=b.root_id
+		join source_files f on f.id=bf.file_id and f.root_id=bf.root_id
+		where b.root_id=$1
+		  and b.source_folder=$2
+		  and b.missing_at is null
+		  and f.missing_at is null
+		order by b.id, f.relative_path, f.id
+	`, result.RootID, result.SourceFolder)
+	if err != nil {
+		return GroupingContext{}, fmt.Errorf("list grouping context assignments: %w", err)
+	}
+	for assignmentRows.Next() {
+		var siblingID, fileID uuid.UUID
+		var relativePath string
+		if err := assignmentRows.Scan(&siblingID, &fileID, &relativePath); err != nil {
+			assignmentRows.Close()
+			return GroupingContext{}, fmt.Errorf("scan grouping context assignment: %w", err)
+		}
+		index, exists := bookIndexes[siblingID]
+		if exists && isAudioPath(relativePath) {
+			result.Books[index].FileIDs = append(result.Books[index].FileIDs, fileID)
+		}
+	}
+	if err := assignmentRows.Err(); err != nil {
+		assignmentRows.Close()
+		return GroupingContext{}, fmt.Errorf("iterate grouping context assignments: %w", err)
+	}
+	assignmentRows.Close()
+
+	if err := transaction.Commit(ctx); err != nil {
+		return GroupingContext{}, fmt.Errorf("commit grouping context: %w", err)
+	}
+	if result.Files == nil {
+		result.Files = []SourceFile{}
+	}
+	if result.Books == nil {
+		result.Books = []GroupingContextBook{}
+	}
+	return result, nil
+}
+
+func (repository *PostgresRepository) ListCatalogFilters(
+	ctx context.Context,
+) (FilterSnapshot, error) {
+	var encoded []byte
+	if err := repository.pool.QueryRow(ctx, `
+		select jsonb_build_object(
+			'authors', coalesce((
+				select jsonb_agg(value order by lower(value),value)
+				from (
+					select min(btrim(author) collate "C") as value
+					from books b cross join lateral unnest(b.authors) author
+					where b.missing_at is null and btrim(author)<>''
+					group by lower(btrim(author))
+				) snapshot_values
+			),'[]'::jsonb),
+			'genres', coalesce((
+				select jsonb_agg(value order by lower(value),value)
+				from (
+					select min(btrim(genre) collate "C") as value
+					from books b cross join lateral unnest(b.genres) genre
+					where b.missing_at is null and btrim(genre)<>''
+					group by lower(btrim(genre))
+				) snapshot_values
+			),'[]'::jsonb),
+			'years', coalesce((
+				select jsonb_agg(value order by value)
+				from (
+					select distinct publication_year as value
+					from books
+					where missing_at is null and publication_year is not null
+				) snapshot_values
+			),'[]'::jsonb),
+			'roots', coalesce((
+				select jsonb_agg(id order by id) from library_roots
+			),'[]'::jsonb),
+			'reviewStates', coalesce((
+				select jsonb_agg(value order by value)
+				from (
+					select distinct review_state as value
+					from books where missing_at is null
+				) snapshot_values
+			),'[]'::jsonb)
+		)
+	`).Scan(&encoded); err != nil {
+		return FilterSnapshot{}, fmt.Errorf("list catalog filters: %w", err)
+	}
+	var filters FilterSnapshot
+	if err := json.Unmarshal(encoded, &filters); err != nil {
+		return FilterSnapshot{}, fmt.Errorf("decode catalog filters: %w", err)
+	}
+	if filters.Authors == nil {
+		filters.Authors = []string{}
+	}
+	if filters.Genres == nil {
+		filters.Genres = []string{}
+	}
+	if filters.Years == nil {
+		filters.Years = []int{}
+	}
+	if filters.Roots == nil {
+		filters.Roots = []string{}
+	}
+	if filters.ReviewStates == nil {
+		filters.ReviewStates = []string{}
+	}
+	return filters, nil
+}
+
 func (repository *PostgresRepository) SaveMatches(
 	ctx context.Context,
 	bookID uuid.UUID,
@@ -615,18 +819,30 @@ func (repository *PostgresRepository) ConfirmMatch(
 	}
 	defer transaction.Rollback(ctx)
 	var matchBookID uuid.UUID
+	var provider string
+	var providerID string
+	var payload []byte
+	var score float64
 	if err := transaction.QueryRow(ctx, `
-		select book_id from metadata_matches where id=$1 for update
-	`, matchID).Scan(&matchBookID); err != nil {
+		select book_id,provider,provider_id,payload,score::float8
+		from metadata_matches where id=$1 for update
+	`, matchID).Scan(&matchBookID, &provider, &providerID, &payload, &score); err != nil {
 		return mapNotFound(err, "load metadata match")
 	}
 	if matchBookID != bookID {
 		return ErrConflict
 	}
+	if provider != MetadataOpenLibrary && provider != MetadataGoogleBooks {
+		return ErrInvalidData
+	}
+	candidate, err := decodeConfirmedCandidate(payload, provider, providerID)
+	if err != nil {
+		return err
+	}
 	result, err := transaction.Exec(ctx, `
 		update books
 		set confirmed_match_id=null
-		where id=$1
+		where id=$1 and missing_at is null
 	`, bookID)
 	if err != nil {
 		return fmt.Errorf("temporarily clear confirmed match: %w", err)
@@ -649,20 +865,149 @@ func (repository *PostgresRepository) ConfirmMatch(
 	); err != nil {
 		return fmt.Errorf("confirm metadata match: %w", err)
 	}
-	if _, err := transaction.Exec(ctx, `
+	result, err = transaction.Exec(ctx, `
 		update books
 		set confirmed_match_id=$2,
 		    review_state='confirmed',
 		    metadata_source='confirmed',
+		    title=case when btrim($3)<>'' then $3 else title end,
+		    subtitle=case when btrim($4)<>'' then $4 else subtitle end,
+		    authors=case when cardinality($5::text[])>0 then $5 else authors end,
+		    narrators=case when cardinality($6::text[])>0 then $6 else narrators end,
+		    series=case when btrim($7)<>'' then $7 else series end,
+		    series_position=case when btrim($8)<>'' then $8 else series_position end,
+		    publisher=case when btrim($9)<>'' then $9 else publisher end,
+		    published_date=case when btrim($10)<>'' then $10 else published_date end,
+		    publication_year=coalesce($11,publication_year),
+		    genres=case when cardinality($12::text[])>0 then $12 else genres end,
+		    provider_subjects=case
+		        when cardinality($13::text[])>0 then $13
+		        else provider_subjects
+		    end,
+		    identifiers=identifiers || $14::jsonb,
+		    confidence=greatest(confidence,$15),
 		    updated_at=now()
-		where id=$1
-	`, bookID, matchID); err != nil {
+		where id=$1 and missing_at is null
+	`, bookID, matchID, candidate.Title, candidate.Subtitle,
+		candidate.Authors, candidate.Narrators, candidate.Series,
+		candidate.SeriesPosition, candidate.Publisher, candidate.PublishedDate,
+		candidate.PublicationYear, candidate.Genres, candidate.Subjects,
+		candidate.Identifiers, score)
+	if err != nil {
 		return classifyConstraint(err, "record confirmed metadata match")
+	}
+	if result.RowsAffected() != 1 {
+		return ErrNotFound
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		return fmt.Errorf("commit metadata confirmation: %w", err)
 	}
 	return nil
+}
+
+type confirmedCandidatePayload struct {
+	Title           string   `json:"title"`
+	Subtitle        string   `json:"subtitle"`
+	Authors         []string `json:"authors"`
+	Narrators       []string `json:"narrators"`
+	Series          string   `json:"series"`
+	SeriesPosition  string   `json:"seriesPosition"`
+	Publisher       string   `json:"publisher"`
+	PublishedDate   string   `json:"publishedDate"`
+	Genres          []string `json:"genres"`
+	Subjects        []string `json:"subjects"`
+	ISBN            string   `json:"isbn"`
+	PublicationYear *int     `json:"-"`
+	Identifiers     string   `json:"-"`
+}
+
+func decodeConfirmedCandidate(
+	payload []byte,
+	provider string,
+	providerID string,
+) (confirmedCandidatePayload, error) {
+	if len(payload) > 256<<10 || strings.TrimSpace(providerID) == "" ||
+		len(providerID) > 500 || strings.IndexFunc(providerID, unicode.IsControl) >= 0 {
+		return confirmedCandidatePayload{}, ErrInvalidData
+	}
+	var candidate confirmedCandidatePayload
+	if err := json.Unmarshal(payload, &candidate); err != nil {
+		return confirmedCandidatePayload{}, ErrInvalidData
+	}
+	candidate.Title = strings.TrimSpace(candidate.Title)
+	candidate.Subtitle = strings.TrimSpace(candidate.Subtitle)
+	candidate.Series = strings.TrimSpace(candidate.Series)
+	candidate.SeriesPosition = strings.TrimSpace(candidate.SeriesPosition)
+	candidate.Publisher = strings.TrimSpace(candidate.Publisher)
+	candidate.PublishedDate = strings.TrimSpace(candidate.PublishedDate)
+	for _, value := range []struct {
+		text string
+		max  int
+	}{
+		{candidate.Title, 1000}, {candidate.Subtitle, 2000},
+		{candidate.Series, 1000}, {candidate.SeriesPosition, 100},
+		{candidate.Publisher, 1000}, {candidate.PublishedDate, 64},
+		{candidate.ISBN, 64},
+	} {
+		if len(value.text) > value.max ||
+			strings.IndexFunc(value.text, unicode.IsControl) >= 0 {
+			return confirmedCandidatePayload{}, ErrInvalidData
+		}
+	}
+	var err error
+	if candidate.Authors, err = cleanCandidateStrings(candidate.Authors); err != nil {
+		return confirmedCandidatePayload{}, err
+	}
+	if candidate.Narrators, err = cleanCandidateStrings(candidate.Narrators); err != nil {
+		return confirmedCandidatePayload{}, err
+	}
+	if candidate.Genres, err = cleanCandidateStrings(candidate.Genres); err != nil {
+		return confirmedCandidatePayload{}, err
+	}
+	if candidate.Subjects, err = cleanCandidateStrings(candidate.Subjects); err != nil {
+		return confirmedCandidatePayload{}, err
+	}
+	if len(candidate.PublishedDate) >= 4 {
+		if year, err := strconv.Atoi(candidate.PublishedDate[:4]); err == nil &&
+			year >= 1000 && year <= 3000 {
+			candidate.PublicationYear = &year
+		}
+	}
+	identifiers := map[string]string{}
+	if isbn := strings.TrimSpace(candidate.ISBN); isbn != "" {
+		identifiers["isbn"] = isbn
+	}
+	identifiers[provider] = strings.TrimSpace(providerID)
+	encoded, err := json.Marshal(identifiers)
+	if err != nil {
+		return confirmedCandidatePayload{}, ErrInvalidData
+	}
+	candidate.Identifiers = string(encoded)
+	return candidate, nil
+}
+
+func cleanCandidateStrings(values []string) ([]string, error) {
+	if len(values) > 100 {
+		return nil, ErrInvalidData
+	}
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if len(value) > 500 || strings.IndexFunc(value, unicode.IsControl) >= 0 {
+			return nil, ErrInvalidData
+		}
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result, nil
 }
 
 func (repository *PostgresRepository) SaveGrouping(
@@ -711,40 +1056,21 @@ func (repository *PostgresRepository) SaveGrouping(
 		return fmt.Errorf("begin grouping save: %w", err)
 	}
 	defer transaction.Rollback(ctx)
-	rows, err := transaction.Query(ctx, `
-		select id, relative_path
-		from source_files
-		where root_id=$1
-		  and missing_at is null
-		  and (
-		      ($2='' and position('/' in relative_path)=0)
-		      or (
-		          $2<>''
-		          and left(relative_path, length($2)+1)=$2 || '/'
-		          and position('/' in substring(relative_path from length($2)+2))=0
-		      )
-		  )
-	`, correction.RootID, correction.SourceFolder)
+	folderFiles, err := loadGroupingFolderFiles(
+		ctx,
+		transaction,
+		correction.RootID,
+		correction.SourceFolder,
+	)
 	if err != nil {
 		return fmt.Errorf("list grouping folder files: %w", err)
 	}
 	presentAudio := make(map[uuid.UUID]struct{})
-	for rows.Next() {
-		var id uuid.UUID
-		var relativePath string
-		if err := rows.Scan(&id, &relativePath); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan grouping folder file: %w", err)
-		}
-		if isAudioPath(relativePath) {
-			presentAudio[id] = struct{}{}
+	for _, file := range folderFiles {
+		if isAudioPath(file.relativePath) {
+			presentAudio[file.id] = struct{}{}
 		}
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("iterate grouping folder files: %w", err)
-	}
-	rows.Close()
 	if len(presentAudio) == 0 || len(seen) != len(presentAudio) {
 		return ErrConflict
 	}
@@ -784,13 +1110,17 @@ func (repository *PostgresRepository) SaveGrouping(
 			}
 		}
 		bookIDs = append(bookIDs, matchedBookID)
+		assignmentIDs, roles, err := groupingBookFiles(group.FileIDs, folderFiles)
+		if err != nil {
+			return err
+		}
 		if err := replaceBookFiles(
 			ctx,
 			transaction,
 			matchedBookID,
 			correction.RootID,
-			group.FileIDs,
-			nil,
+			assignmentIDs,
+			roles,
 		); err != nil {
 			return err
 		}
@@ -862,6 +1192,109 @@ func (repository *PostgresRepository) SaveGrouping(
 func isAudioPath(relativePath string) bool {
 	switch strings.ToLower(path.Ext(relativePath)) {
 	case ".m4b", ".m4a", ".mp3", ".aac", ".flac", ".ogg", ".opus", ".wav":
+		return true
+	default:
+		return false
+	}
+}
+
+type groupingFolderFile struct {
+	id           uuid.UUID
+	relativePath string
+}
+
+func loadGroupingFolderFiles(
+	ctx context.Context,
+	transaction pgx.Tx,
+	rootID string,
+	sourceFolder string,
+) ([]groupingFolderFile, error) {
+	rows, err := transaction.Query(ctx, `
+		select id, relative_path
+		from source_files
+		where root_id=$1
+		  and missing_at is null
+		  and (
+		      ($2='' and position('/' in relative_path)=0)
+		      or (
+		          $2<>''
+		          and left(relative_path, length($2)+1)=$2 || '/'
+		          and position('/' in substring(relative_path from length($2)+2))=0
+		      )
+		  )
+		order by relative_path, id
+	`, rootID, sourceFolder)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	files := make([]groupingFolderFile, 0)
+	for rows.Next() {
+		var file groupingFolderFile
+		if err := rows.Scan(&file.id, &file.relativePath); err != nil {
+			return nil, err
+		}
+		files = append(files, file)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func groupingBookFiles(
+	audioIDs []uuid.UUID,
+	folderFiles []groupingFolderFile,
+) ([]uuid.UUID, map[uuid.UUID]string, error) {
+	filesByID := make(map[uuid.UUID]string, len(folderFiles))
+	for _, file := range folderFiles {
+		filesByID[file.id] = file.relativePath
+	}
+	fileIDs := make([]uuid.UUID, 0, len(audioIDs)+1)
+	roles := make(map[uuid.UUID]string, len(audioIDs)+1)
+	audioStems := make(map[string]struct{}, len(audioIDs))
+	for _, id := range audioIDs {
+		relativePath, exists := filesByID[id]
+		if !exists || !isAudioPath(relativePath) {
+			return nil, nil, ErrConflict
+		}
+		fileIDs = append(fileIDs, id)
+		roles[id] = FileRoleAudio
+		audioStems[fileStem(relativePath)] = struct{}{}
+	}
+	for _, file := range folderFiles {
+		if isAudioPath(file.relativePath) {
+			continue
+		}
+		role := ""
+		if isRecognizedSharedCover(file.relativePath) {
+			role = FileRoleCover
+		} else if _, matchesAudio := audioStems[fileStem(file.relativePath)]; matchesAudio {
+			role = FileRoleSidecar
+		}
+		if role == "" {
+			continue
+		}
+		fileIDs = append(fileIDs, file.id)
+		roles[file.id] = role
+	}
+	return fileIDs, roles, nil
+}
+
+func fileStem(relativePath string) string {
+	base := path.Base(relativePath)
+	return strings.ToLower(strings.TrimSuffix(base, path.Ext(base)))
+}
+
+func isRecognizedSharedCover(relativePath string) bool {
+	extension := strings.ToLower(path.Ext(relativePath))
+	switch extension {
+	case ".jpg", ".jpeg", ".png", ".webp":
+	default:
+		return false
+	}
+	switch fileStem(relativePath) {
+	case "cover", "folder", "front":
 		return true
 	default:
 		return false
@@ -1061,6 +1494,48 @@ func (repository *PostgresRepository) Enqueue(
 		return classifyConstraint(err, "enqueue worker job")
 	}
 	return nil
+}
+
+func (repository *PostgresRepository) EnqueueDeduplicated(
+	ctx context.Context,
+	job WorkerJob,
+	dedupeKey string,
+) (WorkerJob, error) {
+	dedupeKey = strings.TrimSpace(dedupeKey)
+	if job.ID == uuid.Nil || !jobKinds[job.Kind] || dedupeKey == "" ||
+		len(dedupeKey) > 256 || strings.IndexFunc(dedupeKey, unicode.IsControl) >= 0 {
+		return WorkerJob{}, ErrInvalidData
+	}
+	payload, err := marshalObject(job.Payload)
+	if err != nil {
+		return WorkerJob{}, err
+	}
+	if job.RunAfter.IsZero() {
+		job.RunAfter = repository.now()
+	}
+	if job.MaxAttempts == 0 {
+		job.MaxAttempts = 5
+	}
+	if job.MaxAttempts < 1 || job.MaxAttempts > 100 {
+		return WorkerJob{}, ErrInvalidData
+	}
+	row := repository.pool.QueryRow(ctx, `
+		insert into worker_jobs(
+			id, kind, dedupe_key, payload, run_after, max_attempts
+		)
+		values ($1,$2,$3,$4,$5,$6)
+		on conflict (kind,dedupe_key)
+		    where dedupe_key is not null and status in ('queued','running')
+		do update set updated_at=worker_jobs.updated_at
+		returning id, kind, payload, status, run_after, attempts, max_attempts,
+		          locked_at, coalesce(locked_by,''), lease_until, lease_token,
+		          coalesce(last_error,''), created_at, updated_at
+	`, job.ID, job.Kind, dedupeKey, payload, job.RunAfter, job.MaxAttempts)
+	enqueued, err := scanWorkerJob(row)
+	if err != nil {
+		return WorkerJob{}, classifyConstraint(err, "enqueue deduplicated worker job")
+	}
+	return enqueued, nil
 }
 
 func (repository *PostgresRepository) ClaimJob(
@@ -1379,6 +1854,10 @@ func applyGroupingCorrections(
 	presentBookIDs := make([]uuid.UUID, 0)
 	for folder, correction := range corrections {
 		claimedFiles[folder] = make(map[uuid.UUID]struct{})
+		folderFiles, err := loadGroupingFolderFiles(ctx, transaction, rootID, folder)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("list corrected grouping folder files: %w", err)
+		}
 		for _, group := range correction.Groups {
 			if group.BookID == nil || *group.BookID == uuid.Nil ||
 				len(group.FileIDs) == 0 {
@@ -1411,13 +1890,20 @@ func applyGroupingCorrections(
 				fileIDs:    group.FileIDs,
 				wasMissing: missingAt != nil,
 			}
+			assignmentIDs, roles, err := groupingBookFiles(book.fileIDs, folderFiles)
+			if errors.Is(err, ErrConflict) {
+				continue
+			}
+			if err != nil {
+				return nil, nil, nil, err
+			}
 			if err := replaceBookFiles(
 				ctx,
 				transaction,
 				book.id,
 				rootID,
-				book.fileIDs,
-				nil,
+				assignmentIDs,
+				roles,
 			); err != nil {
 				return nil, nil, nil, err
 			}
@@ -1443,7 +1929,10 @@ func applyGroupingCorrections(
 			}
 			presentBookIDs = append(presentBookIDs, book.id)
 			booksByFolder[folder] = append(booksByFolder[folder], book.id)
-			for _, fileID := range book.fileIDs {
+			for _, fileID := range assignmentIDs {
+				if roles[fileID] == FileRoleCover {
+					continue
+				}
 				claimedFiles[folder][fileID] = struct{}{}
 			}
 		}
@@ -1479,8 +1968,8 @@ func prepareInferredBooks(
 		filteredRoles := make(map[uuid.UUID]string)
 		for _, fileID := range candidate.SourceFileIDs {
 			role := candidate.FileRoles[fileID]
-			isCompanion := role == FileRoleCover || role == FileRoleSidecar
-			if _, alreadyAssigned := assigned[candidate.SourceFolder][fileID]; alreadyAssigned && !isCompanion {
+			isSharedCover := role == FileRoleCover
+			if _, alreadyAssigned := assigned[candidate.SourceFolder][fileID]; alreadyAssigned && !isSharedCover {
 				continue
 			}
 			filtered = append(filtered, fileID)
@@ -1508,7 +1997,7 @@ func prepareInferredBooks(
 		companionIDs := make([]uuid.UUID, 0)
 		for _, fileID := range filtered {
 			role := filteredRoles[fileID]
-			if role == FileRoleCover || role == FileRoleSidecar {
+			if role == FileRoleCover {
 				companionIDs = append(companionIDs, fileID)
 			}
 		}
@@ -1821,7 +2310,7 @@ func replaceBookFiles(
 	exclusiveFileIDs := make([]uuid.UUID, 0, len(fileIDs))
 	for _, fileID := range fileIDs {
 		role := roles[fileID]
-		if role == "" || role == FileRoleAudio {
+		if role == "" || role == FileRoleAudio || role == FileRoleSidecar {
 			exclusiveFileIDs = append(exclusiveFileIDs, fileID)
 		}
 	}

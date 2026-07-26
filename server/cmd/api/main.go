@@ -20,6 +20,7 @@ import (
 	"netstorage.local/server/internal/database"
 	"netstorage.local/server/internal/httpapi"
 	"netstorage.local/server/internal/library"
+	"netstorage.local/server/internal/metadata"
 	"netstorage.local/server/internal/tlsidentity"
 	"netstorage.local/server/internal/transfer"
 )
@@ -69,7 +70,7 @@ func runWith(args []string, serve serveTLSFunc, output io.Writer, logger *slog.L
 	if err != nil {
 		return err
 	}
-	handler, _, err := buildHandler(cfg, secrets, version, logger)
+	handler, _, err := buildHandler(cfg, secrets, version, logger, databasePool)
 	if err != nil {
 		return err
 	}
@@ -133,6 +134,7 @@ func buildHandler(
 	secrets config.Secrets,
 	buildVersion string,
 	logger *slog.Logger,
+	databasePools ...*pgxpool.Pool,
 ) (http.Handler, *auth.TokenManager, error) {
 	resolver, err := library.NewResolver(cfg.Roots)
 	if err != nil {
@@ -146,6 +148,18 @@ func buildHandler(
 	if err != nil {
 		return nil, nil, err
 	}
+	var catalogRepository *catalog.PostgresRepository
+	var matcher *metadata.Matcher
+	var transferBuilder httpapi.ManifestBuilder = transfer.NewBuilder(resolver, fileSigner)
+	if len(databasePools) > 0 && databasePools[0] != nil {
+		catalogRepository = catalog.NewPostgresRepository(databasePools[0])
+		openLibrary, err := metadata.NewOpenLibrary("", nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		matcher = metadata.NewMatcher(openLibrary)
+		transferBuilder = transfer.NewCatalogBuilder(resolver, fileSigner, catalogRepository)
+	}
 	handler := httpapi.New(httpapi.Dependencies{
 		Version:          buildVersion,
 		Roots:            cfg.Roots,
@@ -157,8 +171,10 @@ func buildHandler(
 		Limiter:          auth.NewLoginLimiter(10000, time.Now),
 		Logger:           logger,
 		Resolver:         resolver,
-		TransferBuilder:  transfer.NewBuilder(resolver, fileSigner),
+		TransferBuilder:  transferBuilder,
 		FileSigner:       fileSigner,
+		Catalog:          catalogRepository,
+		MetadataMatcher:  matcher,
 	})
 	return handler, tokens, nil
 }

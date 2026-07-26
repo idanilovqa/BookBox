@@ -5,6 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -135,7 +138,14 @@ func TestPostgresRepositoryPreservesConfirmedMetadataAndCorrections(t *testing.T
 		Provider:   "open_library",
 		ProviderID: "OL123M",
 		Score:      0.98,
-		Payload:    map[string]any{"title": "Dune"},
+		Payload: map[string]any{
+			"title": "Dune", "subtitle": "Provider Subtitle",
+			"authors": []string{"Frank Herbert"}, "narrators": []string{"Narrator"},
+			"series": "Dune", "seriesPosition": "1",
+			"publisher": "Chilton", "publishedDate": "1965-08-01",
+			"genres": []string{"Science Fiction"}, "subjects": []string{"Arrakis"},
+			"isbn": "9780441172719",
+		},
 	}
 	if err := repository.SaveMatches(ctx, dune.ID, []MetadataMatch{match}); err != nil {
 		t.Fatal(err)
@@ -155,8 +165,39 @@ func TestPostgresRepositoryPreservesConfirmedMetadataAndCorrections(t *testing.T
 	if err := repository.ConfirmMatch(ctx, dune.ID, otherMatch.ID); !errors.Is(err, ErrConflict) {
 		t.Fatalf("ConfirmMatch(cross-book) = %v, want ErrConflict", err)
 	}
+	if _, err := pool.Exec(ctx, `update books set missing_at=now() where id=$1`, otherBook.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.ConfirmMatch(ctx, otherBook.ID, otherMatch.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ConfirmMatch(missing book) = %v, want ErrNotFound", err)
+	}
+	if _, err := pool.Exec(ctx, `update books set missing_at=null where id=$1`, otherBook.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err := repository.ConfirmMatch(ctx, dune.ID, match.ID); err != nil {
 		t.Fatal(err)
+	}
+	confirmed, err := repository.GetBook(ctx, dune.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmed.Book.RootID != dune.RootID ||
+		confirmed.Book.SourceFolder != dune.SourceFolder ||
+		confirmed.Book.GroupingKey != dune.GroupingKey ||
+		confirmed.Book.Subtitle != "Provider Subtitle" ||
+		!slices.Equal(confirmed.Book.Authors, []string{"Frank Herbert"}) ||
+		!slices.Equal(confirmed.Book.Narrators, []string{"Narrator"}) ||
+		confirmed.Book.Series != "Dune" || confirmed.Book.SeriesPosition != "1" ||
+		confirmed.Book.Publisher != "Chilton" ||
+		confirmed.Book.PublishedDate != "1965-08-01" ||
+		confirmed.Book.PublicationYear == nil || *confirmed.Book.PublicationYear != 1965 ||
+		!slices.Equal(confirmed.Book.Genres, []string{"Science Fiction"}) ||
+		!slices.Equal(confirmed.Book.ProviderSubjects, []string{"Arrakis"}) ||
+		confirmed.Book.Identifiers["isbn"] != "9780441172719" ||
+		confirmed.Book.Identifiers[MetadataOpenLibrary] != "OL123M" ||
+		len(confirmed.Files) != 3 {
+		t.Fatalf("confirmed metadata/grouping/files = %#v files=%#v",
+			confirmed.Book, confirmed.Files)
 	}
 	correction := GroupingCorrection{
 		ID:           uuid.New(),
@@ -306,6 +347,116 @@ func TestPostgresRepositoryPreservesConfirmedMetadataAndCorrections(t *testing.T
 	).Scan(&groups); err != nil || len(groups) == 0 {
 		t.Fatalf("grouping correction groups = %q, err=%v", groups, err)
 	}
+}
+
+func TestPostgresRepositoryGroupingContextIncludesFolderAudioAndActiveSiblingAssignments(
+	t *testing.T,
+) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if err := database.Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewPostgresRepository(pool)
+	if err := repository.SyncRoots(ctx, []LibraryRoot{{
+		ID: "audiobooks", DisplayName: "Audiobooks",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	scan, err := repository.BeginScan(ctx, "audiobooks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := []SourceFile{
+		sourceFile("First", "Omnibus/First.m4b"),
+		sourceFile("Second", "Omnibus/Second.mp3"),
+		sourceFile("Loose", "Omnibus/Loose.flac"),
+		sourceFile("Missing", "Omnibus/Missing.m4b"),
+		sourceFile("Nested", "Omnibus/Nested/Hidden.m4b"),
+		sourceFile("Cover", "Omnibus/cover.jpg"),
+	}
+	if err := repository.UpsertSourceFiles(ctx, scan.ID, files); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinishScan(ctx, scan.ID, ScanResult{Success: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	books := []InferredBook{
+		{
+			RootID: "audiobooks", SourceFolder: "Omnibus", GroupingKey: "first",
+			Title: "First", MetadataSource: MetadataInferred, Confidence: 0.5,
+			ReviewState: ReviewNeedsReview, SourceFileIDs: []uuid.UUID{files[0].ID},
+		},
+		{
+			RootID: "audiobooks", SourceFolder: "Omnibus", GroupingKey: "second",
+			Title: "Second", MetadataSource: MetadataInferred, Confidence: 0.5,
+			ReviewState: ReviewNeedsReview, SourceFileIDs: []uuid.UUID{files[1].ID},
+		},
+		{
+			RootID: "audiobooks", SourceFolder: "Omnibus", GroupingKey: "inactive",
+			Title: "Inactive", MetadataSource: MetadataInferred, Confidence: 0.5,
+			ReviewState: ReviewNeedsReview, SourceFileIDs: []uuid.UUID{files[3].ID},
+		},
+	}
+	if err := repository.ReplaceInferredBooks(ctx, "audiobooks", books); err != nil {
+		t.Fatal(err)
+	}
+	page, err := repository.ListBooks(ctx, BookQuery{Limit: 10, Sort: BookSortTitle})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := findBook(t, page.Items, nil, "First")
+	second := findBook(t, page.Items, nil, "Second")
+	inactive := findBook(t, page.Items, nil, "Inactive")
+	if _, err := pool.Exec(
+		ctx,
+		`update source_files set missing_at=now() where id=$1`,
+		files[3].ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(
+		ctx,
+		`update books set missing_at=now() where id=$1`,
+		inactive.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	grouping, err := repository.GetGroupingContext(ctx, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grouping.BookID != first.ID || grouping.RootID != "audiobooks" ||
+		grouping.SourceFolder != "Omnibus" {
+		t.Fatalf("grouping identity = %#v", grouping)
+	}
+	if got, want := groupingFilePaths(grouping.Files), []string{
+		"Omnibus/First.m4b",
+		"Omnibus/Loose.flac",
+		"Omnibus/Second.mp3",
+	}; !slices.Equal(got, want) {
+		t.Fatalf("grouping files = %v, want %v", got, want)
+	}
+	if len(grouping.Books) != 2 ||
+		grouping.Books[0].BookID != first.ID ||
+		grouping.Books[0].Title != "First" ||
+		!slices.Equal(grouping.Books[0].FileIDs, []uuid.UUID{files[0].ID}) ||
+		grouping.Books[1].BookID != second.ID ||
+		grouping.Books[1].Title != "Second" ||
+		!slices.Equal(grouping.Books[1].FileIDs, []uuid.UUID{files[1].ID}) {
+		t.Fatalf("grouping books = %#v", grouping.Books)
+	}
+}
+
+func groupingFilePaths(files []SourceFile) []string {
+	result := make([]string, len(files))
+	for index := range files {
+		result[index] = files[index].RelativePath
+	}
+	return result
 }
 
 func TestPostgresRepositoryScanMissingAndWorkerLeaseLifecycle(t *testing.T) {
@@ -497,6 +648,165 @@ func TestPostgresRepositorySupportsRootLevelBookAndGrouping(t *testing.T) {
 	}
 }
 
+func TestPostgresRepositoryListsCatalogFilterSnapshot(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if err := database.Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewPostgresRepository(pool)
+	if err := repository.SyncRoots(ctx, []LibraryRoot{
+		{ID: "audiobooks", DisplayName: "Audiobooks"},
+		{ID: "archive", DisplayName: "Archive"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, book := range []struct {
+		rootID  string
+		title   string
+		author  string
+		genre   string
+		year    int
+		state   string
+		missing bool
+	}{
+		{rootID: "audiobooks", title: "Dune", author: "Frank Herbert",
+			genre: "Science Fiction", year: 1965, state: ReviewConfirmed},
+		{rootID: "audiobooks", title: "Messiah", author: "frank herbert",
+			genre: "science fiction", year: 1969, state: ReviewNeedsReview},
+		{rootID: "archive", title: "Hidden", author: "Ignore Me",
+			genre: "Hidden", year: 2001, state: ReviewUnreviewed, missing: true},
+	} {
+		var missingAt any
+		if book.missing {
+			missingAt = time.Now().UTC()
+		}
+		if _, err := pool.Exec(ctx, `
+			insert into books(
+				id,root_id,source_folder,grouping_key,title,authors,
+				publication_year,genres,metadata_source,confidence,review_state,missing_at
+			)
+			values($1,$2,$3,$4,$5,$6,$7,$8,'local',0.8,$9,$10)
+		`, uuid.New(), book.rootID, book.title, "group-"+book.title, book.title,
+			[]string{book.author}, book.year, []string{book.genre}, book.state, missingAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	filters, err := repository.ListCatalogFilters(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(filters.Authors, []string{"Frank Herbert"}) ||
+		!slices.Equal(filters.Genres, []string{"Science Fiction"}) ||
+		!slices.Equal(filters.Years, []int{1965, 1969}) ||
+		!slices.Equal(filters.Roots, []string{"archive", "audiobooks"}) ||
+		!slices.Equal(filters.ReviewStates, []string{ReviewConfirmed, ReviewNeedsReview}) {
+		t.Fatalf("filters = %#v", filters)
+	}
+}
+
+func TestPostgresRepositoryDeduplicatesOnlyActiveJobs(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if err := database.Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewPostgresRepository(pool)
+	first := WorkerJob{
+		ID: uuid.New(), Kind: JobScanRoot,
+		Payload: map[string]any{"rootId": "audiobooks"},
+	}
+	active, err := repository.EnqueueDeduplicated(ctx, first, "scan_root:audiobooks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.ID = uuid.New()
+	duplicate, err := repository.EnqueueDeduplicated(ctx, second, "scan_root:audiobooks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.ID != active.ID {
+		t.Fatalf("active duplicate IDs = %s and %s", active.ID, duplicate.ID)
+	}
+	if _, err := pool.Exec(ctx,
+		`update worker_jobs set status='succeeded', updated_at=now() where id=$1`,
+		active.ID); err != nil {
+		t.Fatal(err)
+	}
+	retry := first
+	retry.ID = uuid.New()
+	requeued, err := repository.EnqueueDeduplicated(ctx, retry, "scan_root:audiobooks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requeued.ID != retry.ID || requeued.ID == active.ID {
+		t.Fatalf("terminal retry = %#v after %#v", requeued, active)
+	}
+}
+
+func TestPostgresRepositoryEnqueueDeduplicatedIsConcurrentAndValidatesKey(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if err := database.Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewPostgresRepository(pool)
+	for _, key := range []string{"", " ", strings.Repeat("x", 257)} {
+		if _, err := repository.EnqueueDeduplicated(ctx, WorkerJob{
+			ID: uuid.New(), Kind: JobScanRoot, Payload: map[string]any{},
+		}, key); !errors.Is(err, ErrInvalidData) {
+			t.Fatalf("EnqueueDeduplicated(key length %d) = %v", len(key), err)
+		}
+	}
+
+	const callers = 8
+	results := make(chan WorkerJob, callers)
+	failures := make(chan error, callers)
+	var workers sync.WaitGroup
+	for range callers {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			job, err := repository.EnqueueDeduplicated(ctx, WorkerJob{
+				ID: uuid.New(), Kind: JobScanRoot,
+				Payload: map[string]any{"rootId": "audiobooks"},
+			}, "scan_root:audiobooks")
+			if err != nil {
+				failures <- err
+				return
+			}
+			results <- job
+		}()
+	}
+	workers.Wait()
+	close(results)
+	close(failures)
+	for err := range failures {
+		t.Fatal(err)
+	}
+	var activeID uuid.UUID
+	for job := range results {
+		if activeID == uuid.Nil {
+			activeID = job.ID
+		}
+		if job.ID != activeID {
+			t.Fatalf("concurrent active IDs = %s and %s", activeID, job.ID)
+		}
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `
+		select count(*) from worker_jobs
+		where kind='scan_root' and dedupe_key='scan_root:audiobooks'
+		  and status in ('queued','running')
+	`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("active row count = %d", count)
+	}
+}
+
 func TestPostgresGroupingSplitMergeAndIndependentReapplication(t *testing.T) {
 	pool := testpostgres.Open(t)
 	ctx := context.Background()
@@ -512,6 +822,10 @@ func TestPostgresGroupingSplitMergeAndIndependentReapplication(t *testing.T) {
 	}
 	firstFile := sourceFile("Anthology", "Anthology/First Book.m4b")
 	secondFile := sourceFile("Anthology", "Anthology/Second Book.m4b")
+	firstSidecar := sourceFile("Anthology", "Anthology/First Book.cue")
+	secondSidecar := sourceFile("Anthology", "Anthology/Second Book.cue")
+	sharedCover := sourceFile("Anthology", "Anthology/cover.jpg")
+	unrelatedSidecar := sourceFile("Anthology", "Anthology/notes.txt")
 	scan, err := repository.BeginScan(ctx, "audiobooks")
 	if err != nil {
 		t.Fatal(err)
@@ -519,7 +833,14 @@ func TestPostgresGroupingSplitMergeAndIndependentReapplication(t *testing.T) {
 	if err := repository.UpsertSourceFiles(
 		ctx,
 		scan.ID,
-		[]SourceFile{firstFile, secondFile},
+		[]SourceFile{
+			firstFile,
+			secondFile,
+			firstSidecar,
+			secondSidecar,
+			sharedCover,
+			unrelatedSidecar,
+		},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +849,20 @@ func TestPostgresGroupingSplitMergeAndIndependentReapplication(t *testing.T) {
 	}
 	initial := inferredBook("Anthology", "Local Author", 2020, firstFile.ID)
 	initial.SourceFolder = "Anthology"
-	initial.SourceFileIDs = []uuid.UUID{firstFile.ID, secondFile.ID}
+	initial.SourceFileIDs = []uuid.UUID{
+		firstFile.ID,
+		secondFile.ID,
+		firstSidecar.ID,
+		secondSidecar.ID,
+		sharedCover.ID,
+	}
+	initial.FileRoles = map[uuid.UUID]string{
+		firstFile.ID:     FileRoleAudio,
+		secondFile.ID:    FileRoleAudio,
+		firstSidecar.ID:  FileRoleSidecar,
+		secondSidecar.ID: FileRoleSidecar,
+		sharedCover.ID:   FileRoleCover,
+	}
 	if err := repository.ReplaceInferredBooks(
 		ctx,
 		"audiobooks",
@@ -589,6 +923,16 @@ func TestPostgresGroupingSplitMergeAndIndependentReapplication(t *testing.T) {
 		t.Fatalf("split titles original=%q new=%q; want a distinguishable audio identity",
 			originalTitle, splitTitle)
 	}
+	assertBookFileAssignments(t, pool, originalID, []string{
+		"Anthology/First Book.cue=sidecar",
+		"Anthology/First Book.m4b=audio",
+		"Anthology/cover.jpg=cover",
+	})
+	assertBookFileAssignments(t, pool, splitBookID, []string{
+		"Anthology/Second Book.cue=sidecar",
+		"Anthology/Second Book.m4b=audio",
+		"Anthology/cover.jpg=cover",
+	})
 	assertPresentBookAndAudioAssignments(t, pool, "Anthology", 2, 2)
 
 	thirdFile := sourceFile("Anthology", "Anthology/New Arrival.m4b")
@@ -599,7 +943,15 @@ func TestPostgresGroupingSplitMergeAndIndependentReapplication(t *testing.T) {
 	if err := repository.UpsertSourceFiles(
 		ctx,
 		secondScan.ID,
-		[]SourceFile{firstFile, secondFile, thirdFile},
+		[]SourceFile{
+			firstFile,
+			secondFile,
+			thirdFile,
+			firstSidecar,
+			secondSidecar,
+			sharedCover,
+			unrelatedSidecar,
+		},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -641,7 +993,14 @@ func TestPostgresGroupingSplitMergeAndIndependentReapplication(t *testing.T) {
 	if err := repository.UpsertSourceFiles(
 		ctx,
 		thirdScan.ID,
-		[]SourceFile{firstFile, thirdFile},
+		[]SourceFile{
+			firstFile,
+			thirdFile,
+			firstSidecar,
+			secondSidecar,
+			sharedCover,
+			unrelatedSidecar,
+		},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -700,8 +1059,8 @@ func assertPresentBookAndAudioAssignments(
 	if err := pool.QueryRow(context.Background(), `
 		select
 		    count(distinct b.id),
-		    count(bf.file_id),
-		    count(distinct bf.file_id)
+		    count(bf.file_id) filter (where bf.role='audio'),
+		    count(distinct bf.file_id) filter (where bf.role='audio')
 		from books b
 		left join book_files bf on bf.book_id=b.id
 		where b.root_id='audiobooks'
@@ -721,6 +1080,40 @@ func assertPresentBookAndAudioAssignments(
 			wantAudio,
 			wantAudio,
 		)
+	}
+}
+
+func assertBookFileAssignments(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	bookID uuid.UUID,
+	want []string,
+) {
+	t.Helper()
+	rows, err := pool.Query(context.Background(), `
+		select f.relative_path || '=' || bf.role
+		from book_files bf
+		join source_files f on f.id=bf.file_id and f.root_id=bf.root_id
+		where bf.book_id=$1
+		order by f.relative_path, bf.role
+	`, bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := make([]string, 0, len(want))
+	for rows.Next() {
+		var assignment string
+		if err := rows.Scan(&assignment); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, assignment)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("book %s assignments = %v, want %v", bookID, got, want)
 	}
 }
 

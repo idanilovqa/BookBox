@@ -104,6 +104,21 @@ type BookDetail struct {
 	Matches []MetadataMatch
 }
 
+type GroupingContext struct {
+	BookID       uuid.UUID
+	RootID       string
+	SourceFolder string
+	Files        []SourceFile
+	Books        []GroupingContextBook
+}
+
+type GroupingContextBook struct {
+	BookID      uuid.UUID
+	Title       string
+	GroupingKey string
+	FileIDs     []uuid.UUID
+}
+
 type InferredBook struct {
 	RootID           string
 	SourceFolder     string
@@ -199,4 +214,12 @@ type BookQuery struct {
 type Page[T any] struct {
 	Items      []T
 	NextCursor string
+}
+
+type FilterSnapshot struct {
+	Authors      []string `json:"authors"`
+	Genres       []string `json:"genres"`
+	Years        []int    `json:"years"`
+	Roots        []string `json:"roots"`
+	ReviewStates []string `json:"reviewStates"`
 }
