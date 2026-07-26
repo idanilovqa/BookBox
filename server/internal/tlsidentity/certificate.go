@@ -202,21 +202,30 @@ func recoverCreation(lockPath, certPath, keyPath string, now time.Time) error {
 		filepath.Clean(marker.CertPath) != filepath.Clean(certPath) ||
 		filepath.Clean(marker.KeyPath) != filepath.Clean(keyPath) ||
 		marker.StartedAt.IsZero() {
-		return nil
+		return ErrIdentityCreationLocked
 	}
-	_, certExists, certErr := identityFileInfo(certPath)
+	certInfo, certExists, certErr := identityFileInfo(certPath)
 	if certErr != nil {
 		return certErr
 	}
-	_, keyExists, keyErr := identityFileInfo(keyPath)
+	keyInfo, keyExists, keyErr := identityFileInfo(keyPath)
 	if keyErr != nil {
 		return keyErr
 	}
-	if certExists && keyExists {
-		return removeCreationMarker(lockPath)
-	}
-	if now.Sub(marker.StartedAt) < creationMarkerStale {
+	active := now.Sub(marker.StartedAt) < creationMarkerStale
+	if active {
 		return ErrIdentityCreationLocked
+	}
+	if certExists && keyExists {
+		if marker.Phase != "prepared" ||
+			!fileMatchesDigest(certPath, marker.CertSHA256) ||
+			!fileMatchesDigest(keyPath, marker.KeySHA256) {
+			return ErrIdentityCreationLocked
+		}
+		if _, err := loadIdentity(certPath, keyPath, certInfo, keyInfo); err != nil {
+			return ErrIdentityCreationLocked
+		}
+		return removeCreationMarker(lockPath)
 	}
 	if !certExists && !keyExists {
 		return removeCreationMarker(lockPath)
@@ -238,6 +247,18 @@ func recoverCreation(lockPath, certPath, keyPath string, now time.Time) error {
 		}
 	}
 	return nil
+}
+
+func fileMatchesDigest(path, expected string) bool {
+	if expected == "" {
+		return false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	digest := sha256.Sum256(raw)
+	return strings.EqualFold(expected, hex.EncodeToString(digest[:]))
 }
 
 func createCreationMarker(path string, marker creationMarker) error {
