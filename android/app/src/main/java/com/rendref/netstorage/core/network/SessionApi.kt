@@ -27,14 +27,20 @@ interface SessionService {
     suspend fun refresh(): SessionTokens
 }
 
+interface TokenSession {
+    val accessToken: String?
+
+    suspend fun refresh(): SessionTokens
+}
+
 class SessionApi(
     private val client: OkHttpClient,
     private val baseUrl: HttpUrl,
     private val tokenStore: RefreshTokenStore,
     private val json: Json = Json { ignoreUnknownKeys = true },
-) : SessionService {
+) : SessionService, TokenSession {
     @Volatile
-    var accessToken: String? = null
+    override var accessToken: String? = null
         private set
 
     init {
