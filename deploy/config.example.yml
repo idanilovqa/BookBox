@@ -1,0 +1,5 @@
+listen: ":8443"
+roots:
+  - id: audiobooks
+    name: Audiobooks
+    container_path: /library/audiobooks
