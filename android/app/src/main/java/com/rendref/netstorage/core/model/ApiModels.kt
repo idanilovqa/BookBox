@@ -35,6 +35,23 @@ data class BrowseDto(
 )
 
 @Serializable
+data class BookFileDto(
+    val id: String,
+    val relativePath: String,
+    val name: String,
+    val size: Long,
+    val modifiedAt: String,
+)
+
+@Serializable
+data class BookFilesDto(
+    val bookId: String,
+    val rootId: String,
+    val sourceFolder: String,
+    val files: List<BookFileDto>,
+)
+
+@Serializable
 data class BookCardDto(
     val id: String,
     val title: String,
