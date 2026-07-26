@@ -148,7 +148,10 @@ func metadataProviders() ([]metadata.Provider, error) {
 		return nil, errors.New("Google Books API key could not be read")
 	}
 	key := strings.TrimSpace(string(raw))
-	if key == "" || strings.ContainsAny(key, "\r\n") {
+	if key == "" {
+		return providers, nil
+	}
+	if strings.ContainsAny(key, "\r\n") {
 		return nil, errors.New("Google Books API key file is invalid")
 	}
 	googleBooks, err := metadata.NewGoogleBooks("", key, nil)

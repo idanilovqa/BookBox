@@ -1,0 +1,66 @@
+# Integration Task 2 adds the deterministic provider-fixtures service. These
+# URLs are declared now so the worker cannot fall back to live providers during
+# an isolated test run once that fixture service is composed.
+services:
+  postgres:
+    volumes:
+      - type: volume
+        source: test_postgres_data
+        target: /var/lib/postgresql
+
+  netstorage-api:
+    ports: !override
+      - name: https
+        target: 8443
+        published: "18443"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: "${NETSTORAGE_TEST_LIBRARY_PATH:?Set a task-scoped NETSTORAGE_TEST_LIBRARY_PATH}"
+        target: /library/audiobooks
+        read_only: true
+      - type: bind
+        source: "${NETSTORAGE_TEST_CONFIG_HOST_FILE:?Set NETSTORAGE_TEST_CONFIG_HOST_FILE}"
+        target: /etc/netstorage/config.yml
+        read_only: true
+      - type: volume
+        source: test_tls_data
+        target: /var/lib/netstorage
+
+  netstorage-catalog-worker:
+    environment:
+      NETSTORAGE_SCAN_INTERVAL: 5s
+      NETSTORAGE_OPENLIBRARY_BASE_URL: "${NETSTORAGE_TEST_OPENLIBRARY_URL:-http://provider-fixtures:8080/openlibrary}"
+      NETSTORAGE_GOOGLE_BOOKS_BASE_URL: "${NETSTORAGE_TEST_GOOGLE_BOOKS_URL:-http://provider-fixtures:8080/googlebooks}"
+    volumes:
+      # The caller must supply a disposable copy. Never point this at H:.
+      - type: bind
+        source: "${NETSTORAGE_TEST_LIBRARY_PATH:?Set a task-scoped NETSTORAGE_TEST_LIBRARY_PATH}"
+        target: /library/audiobooks
+      - type: bind
+        source: "${NETSTORAGE_TEST_CONFIG_HOST_FILE:?Set NETSTORAGE_TEST_CONFIG_HOST_FILE}"
+        target: /etc/netstorage/config.yml
+        read_only: true
+      - type: volume
+        source: test_cover_cache
+        target: /var/lib/netstorage/covers
+      - type: volume
+        source: test_cover_backups
+        target: /var/lib/netstorage/backups
+
+secrets:
+  postgres_password:
+    file: "${NETSTORAGE_TEST_POSTGRES_PASSWORD_HOST_FILE:?Set test PostgreSQL secret}"
+  app_password_hash:
+    file: "${NETSTORAGE_TEST_PASSWORD_HASH_HOST_FILE:?Set test app-password hash}"
+  session_key:
+    file: "${NETSTORAGE_TEST_SESSION_KEY_HOST_FILE:?Set test session key}"
+  google_books_key:
+    file: "${NETSTORAGE_TEST_GOOGLE_BOOKS_KEY_HOST_FILE:?Set test Google key file}"
+
+volumes:
+  test_postgres_data:
+  test_tls_data:
+  test_cover_cache:
+  test_cover_backups:

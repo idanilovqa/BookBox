@@ -176,6 +176,10 @@ database:
         'synthetic-smoke-postgres-password',
         [Text.UTF8Encoding]::new($false)
     )
+    [IO.File]::WriteAllBytes(
+        (Join-Path $secrets 'google_books_key.txt'),
+        [byte[]]::new(0)
+    )
 
     $toComposePath = {
         param([string] $Path)
@@ -187,6 +191,7 @@ database:
         "NETSTORAGE_POSTGRES_PASSWORD_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'postgres_password.txt'))"
         "NETSTORAGE_PASSWORD_HASH_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'app_password_hash.txt'))"
         "NETSTORAGE_SESSION_KEY_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'session_key.bin'))"
+        "NETSTORAGE_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'google_books_key.txt'))"
         'NETSTORAGE_BIND_ADDRESS=127.0.0.1'
         'HOST_PORT=0'
     ) -join [Environment]::NewLine

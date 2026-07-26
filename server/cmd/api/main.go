@@ -150,6 +150,7 @@ func buildHandler(
 	}
 	var catalogRepository *catalog.PostgresRepository
 	var matcher *metadata.Matcher
+	var readiness httpapi.ReadinessProbe
 	var transferBuilder httpapi.ManifestBuilder = transfer.NewBuilder(resolver, fileSigner)
 	if len(databasePools) > 0 && databasePools[0] != nil {
 		catalogRepository = catalog.NewPostgresRepository(databasePools[0])
@@ -159,6 +160,11 @@ func buildHandler(
 		}
 		matcher = metadata.NewMatcher(openLibrary)
 		transferBuilder = transfer.NewCatalogBuilder(resolver, fileSigner, catalogRepository)
+		rootPaths := make([]string, 0, len(cfg.Roots))
+		for _, root := range cfg.Roots {
+			rootPaths = append(rootPaths, root.ContainerPath)
+		}
+		readiness = httpapi.NewReadinessProbe(databasePools[0], true, rootPaths)
 	}
 	handler := httpapi.New(httpapi.Dependencies{
 		Version:          buildVersion,
@@ -175,6 +181,7 @@ func buildHandler(
 		FileSigner:       fileSigner,
 		Catalog:          catalogRepository,
 		MetadataMatcher:  matcher,
+		Readiness:        readiness,
 	})
 	return handler, tokens, nil
 }

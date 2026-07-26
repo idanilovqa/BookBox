@@ -29,6 +29,7 @@ type Dependencies struct {
 	FileSigner       *transfer.FileSigner
 	Catalog          CatalogRepository
 	MetadataMatcher  MetadataMatcher
+	Readiness        ReadinessProbe
 	Now              func() time.Time
 }
 
@@ -67,6 +68,12 @@ func routes(deps Dependencies) []route {
 					"version": deps.Version,
 				})
 			}),
+		},
+		{
+			method:  "GET",
+			path:    "/v1/ready",
+			public:  true,
+			handler: readinessHandler(deps.Readiness),
 		},
 		{
 			method:  "POST",

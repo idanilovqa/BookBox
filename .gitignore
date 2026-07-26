@@ -10,6 +10,10 @@ android/**/build/
 key.properties
 keystore.properties
 deploy/.env
+deploy/.env.test
 deploy/config.yml
+deploy/config.test.yml
 deploy/secrets/*
 !deploy/secrets/.gitkeep
+local-secrets/
+artifacts/

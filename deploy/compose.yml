@@ -14,6 +14,8 @@ services:
       - type: volume
         source: postgres_data
         target: /var/lib/postgresql
+    networks:
+      - backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U netstorage -d netstorage"]
       interval: 5s
@@ -25,6 +27,14 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
 
   netstorage-api:
     build:
@@ -57,6 +67,9 @@ services:
         target: app_password_hash.source
       - source: session_key
         target: session_key.source
+    networks:
+      - backend
+      - outbound
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,mode=1777
@@ -69,7 +82,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-check-certificate", "-qO-", "https://localhost:8443/v1/health"]
+      test: ["CMD", "wget", "--no-check-certificate", "-qO-", "https://localhost:8443/v1/ready"]
       interval: 10s
       timeout: 3s
       retries: 12
@@ -79,6 +92,14 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 768M
+        reservations:
+          cpus: "0.20"
+          memory: 192M
 
   netstorage-catalog-worker:
     build:
@@ -107,8 +128,14 @@ services:
         target: /var/lib/netstorage/backups
     secrets:
       - postgres_password
+      - source: google_books_key
+        target: google_books_key
     environment:
       NETSTORAGE_COVER_BACKUP_ROOT: /var/lib/netstorage/backups
+      NETSTORAGE_GOOGLE_BOOKS_API_KEY_FILE: /run/secrets/google_books_key
+    networks:
+      - backend
+      - outbound
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,mode=1777
@@ -120,11 +147,25 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "for process in /proc/[0-9]*; do [ \"$(readlink \"$$process/exe\")\" = /usr/local/bin/netstorage-catalog-worker ] && exit 0; done; exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
     logging:
       driver: json-file
       options:
         max-size: 10m
         max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
 
 secrets:
   postgres_password:
@@ -133,9 +174,16 @@ secrets:
     file: "${NETSTORAGE_PASSWORD_HASH_HOST_FILE:?Set NETSTORAGE_PASSWORD_HASH_HOST_FILE in deploy/.env}"
   session_key:
     file: "${NETSTORAGE_SESSION_KEY_HOST_FILE:?Set NETSTORAGE_SESSION_KEY_HOST_FILE in deploy/.env}"
+  google_books_key:
+    file: "${NETSTORAGE_GOOGLE_BOOKS_KEY_HOST_FILE:-./secrets/google_books_key.txt}"
 
 volumes:
   postgres_data:
   tls_data:
   cover_cache:
   cover_backups:
+
+networks:
+  backend:
+    internal: true
+  outbound:
