@@ -52,6 +52,22 @@ data class BookFilesDto(
 )
 
 @Serializable
+data class GroupingContextBookDto(
+    val bookId: String,
+    val title: String,
+    val fileIds: List<String>,
+)
+
+@Serializable
+data class GroupingContextDto(
+    val bookId: String,
+    val rootId: String,
+    val sourceFolder: String,
+    val files: List<BookFileDto>,
+    val books: List<GroupingContextBookDto>,
+)
+
+@Serializable
 data class BookCardDto(
     val id: String,
     val title: String,
@@ -94,6 +110,37 @@ data class BookDetailDto(
     val metadataSource: String? = null,
     val confidence: Double? = null,
     val attribution: MetadataAttributionDto? = null,
+)
+
+@Serializable
+data class MetadataCandidateDto(
+    val matchId: String,
+    val provider: String,
+    val providerId: String,
+    val title: String,
+    val authors: List<String>,
+    val subtitle: String? = null,
+    val publisher: String? = null,
+    val publishedDate: String? = null,
+    val genres: List<String> = emptyList(),
+    val subjects: List<String> = emptyList(),
+    val series: String? = null,
+    val seriesPosition: String? = null,
+    val isbn: String? = null,
+    val coverUrl: String? = null,
+    val score: Double,
+)
+
+@Serializable
+data class MatchSearchDto(
+    val bookId: String,
+    val candidates: List<MetadataCandidateDto>,
+)
+
+@Serializable
+data class AcceptedJobDto(
+    val jobId: String,
+    val status: String,
 )
 
 @Serializable
