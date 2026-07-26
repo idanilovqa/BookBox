@@ -1,4 +1,13 @@
 .worktrees/
+.tooling/
+.gradle/
+android/.gradle/
+android/local.properties
+android/**/build/
+*.jks
+*.keystore
+key.properties
+keystore.properties
 deploy/.env
 deploy/config.yml
 deploy/secrets/*

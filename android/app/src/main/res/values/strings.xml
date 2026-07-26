@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">netStorage</string>
+    <string name="library_eyebrow">YOUR AUDIOBOOKS</string>
+    <string name="library_title">A quieter way into your library.</string>
+    <string name="library_intro">Browse your home collection as books or folders, then copy only what you want to this phone.</string>
+    <string name="server_not_connected">Server not connected</string>
+    <string name="server_setup_hint">Your saved server and sign-in flow will appear here. Windows source files always remain read-only from the app.</string>
+</resources>
