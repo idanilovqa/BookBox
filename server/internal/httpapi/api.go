@@ -2,30 +2,47 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"strings"
+	"time"
 
+	"netstorage.local/server/internal/auth"
 	"netstorage.local/server/internal/config"
 	"netstorage.local/server/internal/library"
 )
 
 type Dependencies struct {
-	Version string
-	Roots   []config.Root
-	Browser *library.Browser
+	Version      string
+	Roots        []config.Root
+	Browser      *library.Browser
+	Username     string
+	PasswordHash string
+	Tokens       *auth.TokenManager
+	Limiter      *auth.LoginLimiter
+	Logger       *slog.Logger
 }
 
 type route struct {
 	method  string
 	path    string
+	public  bool
 	handler http.Handler
 }
 
 func New(deps Dependencies) http.Handler {
 	mux := http.NewServeMux()
 	for _, registered := range routes(deps) {
-		mux.Handle(registered.method+" "+registered.path, registered.handler)
+		handler := registered.handler
+		if !registered.public {
+			handler = requireAccessToken(deps.Tokens, handler)
+		}
+		mux.Handle(registered.method+" "+registered.path, handler)
 	}
-	return mux
+	if deps.Logger == nil {
+		return mux
+	}
+	return logRequests(deps.Logger, mux)
 }
 
 func routes(deps Dependencies) []route {
@@ -33,12 +50,25 @@ func routes(deps Dependencies) []route {
 		{
 			method: "GET",
 			path:   "/v1/health",
+			public: true,
 			handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				writeJSON(w, http.StatusOK, map[string]string{
 					"status":  "ok",
 					"version": deps.Version,
 				})
 			}),
+		},
+		{
+			method:  "POST",
+			path:    "/v1/session",
+			public:  true,
+			handler: loginHandler(deps),
+		},
+		{
+			method:  "POST",
+			path:    "/v1/session/refresh",
+			public:  true,
+			handler: refreshHandler(deps),
 		},
 		{
 			method:  "GET",
@@ -51,6 +81,81 @@ func routes(deps Dependencies) []route {
 			handler: browseHandler(deps.Browser),
 		},
 	}
+}
+
+func requireAccessToken(tokens *auth.TokenManager, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		values := request.Header.Values("Authorization")
+		if len(values) != 1 {
+			writeBearerUnauthorized(w)
+			return
+		}
+		fields := strings.Fields(values[0])
+		if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") ||
+			strings.Contains(fields[1], ",") || tokens == nil {
+			writeBearerUnauthorized(w)
+			return
+		}
+		if _, err := tokens.ValidateAccess(fields[1]); err != nil {
+			writeBearerUnauthorized(w)
+			return
+		}
+		next.ServeHTTP(w, request)
+	})
+}
+
+func writeBearerUnauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", "Bearer")
+	writeJSON(w, http.StatusUnauthorized, errorResponse{Error: errorDetail{
+		Code:    "unauthorized",
+		Message: "authentication required",
+	}})
+}
+
+type statusResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (writer *statusResponseWriter) Unwrap() http.ResponseWriter {
+	return writer.ResponseWriter
+}
+
+func (writer *statusResponseWriter) WriteHeader(status int) {
+	if writer.status != 0 {
+		return
+	}
+	writer.status = status
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *statusResponseWriter) Write(body []byte) (int, error) {
+	if writer.status == 0 {
+		writer.WriteHeader(http.StatusOK)
+	}
+	return writer.ResponseWriter.Write(body)
+}
+
+func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		started := time.Now()
+		writer := &statusResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(writer, request)
+		status := writer.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		routePattern := request.Pattern
+		if routePattern == "" {
+			routePattern = "<unmatched>"
+		}
+		logger.Info("http request",
+			"method", request.Method,
+			"route", routePattern,
+			"status", status,
+			"duration_ms", time.Since(started).Milliseconds(),
+		)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

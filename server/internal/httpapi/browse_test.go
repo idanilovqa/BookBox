@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"netstorage.local/server/internal/auth"
 	"netstorage.local/server/internal/config"
 	"netstorage.local/server/internal/library"
 )
@@ -211,10 +213,23 @@ func newBrowseAPI(t *testing.T, roots []config.Root) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(Dependencies{
+	manager, err := auth.NewTokenManager([]byte(strings.Repeat("b", 32)), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := manager.Issue("owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := New(Dependencies{
 		Version: "test",
 		Roots:   roots,
 		Browser: library.NewBrowser(resolver),
+		Tokens:  manager,
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		request.Header.Set("Authorization", "Bearer "+pair.AccessToken)
+		api.ServeHTTP(w, request)
 	})
 }
 

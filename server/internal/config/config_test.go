@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -87,12 +88,182 @@ roots:
 	}
 }
 
+func TestLoadRequiresTLSAndAuthenticationConfiguration(t *testing.T) {
+	base := `
+listen: ":8443"
+roots:
+  - {id: audiobooks, name: Audiobooks, container_path: /library/audiobooks}
+`
+	tests := map[string]string{
+		"missing TLS": base + `
+auth:
+  username: owner
+  password_hash_file: /run/secrets/app_password_hash
+  session_key_file: /run/secrets/session_key
+`,
+		"missing auth": base + `
+tls:
+  cert_path: /var/lib/netstorage/tls/server.crt
+  key_path: /var/lib/netstorage/tls/server.key
+  hosts: [localhost]
+`,
+		"relative secret": base + `
+tls:
+  cert_path: /var/lib/netstorage/tls/server.crt
+  key_path: /var/lib/netstorage/tls/server.key
+  hosts: [localhost]
+auth:
+  username: owner
+  password_hash_file: secrets/app_password_hash
+  session_key_file: /run/secrets/session_key
+`,
+	}
+	for name, contents := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeConfigRaw(t, contents)); err == nil {
+				t.Fatal("Load() accepted incomplete security configuration")
+			}
+		})
+	}
+}
+
+func TestExampleConfigLoads(t *testing.T) {
+	if _, err := Load(filepath.Join("..", "..", "..", "deploy", "config.example.yml")); err != nil {
+		t.Fatalf("Load(config.example.yml) error = %v", err)
+	}
+}
+
+func TestLoadSecretsReadsCRLFHashAndExactBinaryKey(t *testing.T) {
+	directory := t.TempDir()
+	hashPath := filepath.Join(directory, "password_hash")
+	keyPath := filepath.Join(directory, "session_key")
+	if err := os.WriteFile(hashPath, []byte("$argon2id$test\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key := []byte(" " + strings.Repeat("k", 30) + "\n")
+	if len(key) != 32 {
+		t.Fatalf("test key length = %d", len(key))
+	}
+	if err := os.WriteFile(keyPath, key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	secrets, err := LoadSecrets(Auth{
+		PasswordHashFile: hashPath,
+		SessionKeyFile:   keyPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secrets.PasswordHash != "$argon2id$test" {
+		t.Fatalf("PasswordHash = %q", secrets.PasswordHash)
+	}
+	if string(secrets.SessionKey) != string(key) {
+		t.Fatal("LoadSecrets trimmed binary session key")
+	}
+}
+
+func TestLoadSecretsRejectsInsecureNonRegularAndWrongLengthFiles(t *testing.T) {
+	validHash := []byte("$argon2id$test")
+	validKey := []byte(strings.Repeat("k", 32))
+	tests := []struct {
+		name      string
+		prepare   func(t *testing.T, hashPath, keyPath string)
+		wantError error
+	}{
+		{
+			name: "group readable hash",
+			prepare: func(t *testing.T, hashPath, keyPath string) {
+				writeSecret(t, hashPath, validHash, 0o640)
+				writeSecret(t, keyPath, validKey, 0o600)
+			},
+			wantError: ErrInsecureSecretPermissions,
+		},
+		{
+			name: "symlink hash",
+			prepare: func(t *testing.T, hashPath, keyPath string) {
+				target := hashPath + ".target"
+				writeSecret(t, target, validHash, 0o600)
+				if err := os.Symlink(target, hashPath); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+				writeSecret(t, keyPath, validKey, 0o600)
+			},
+			wantError: ErrInvalidSecretFile,
+		},
+		{
+			name: "directory key",
+			prepare: func(t *testing.T, hashPath, keyPath string) {
+				writeSecret(t, hashPath, validHash, 0o600)
+				if err := os.Mkdir(keyPath, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantError: ErrInvalidSecretFile,
+		},
+		{
+			name: "short key",
+			prepare: func(t *testing.T, hashPath, keyPath string) {
+				writeSecret(t, hashPath, validHash, 0o600)
+				writeSecret(t, keyPath, []byte("short"), 0o600)
+			},
+			wantError: ErrInvalidSessionKey,
+		},
+		{
+			name: "empty hash",
+			prepare: func(t *testing.T, hashPath, keyPath string) {
+				writeSecret(t, hashPath, nil, 0o600)
+				writeSecret(t, keyPath, validKey, 0o600)
+			},
+			wantError: ErrEmptySecret,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			hashPath := filepath.Join(directory, "password_hash")
+			keyPath := filepath.Join(directory, "session_key")
+			test.prepare(t, hashPath, keyPath)
+			_, err := LoadSecrets(Auth{
+				PasswordHashFile: hashPath,
+				SessionKeyFile:   keyPath,
+			})
+			if !errors.Is(err, test.wantError) {
+				t.Fatalf("LoadSecrets() error = %v, want %v", err, test.wantError)
+			}
+		})
+	}
+}
+
 func writeConfig(t *testing.T, contents string) string {
 	t.Helper()
+	if !strings.Contains(contents, "\ntls:") {
+		contents += `
+tls:
+  cert_path: /var/lib/netstorage/tls/server.crt
+  key_path: /var/lib/netstorage/tls/server.key
+  hosts: [localhost]
+auth:
+  username: owner
+  password_hash_file: /run/secrets/app_password_hash
+  session_key_file: /run/secrets/session_key
+`
+	}
+	return writeConfigRaw(t, contents)
+}
 
+func writeConfigRaw(t *testing.T, contents string) string {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yml")
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func writeSecret(t *testing.T, path string, contents []byte, mode os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, contents, mode); err != nil {
+		t.Fatal(err)
+	}
 }
