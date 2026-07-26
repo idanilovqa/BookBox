@@ -41,7 +41,7 @@ private val Amber = Color(0xFFB85C18)
 private val PaleAmber = Color(0xFFFFDBC3)
 private val Mist = Color(0xFFDCE3E9)
 
-private val LightColors = lightColorScheme(
+internal val LightColors = lightColorScheme(
     primary = Amber,
     onPrimary = Color.White,
     primaryContainer = PaleAmber,
@@ -53,7 +53,7 @@ private val LightColors = lightColorScheme(
     outline = Color(0xFF77736E),
 )
 
-private val DarkColors = darkColorScheme(
+internal val DarkColors = darkColorScheme(
     primary = Color(0xFFFFB780),
     onPrimary = Color(0xFF5F2600),
     primaryContainer = Color(0xFF843B05),
@@ -69,28 +69,7 @@ private data object LibraryHome : NavKey
 
 @Composable
 fun NetStorageApp() {
-    val isDark = isSystemInDarkTheme()
-    val backStack = rememberNavBackStack(LibraryHome)
-
-    MaterialTheme(colorScheme = if (isDark) DarkColors else LightColors) {
-        Scaffold(
-            containerColor = MaterialTheme.colorScheme.background,
-            contentWindowInsets = WindowInsets.safeDrawing,
-        ) { innerPadding ->
-            NavDisplay(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                backStack = backStack,
-                onBack = { backStack.removeLastOrNull() },
-                entryProvider = entryProvider {
-                    entry<LibraryHome> {
-                        LibraryHomeScreen()
-                    }
-                },
-            )
-        }
-    }
+    ProductionNetStorageApp()
 }
 
 @Composable

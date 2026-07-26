@@ -4,7 +4,6 @@ import android.app.job.JobParameters
 import android.app.job.JobService
 import android.content.Context
 import android.net.Network
-import androidx.datastore.preferences.preferencesDataStore
 import com.rendref.netstorage.core.network.AuthenticatedCall
 import com.rendref.netstorage.core.network.PinnedClientFactory
 import com.rendref.netstorage.core.network.SessionApi
@@ -13,6 +12,7 @@ import com.rendref.netstorage.core.storage.ConnectionStore
 import com.rendref.netstorage.core.storage.DestinationPermissionRevoked
 import com.rendref.netstorage.core.storage.DestinationStore
 import com.rendref.netstorage.core.storage.KeystoreTokenStore
+import com.rendref.netstorage.core.storage.netStorageConnectionDataStore
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
@@ -26,10 +26,6 @@ import kotlinx.coroutines.flow.first
 import okhttp3.Dns
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
-
-internal val Context.netStorageConnectionDataStore by preferencesDataStore(
-    name = "netstorage_connection",
-)
 
 data class TransferJobRuntime(
     val journal: TransferJournal,

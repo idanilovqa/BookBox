@@ -23,8 +23,8 @@ import com.rendref.netstorage.core.storage.DestinationStore
 
 data class TransferSetupState(
     val destinationLabel: String?,
-    val fileCount: Int,
-    val totalBytes: Long,
+    val fileCount: Int?,
+    val totalBytes: Long?,
     val isStarting: Boolean = false,
     val errorMessage: String? = null,
 )
@@ -75,10 +75,17 @@ internal fun TransferSetupContent(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text("Copy to Android", style = MaterialTheme.typography.headlineMedium)
-        Text(
-            "${state.fileCount} files \u00b7 ${formatTransferBytes(state.totalBytes)}",
-            style = MaterialTheme.typography.bodyLarge,
-        )
+        if (state.fileCount != null && state.totalBytes != null) {
+            Text(
+                "${state.fileCount} files \u00b7 ${formatTransferBytes(state.totalBytes)}",
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        } else {
+            Text(
+                "Exact file count and required space are checked when the copy starts.",
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        }
         Text("Windows source files stay read-only.")
         state.destinationLabel?.let { destination ->
             Text(
@@ -106,7 +113,13 @@ internal fun TransferSetupContent(
             enabled = state.destinationLabel != null && !state.isStarting,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (state.isStarting) "Starting\u2026" else "Copy ${state.fileCount} files")
+            Text(
+                when {
+                    state.isStarting -> "Starting\u2026"
+                    state.fileCount != null -> "Copy ${state.fileCount} files"
+                    else -> "Copy selected"
+                },
+            )
         }
     }
 }

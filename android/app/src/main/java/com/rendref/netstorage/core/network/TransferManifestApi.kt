@@ -21,7 +21,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
-sealed interface TransferSelection {
+sealed interface TransferSelection : java.io.Serializable {
     data class Book(val bookId: String) : TransferSelection
 
     data class Folder(

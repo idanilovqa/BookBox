@@ -26,8 +26,8 @@ class TransferStarter(
     private val journal: TransferJournal,
     private val scheduler: TransferScheduler,
     private val transferId: () -> String = { UUID.randomUUID().toString() },
-) {
-    suspend fun startFromVisibleCopyAction(
+) : TransferStartSource {
+    override suspend fun startFromVisibleCopyAction(
         request: TransferStartRequest,
     ): TransferStartResult {
         requireSafeDisplayName(request.displayName)
@@ -59,6 +59,12 @@ class TransferStarter(
             TransferScheduleResult.Failure -> TransferStartResult.ScheduleRejected(id)
         }
     }
+}
+
+fun interface TransferStartSource {
+    suspend fun startFromVisibleCopyAction(
+        request: TransferStartRequest,
+    ): TransferStartResult
 }
 
 private fun requireSafeDisplayName(displayName: String) {
