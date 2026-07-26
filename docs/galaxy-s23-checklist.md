@@ -1,11 +1,17 @@
 # Galaxy S23 Ultra release checklist
 
-Status: unverified  
-Device: Galaxy S23 Ultra  
-Android: 16 / API 36  
-Tester: ____________________  
-Build filename: ____________________  
-Build SHA-256: ____________________  
+Status: unverified
+
+Device: Galaxy S23 Ultra
+
+Android: 16 / API 36
+
+Tester: ____________________
+
+Build filename: ____________________
+
+Build SHA-256: ____________________
+
 Test date: ____________________
 
 Record evidence for each item. Leave failed or untested items unchecked. Add the observed result and any issue reference.
@@ -115,5 +121,6 @@ Evidence:
 - [ ] Every required item above passed.
 - [ ] Failures have issue references and block release sign-off.
 
-Tester signature: ____________________  
+Tester signature: ____________________
+
 Release decision: ____________________
