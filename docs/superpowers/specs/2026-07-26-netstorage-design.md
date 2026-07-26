@@ -1,6 +1,6 @@
 # netStorage Design
 
-**Status:** Approved design draft for user review  
+**Status:** Approved
 **Date:** 2026-07-26  
 **Repository:** `C:\Repositories\netStorage`  
 **Primary device:** Samsung Galaxy S23 Ultra running Android 16 (API 36)
