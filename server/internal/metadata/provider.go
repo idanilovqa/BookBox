@@ -14,6 +14,7 @@ import (
 
 const (
 	ProviderOpenLibrary = "open_library"
+	ProviderGoogleBooks = "google_books"
 
 	defaultHTTPTimeout = 10 * time.Second
 	maxResponseBytes   = 2 << 20
