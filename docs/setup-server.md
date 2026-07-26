@@ -1,6 +1,6 @@
 # Set up the netStorage server on Windows
 
-This first server release exposes configured audiobook files over authenticated HTTPS. The API can browse and download from the library bind, but Docker mounts that bind read-only and the API has no upload, rename, move, tag-edit, or delete route. PostgreSQL is included for later catalog work; this transfer release does not use it yet.
+This first server release exposes configured audiobook files over authenticated HTTPS. The API can browse and download from the library bind, but Docker mounts that bind read-only and the API has no upload, rename, move, tag-edit, or delete route. PostgreSQL stores the v1 catalog, scan state, indexed metadata, grouping and match reviews, worker jobs, and cover audit events.
 
 ## Prerequisites
 

@@ -25,7 +25,7 @@ import (
 	"netstorage.local/server/internal/transfer"
 )
 
-const version = "dev"
+var version = "dev"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
