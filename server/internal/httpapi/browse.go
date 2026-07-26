@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 
 	"netstorage.local/server/internal/config"
@@ -43,10 +44,15 @@ func browseHandler(browser *library.Browser) http.Handler {
 			writeError(w, errors.New("browser is not configured"))
 			return
 		}
+		query, err := url.ParseQuery(request.URL.RawQuery)
+		if err != nil {
+			writeError(w, library.ErrPathEscape)
+			return
+		}
 		directory, err := browser.List(
 			request.Context(),
-			request.URL.Query().Get("root"),
-			request.URL.Query().Get("path"),
+			query.Get("root"),
+			query.Get("path"),
 		)
 		if err != nil {
 			writeError(w, err)

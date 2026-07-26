@@ -34,13 +34,28 @@ func TestResolveRejectsEscapes(t *testing.T) {
 		`C:\Windows`,
 		`\\server\share`,
 		`folder\file.mp3`,
-		"%2e%2e/secret",
 	} {
 		t.Run(path, func(t *testing.T) {
 			if _, err := resolver.Resolve("audiobooks", path); !errors.Is(err, ErrPathEscape) {
 				t.Fatalf("Resolve(%q) error = %v, want ErrPathEscape", path, err)
 			}
 		})
+	}
+}
+
+func TestResolveTreatsPercentNamesLiterally(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"100% Complete", "%20", "%2e%2e"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got, err := resolverFor(t, root).Resolve("audiobooks", name)
+		if err != nil {
+			t.Fatalf("Resolve(%q) error = %v", name, err)
+		}
+		if got.Relative != name {
+			t.Fatalf("Resolve(%q).Relative = %q", name, got.Relative)
+		}
 	}
 }
 

@@ -67,6 +67,49 @@ func TestBrowseReturnsDirectoryJSON(t *testing.T) {
 	}
 }
 
+func TestBrowseDecodesQueryPathExactlyOnce(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"100% Complete", "%20"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api := newBrowseAPI(t, []config.Root{
+		{ID: "audiobooks", Name: "Audiobooks", ContainerPath: root},
+	})
+
+	for _, test := range []struct {
+		name   string
+		target string
+		path   string
+	}{
+		{
+			name:   "literal percent",
+			target: "/v1/browse?root=audiobooks&path=100%25%20Complete",
+			path:   "100% Complete",
+		},
+		{
+			name:   "percent escape text",
+			target: "/v1/browse?root=audiobooks&path=%2520",
+			path:   "%20",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := serveRequest(api, test.target)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+			var directory library.Directory
+			if err := json.Unmarshal(response.Body.Bytes(), &directory); err != nil {
+				t.Fatal(err)
+			}
+			if directory.Path != test.path {
+				t.Fatalf("path = %q, want %q", directory.Path, test.path)
+			}
+		})
+	}
+}
+
 func TestBrowseMapsExpectedFailuresToSafeJSONErrors(t *testing.T) {
 	root := t.TempDir()
 	filePath := filepath.Join(root, "chapter.mp3")
@@ -93,7 +136,14 @@ func TestBrowseMapsExpectedFailuresToSafeJSONErrors(t *testing.T) {
 		},
 		{
 			name:    "encoded traversal",
-			target:  "/v1/browse?root=audiobooks&path=%252e%252e%2Fsecret",
+			target:  "/v1/browse?root=audiobooks&path=%2e%2e%2Fsecret",
+			status:  http.StatusBadRequest,
+			code:    "invalid_path",
+			message: "path must stay within the selected root",
+		},
+		{
+			name:    "malformed encoding",
+			target:  "/v1/browse?root=audiobooks&path=%zz",
 			status:  http.StatusBadRequest,
 			code:    "invalid_path",
 			message: "path must stay within the selected root",

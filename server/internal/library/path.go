@@ -3,7 +3,6 @@ package library
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -50,11 +49,10 @@ func (r *Resolver) Resolve(rootID, relative string) (ResolvedPath, error) {
 		return ResolvedPath{}, ErrUnknownRoot
 	}
 
-	decoded, err := url.PathUnescape(relative)
-	if err != nil || isAbsoluteOrForeignPath(decoded) {
+	if isAbsoluteOrForeignPath(relative) {
 		return ResolvedPath{}, ErrPathEscape
 	}
-	clean := filepath.Clean(filepath.FromSlash(decoded))
+	clean := filepath.Clean(filepath.FromSlash(relative))
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return ResolvedPath{}, ErrPathEscape
 	}
