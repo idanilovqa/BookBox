@@ -31,8 +31,11 @@ const (
 	JobSucceeded = "succeeded"
 	JobDead      = "dead"
 
-	BookSortTitle         = "title"
-	BookSortRecentlyAdded = "recently_added"
+	BookSortTitle           = "title"
+	BookSortAuthor          = "author"
+	BookSortYear            = "year"
+	BookSortRecentlyAdded   = "recently_added"
+	BookSortRecentlyScanned = "recently_scanned"
 )
 
 type LibraryRoot struct {

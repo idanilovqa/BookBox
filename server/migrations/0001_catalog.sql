@@ -220,7 +220,9 @@ create function catalog_book_search_document(
     authors text[],
     series text,
     narrators text[],
-    genres text[]
+    genres text[],
+    source_folder text,
+    publication_year integer
 )
 returns tsvector
 language sql
@@ -232,11 +234,21 @@ as $$
         array_to_string(authors, ' ') || ' ' ||
         coalesce(series, '') || ' ' ||
         array_to_string(narrators, ' ') || ' ' ||
-        array_to_string(genres, ' ')
+        array_to_string(genres, ' ') || ' ' ||
+        coalesce(source_folder, '') || ' ' ||
+        coalesce(publication_year::text, '')
     )
 $$;
 create index books_search on books using gin (
-    catalog_book_search_document(title, authors, series, narrators, genres)
+    catalog_book_search_document(
+        title,
+        authors,
+        series,
+        narrators,
+        genres,
+        source_folder,
+        publication_year
+    )
 );
 create index worker_jobs_claim
     on worker_jobs(run_after, created_at, id)
