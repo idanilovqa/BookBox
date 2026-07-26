@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -31,11 +34,21 @@ type Auth struct {
 	SessionKeyFile   string `yaml:"session_key_file"`
 }
 
+type Database struct {
+	Host         string `yaml:"host"`
+	Port         uint16 `yaml:"port"`
+	Name         string `yaml:"name"`
+	Username     string `yaml:"username"`
+	PasswordFile string `yaml:"password_file"`
+	SSLMode      string `yaml:"ssl_mode"`
+}
+
 type Config struct {
-	Listen string `yaml:"listen"`
-	Roots  []Root `yaml:"roots"`
-	TLS    TLS    `yaml:"tls"`
-	Auth   Auth   `yaml:"auth"`
+	Listen   string   `yaml:"listen"`
+	Roots    []Root   `yaml:"roots"`
+	TLS      TLS      `yaml:"tls"`
+	Auth     Auth     `yaml:"auth"`
+	Database Database `yaml:"database"`
 }
 
 type Secrets struct {
@@ -52,6 +65,7 @@ var (
 )
 
 var safeRootID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+var safeDatabaseName = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 func Load(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
@@ -102,8 +116,74 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("root %q path must be absolute", root.ID)
 		}
 	}
+	if err := validateDatabase(cfg.Database); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
+}
+
+func (database Database) Enabled() bool {
+	return database.Host != "" || database.Port != 0 || database.Name != "" ||
+		database.Username != "" || database.PasswordFile != "" || database.SSLMode != ""
+}
+
+func LoadDatabaseDSN(database Database) (string, error) {
+	if err := validateDatabase(database); err != nil {
+		return "", err
+	}
+	if !database.Enabled() {
+		return "", nil
+	}
+	passwordBytes, err := readSecretFile(database.PasswordFile)
+	if err != nil {
+		return "", fmt.Errorf("read database password: %w", err)
+	}
+	password := string(passwordBytes)
+	if strings.HasSuffix(password, "\r\n") {
+		password = strings.TrimSuffix(password, "\r\n")
+	} else if strings.HasSuffix(password, "\n") {
+		password = strings.TrimSuffix(password, "\n")
+	}
+	if password == "" {
+		return "", ErrEmptySecret
+	}
+	if strings.ContainsAny(password, "\r\n") {
+		return "", fmt.Errorf("%w: database password contains a line break", ErrInvalidSecretFile)
+	}
+	connection := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(database.Username, password),
+		Host:   net.JoinHostPort(database.Host, strconv.Itoa(int(database.Port))),
+		Path:   "/" + database.Name,
+	}
+	query := connection.Query()
+	query.Set("sslmode", database.SSLMode)
+	connection.RawQuery = query.Encode()
+	return connection.String(), nil
+}
+
+func validateDatabase(database Database) error {
+	if !database.Enabled() {
+		return nil
+	}
+	if strings.TrimSpace(database.Host) == "" || database.Port == 0 ||
+		!safeDatabaseName.MatchString(database.Name) ||
+		!safeDatabaseName.MatchString(database.Username) ||
+		!filepath.IsAbs(database.PasswordFile) {
+		return errors.New("database host, port, name, username, and absolute password_file are required")
+	}
+	switch database.SSLMode {
+	case "disable", "require", "verify-ca", "verify-full":
+	default:
+		return errors.New("database ssl_mode is invalid")
+	}
+	for _, character := range database.Host {
+		if character == '/' || character == '\\' || character <= 0x20 || character == 0x7f {
+			return errors.New("database host is invalid")
+		}
+	}
+	return nil
 }
 
 func LoadSecrets(authConfig Auth) (Secrets, error) {

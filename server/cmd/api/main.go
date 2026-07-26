@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -11,8 +12,12 @@ import (
 	"os"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"netstorage.local/server/internal/auth"
+	"netstorage.local/server/internal/catalog"
 	"netstorage.local/server/internal/config"
+	"netstorage.local/server/internal/database"
 	"netstorage.local/server/internal/httpapi"
 	"netstorage.local/server/internal/library"
 	"netstorage.local/server/internal/tlsidentity"
@@ -53,6 +58,13 @@ func runWith(args []string, serve serveTLSFunc, output io.Writer, logger *slog.L
 	if _, err := auth.VerifyPassword(secrets.PasswordHash, ""); err != nil {
 		return err
 	}
+	databasePool, err := openCatalogDatabase(context.Background(), cfg)
+	if err != nil {
+		return err
+	}
+	if databasePool != nil {
+		defer databasePool.Close()
+	}
 	identity, err := tlsidentity.Ensure(cfg.TLS.CertPath, cfg.TLS.KeyPath, cfg.TLS.Hosts)
 	if err != nil {
 		return err
@@ -78,6 +90,42 @@ func runWith(args []string, serve serveTLSFunc, output io.Writer, logger *slog.L
 		return err
 	}
 	return serve(server, cfg.TLS.CertPath, cfg.TLS.KeyPath)
+}
+
+func openCatalogDatabase(ctx context.Context, cfg config.Config) (*pgxpool.Pool, error) {
+	dsn, err := config.LoadDatabaseDSN(cfg.Database)
+	if err != nil {
+		return nil, err
+	}
+	if dsn == "" {
+		return nil, nil
+	}
+	connectContext, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(connectContext, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("configure catalog database: %w", err)
+	}
+	if err := pool.Ping(connectContext); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("connect to catalog database: %w", err)
+	}
+	if err := database.Migrate(connectContext, pool); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("migrate catalog database: %w", err)
+	}
+	roots := make([]catalog.LibraryRoot, 0, len(cfg.Roots))
+	for _, root := range cfg.Roots {
+		roots = append(roots, catalog.LibraryRoot{
+			ID:          root.ID,
+			DisplayName: root.Name,
+		})
+	}
+	if err := catalog.NewPostgresRepository(pool).SyncRoots(connectContext, roots); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("sync catalog roots: %w", err)
+	}
+	return pool, nil
 }
 
 func buildHandler(

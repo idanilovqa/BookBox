@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 
 	"netstorage.local/server/internal/auth"
 	"netstorage.local/server/internal/config"
+	"netstorage.local/server/internal/testpostgres"
 )
 
 func TestRunLoadsSecretsCreatesIdentityAndServesMandatoryTLS(t *testing.T) {
@@ -197,6 +199,47 @@ func TestBuildHandlerWiresAuthenticatedConfiguredRootsAndBrowser(t *testing.T) {
 			manifestResponse.Code,
 			manifestResponse.Body.String(),
 		)
+	}
+}
+
+func TestOpenCatalogDatabaseMigratesAndSyncsConfiguredRoots(t *testing.T) {
+	adminPool := testpostgres.Open(t)
+	connection := adminPool.Config().ConnConfig
+	passwordPath := filepath.Join(t.TempDir(), "database_password")
+	if err := os.WriteFile(passwordPath, []byte(connection.Password), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := openCatalogDatabase(context.Background(), config.Config{
+		Roots: []config.Root{{
+			ID:   "audiobooks",
+			Name: "Audiobooks",
+		}},
+		Database: config.Database{
+			Host:         connection.Host,
+			Port:         connection.Port,
+			Name:         connection.Database,
+			Username:     connection.User,
+			PasswordFile: passwordPath,
+			SSLMode:      "disable",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pool == nil {
+		t.Fatal("openCatalogDatabase() returned a nil pool for configured PostgreSQL")
+	}
+	defer pool.Close()
+
+	var tableExists, rootExists bool
+	if err := pool.QueryRow(context.Background(), `
+		select to_regclass('public.books') is not null,
+		       exists(select 1 from library_roots where id='audiobooks')
+	`).Scan(&tableExists, &rootExists); err != nil {
+		t.Fatal(err)
+	}
+	if !tableExists || !rootExists {
+		t.Fatalf("startup migration table=%v root=%v", tableExists, rootExists)
 	}
 }
 

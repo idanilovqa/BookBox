@@ -235,6 +235,40 @@ func TestLoadSecretsRejectsInsecureNonRegularAndWrongLengthFiles(t *testing.T) {
 	}
 }
 
+func TestLoadDatabaseDSNReadsPasswordOnlyFromProtectedFile(t *testing.T) {
+	directory := t.TempDir()
+	passwordPath := filepath.Join(directory, "database_password")
+	writeSecret(t, passwordPath, []byte("p@ss word\n"), 0o600)
+
+	dsn, err := LoadDatabaseDSN(Database{
+		Host:         "postgres",
+		Port:         5432,
+		Name:         "netstorage",
+		Username:     "netstorage",
+		PasswordFile: passwordPath,
+		SSLMode:      "disable",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(dsn, "netstorage:p%40ss%20word@postgres:5432/netstorage") {
+		t.Fatalf("database DSN does not contain escaped file secret: %q", dsn)
+	}
+
+	secret := "must-not-appear"
+	writeSecret(t, passwordPath, []byte(secret+"\nextra"), 0o600)
+	if _, err := LoadDatabaseDSN(Database{
+		Host:         "postgres",
+		Port:         5432,
+		Name:         "netstorage",
+		Username:     "netstorage",
+		PasswordFile: passwordPath,
+		SSLMode:      "disable",
+	}); err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("LoadDatabaseDSN() error = %v; want redacted invalid secret error", err)
+	}
+}
+
 func writeConfig(t *testing.T, contents string) string {
 	t.Helper()
 	if !strings.Contains(contents, "\ntls:") {
