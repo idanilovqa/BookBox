@@ -1,0 +1,24 @@
+# Deny the complete repository, then allow only API build inputs.
+**
+!server/
+!server/**
+!deploy/
+!deploy/Dockerfile.api
+!deploy/entrypoint-api.sh
+
+# Explicit permanent guards for sensitive or heavyweight paths.
+.git
+.git/**
+.worktrees
+.worktrees/**
+deploy/.env
+deploy/config.yml
+deploy/secrets/*
+**/.gradle
+**/build
+**/dist
+**/*.apk
+**/*.aab
+**/*.jar
+**/*.log
+**/coverage*

@@ -11,5 +11,5 @@ tls:
     - 127.0.0.1
 auth:
   username: owner
-  password_hash_file: /run/secrets/app_password_hash
-  session_key_file: /run/secrets/session_key
+  password_hash_file: /run/netstorage-secrets/app_password_hash
+  session_key_file: /run/netstorage-secrets/session_key
