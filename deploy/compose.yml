@@ -1,0 +1,189 @@
+name: netstorage-prod
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: netstorage
+      POSTGRES_USER: netstorage
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - type: volume
+        source: postgres_data
+        target: /var/lib/postgresql
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netstorage -d netstorage"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  netstorage-api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    restart: unless-stopped
+    init: true
+    user: "10001:10001"
+    ports:
+      - name: https
+        target: 8443
+        published: "${HOST_PORT:-8443}"
+        host_ip: "${NETSTORAGE_BIND_ADDRESS:-127.0.0.1}"
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: "${NETSTORAGE_LIBRARY_PATH:?Set NETSTORAGE_LIBRARY_PATH in deploy/.env}"
+        target: /library/audiobooks
+        read_only: true
+      - type: bind
+        source: "${NETSTORAGE_CONFIG_HOST_FILE:?Set NETSTORAGE_CONFIG_HOST_FILE in deploy/.env}"
+        target: /etc/netstorage/config.yml
+        read_only: true
+      - type: volume
+        source: tls_data
+        target: /var/lib/netstorage
+    secrets:
+      - postgres_password
+      - source: app_password_hash
+        target: app_password_hash.source
+      - source: session_key
+        target: session_key.source
+    networks:
+      - backend
+      - outbound
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,mode=1777
+      - /run/netstorage-secrets:rw,nosuid,nodev,noexec,mode=0700,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-qO-", "https://localhost:8443/v1/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 768M
+        reservations:
+          cpus: "0.20"
+          memory: 192M
+
+  netstorage-catalog-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.worker
+    restart: unless-stopped
+    init: true
+    user: "10001:10001"
+    volumes:
+      # Explicitly approved risk: Docker grants this worker mount-level write
+      # access to the whole library. The worker code limits writes to validated
+      # cover.jpg/folder.jpg/front.jpg variants, but the mount itself cannot
+      # enforce filename-only permissions.
+      - type: bind
+        source: "${NETSTORAGE_LIBRARY_PATH:?Set NETSTORAGE_LIBRARY_PATH in deploy/.env}"
+        target: /library/audiobooks
+      - type: bind
+        source: "${NETSTORAGE_CONFIG_HOST_FILE:?Set NETSTORAGE_CONFIG_HOST_FILE in deploy/.env}"
+        target: /etc/netstorage/config.yml
+        read_only: true
+      - type: volume
+        source: cover_cache
+        target: /var/lib/netstorage/covers
+      - type: volume
+        source: cover_backups
+        target: /var/lib/netstorage/backups
+    secrets:
+      - postgres_password
+      - source: google_books_key
+        target: google_books_key
+    environment:
+      NETSTORAGE_COVER_BACKUP_ROOT: /var/lib/netstorage/backups
+      NETSTORAGE_GOOGLE_BOOKS_API_KEY_FILE: /run/secrets/google_books_key
+    networks:
+      - backend
+      - outbound
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,mode=1777
+      - /run/netstorage-secrets:rw,nosuid,nodev,noexec,mode=0700,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "for process in /proc/[0-9]*; do [ \"$(readlink \"$$process/exe\")\" = /usr/local/bin/netstorage-catalog-worker ] && exit 0; done; exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+secrets:
+  postgres_password:
+    file: "${NETSTORAGE_POSTGRES_PASSWORD_HOST_FILE:?Set NETSTORAGE_POSTGRES_PASSWORD_HOST_FILE in deploy/.env}"
+  app_password_hash:
+    file: "${NETSTORAGE_PASSWORD_HASH_HOST_FILE:?Set NETSTORAGE_PASSWORD_HASH_HOST_FILE in deploy/.env}"
+  session_key:
+    file: "${NETSTORAGE_SESSION_KEY_HOST_FILE:?Set NETSTORAGE_SESSION_KEY_HOST_FILE in deploy/.env}"
+  google_books_key:
+    file: "${NETSTORAGE_GOOGLE_BOOKS_KEY_HOST_FILE:-./secrets/google_books_key.txt}"
+
+volumes:
+  postgres_data:
+  tls_data:
+  cover_cache:
+  cover_backups:
+
+networks:
+  backend:
+    internal: true
+  outbound:

@@ -1,0 +1,129 @@
+# Integration Task 2 adds the deterministic provider-fixtures service. These
+# URLs are declared now so the worker cannot fall back to live providers during
+# an isolated test run once that fixture service is composed.
+services:
+  postgres:
+    volumes:
+      - type: volume
+        source: test_postgres_data
+        target: /var/lib/postgresql
+
+  netstorage-api:
+    # Android reaches the API only through the task-scoped Toxiproxy service.
+    # The API itself has no published host port in the isolated topology.
+    ports: !reset []
+    volumes:
+      - type: bind
+        source: "${NETSTORAGE_TEST_LIBRARY_PATH:?Set a task-scoped NETSTORAGE_TEST_LIBRARY_PATH}"
+        target: /library/audiobooks
+        read_only: true
+      - type: bind
+        source: "${NETSTORAGE_TEST_CONFIG_HOST_FILE:?Set NETSTORAGE_TEST_CONFIG_HOST_FILE}"
+        target: /etc/netstorage/config.yml
+        read_only: true
+      - type: volume
+        source: test_tls_data
+        target: /var/lib/netstorage
+
+  netstorage-catalog-worker:
+    environment:
+      NETSTORAGE_SCAN_INTERVAL: 5s
+      NETSTORAGE_OPENLIBRARY_BASE_URL: "${NETSTORAGE_TEST_OPENLIBRARY_URL:-http://provider-fixtures:8080/openlibrary}"
+      NETSTORAGE_GOOGLE_BOOKS_BASE_URL: "${NETSTORAGE_TEST_GOOGLE_BOOKS_URL:-http://provider-fixtures:8080/googlebooks}"
+    volumes:
+      # The caller must supply a disposable copy. Never point this at H:.
+      - type: bind
+        source: "${NETSTORAGE_TEST_LIBRARY_PATH:?Set a task-scoped NETSTORAGE_TEST_LIBRARY_PATH}"
+        target: /library/audiobooks
+      - type: bind
+        source: "${NETSTORAGE_TEST_CONFIG_HOST_FILE:?Set NETSTORAGE_TEST_CONFIG_HOST_FILE}"
+        target: /etc/netstorage/config.yml
+        read_only: true
+      - type: volume
+        source: test_cover_cache
+        target: /var/lib/netstorage/covers
+      - type: volume
+        source: test_cover_backups
+        target: /var/lib/netstorage/backups
+    depends_on:
+      provider-fixtures:
+        condition: service_healthy
+
+  provider-fixtures:
+    image: nginx:1.29-alpine
+    init: true
+    user: "101:101"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /var/cache/nginx:rw,nosuid,nodev,noexec,mode=0755,uid=101,gid=101
+      - /var/run:rw,nosuid,nodev,noexec,mode=0755,uid=101,gid=101
+      - /tmp:rw,nosuid,nodev,noexec,mode=1777
+    volumes:
+      - type: bind
+        source: ../e2e/provider-fixtures
+        target: /fixtures
+        read_only: true
+      - type: bind
+        source: ../e2e/provider-fixtures/nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+    networks:
+      - outbound
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -qO-
+        - http://127.0.0.1:8080/openlibrary/search.json
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 2s
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    init: true
+    user: "65532:65532"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,mode=1777
+    ports:
+      - name: proxied-https
+        target: 18443
+        published: "18443"
+        host_ip: 127.0.0.1
+        protocol: tcp
+      - name: control
+        target: 8474
+        published: "18474"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    networks:
+      - outbound
+    depends_on:
+      netstorage-api:
+        condition: service_healthy
+
+secrets:
+  postgres_password:
+    file: "${NETSTORAGE_TEST_POSTGRES_PASSWORD_HOST_FILE:?Set test PostgreSQL secret}"
+  app_password_hash:
+    file: "${NETSTORAGE_TEST_PASSWORD_HASH_HOST_FILE:?Set test app-password hash}"
+  session_key:
+    file: "${NETSTORAGE_TEST_SESSION_KEY_HOST_FILE:?Set test session key}"
+  google_books_key:
+    file: "${NETSTORAGE_TEST_GOOGLE_BOOKS_KEY_HOST_FILE:?Set test Google key file}"
+
+volumes:
+  test_postgres_data:
+  test_tls_data:
+  test_cover_cache:
+  test_cover_backups:

@@ -1,0 +1,60 @@
+services:
+  postgres:
+    volumes:
+      - type: volume
+        source: recovery_postgres_data
+        target: /var/lib/postgresql
+
+  netstorage-api:
+    ports: !override
+      - name: recovery-https
+        target: 8443
+        published: "18443"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: "${NETSTORAGE_RECOVERY_LIBRARY_PATH:?Set a task-scoped recovery library}"
+        target: /library/audiobooks
+        read_only: true
+      - type: bind
+        source: "${NETSTORAGE_RECOVERY_CONFIG_HOST_FILE:?Set the task-scoped recovery config}"
+        target: /etc/netstorage/config.yml
+        read_only: true
+      - type: volume
+        source: recovery_tls_data
+        target: /var/lib/netstorage
+
+  netstorage-catalog-worker:
+    environment:
+      NETSTORAGE_SCAN_INTERVAL: 5s
+    volumes:
+      - type: bind
+        source: "${NETSTORAGE_RECOVERY_LIBRARY_PATH:?Set a task-scoped recovery library}"
+        target: /library/audiobooks
+      - type: bind
+        source: "${NETSTORAGE_RECOVERY_CONFIG_HOST_FILE:?Set the task-scoped recovery config}"
+        target: /etc/netstorage/config.yml
+        read_only: true
+      - type: volume
+        source: recovery_cover_cache
+        target: /var/lib/netstorage/covers
+      - type: volume
+        source: recovery_cover_backups
+        target: /var/lib/netstorage/backups
+
+secrets:
+  postgres_password:
+    file: "${NETSTORAGE_RECOVERY_POSTGRES_PASSWORD_HOST_FILE:?Set recovery PostgreSQL secret}"
+  app_password_hash:
+    file: "${NETSTORAGE_RECOVERY_PASSWORD_HASH_HOST_FILE:?Set recovery app-password hash}"
+  session_key:
+    file: "${NETSTORAGE_RECOVERY_SESSION_KEY_HOST_FILE:?Set recovery session key}"
+  google_books_key:
+    file: "${NETSTORAGE_RECOVERY_GOOGLE_BOOKS_KEY_HOST_FILE:?Set recovery Google key file}"
+
+volumes:
+  recovery_postgres_data:
+  recovery_tls_data:
+  recovery_cover_cache:
+  recovery_cover_backups:

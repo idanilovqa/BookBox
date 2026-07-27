@@ -1,0 +1,22 @@
+listen: ":8443"
+roots:
+  - id: audiobooks
+    name: Audiobooks
+    container_path: /library/audiobooks
+tls:
+  cert_path: /var/lib/netstorage/tls/server.crt
+  key_path: /var/lib/netstorage/tls/server.key
+  hosts:
+    - localhost
+    - 127.0.0.1
+auth:
+  username: owner
+  password_hash_file: /run/netstorage-secrets/app_password_hash
+  session_key_file: /run/netstorage-secrets/session_key
+database:
+  host: postgres
+  port: 5432
+  name: netstorage
+  username: netstorage
+  password_file: /run/netstorage-secrets/postgres_password
+  ssl_mode: disable
