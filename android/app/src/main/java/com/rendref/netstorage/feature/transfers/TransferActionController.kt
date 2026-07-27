@@ -1,6 +1,7 @@
 package com.rendref.netstorage.feature.transfers
 
 import com.rendref.netstorage.core.transfer.FileState
+import com.rendref.netstorage.core.transfer.ConflictChoice
 import com.rendref.netstorage.core.transfer.TransferCommand
 import com.rendref.netstorage.core.transfer.TransferCommandHandler
 import com.rendref.netstorage.core.transfer.TransferDestination
@@ -84,6 +85,80 @@ class TransferActionController(
         return TransferActionResult.Accepted
     }
 
+    fun chooseConflict(
+        transferId: String,
+        choice: ConflictChoice,
+    ): TransferActionResult = try {
+        chooseConflictSafely(transferId, choice)
+    } catch (failure: ConflictRecoveryException) {
+        throw failure
+    } catch (_: Exception) {
+        TransferActionResult.Rejected
+    }
+
+    private fun chooseConflictSafely(
+        transferId: String,
+        choice: ConflictChoice,
+    ): TransferActionResult {
+        var previous: TransferRecord? = null
+        val pending = journal.update(transferId) { record ->
+            if (
+                record.state != TransferState.WaitingForConflict ||
+                record.files.none { it.state == FileState.WaitingForConflict }
+            ) {
+                return@update record
+            }
+            previous = record
+            record.copy(
+                state = TransferState.Pending,
+                files = record.files.map { file ->
+                    if (file.state == FileState.WaitingForConflict) {
+                        file.copy(
+                            state = FileState.Pending,
+                            conflictChoice = choice,
+                            existingBytes = null,
+                        )
+                    } else {
+                        file
+                    }
+                },
+            )
+        }
+        val waiting = previous
+            ?: return TransferActionResult.Rejected
+        val scheduleResult = runCatching {
+            scheduler.scheduleFromVisibleAction(pending)
+        }.getOrElse {
+            return recoverConflict(transferId, pending, waiting)
+        }
+        return if (scheduleResult == TransferScheduleResult.Scheduled) {
+            TransferActionResult.Accepted
+        } else {
+            recoverConflict(transferId, pending, waiting)
+        }
+    }
+
+    private fun recoverConflict(
+        transferId: String,
+        pending: TransferRecord,
+        waiting: TransferRecord,
+    ): TransferActionResult {
+        try {
+            journal.update(transferId) { current ->
+                if (current == pending) waiting else current
+            }
+            return TransferActionResult.Rejected
+        } catch (rollbackFailure: Exception) {
+            val rescue = runCatching {
+                scheduler.scheduleFromVisibleAction(pending)
+            }.getOrDefault(TransferScheduleResult.Failure)
+            if (rescue == TransferScheduleResult.Scheduled) {
+                return TransferActionResult.Accepted
+            }
+            throw ConflictRecoveryException(rollbackFailure)
+        }
+    }
+
     private suspend fun discardPartial(
         transferId: String,
     ): TransferActionResult {
@@ -124,3 +199,10 @@ class TransferActionController(
         return TransferActionResult.Accepted
     }
 }
+
+private class ConflictRecoveryException(
+    cause: Throwable,
+) : IllegalStateException(
+    "Conflict scheduling and journal rollback both failed",
+    cause,
+)

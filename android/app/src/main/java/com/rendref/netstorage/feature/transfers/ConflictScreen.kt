@@ -16,7 +16,7 @@ import com.rendref.netstorage.core.transfer.ConflictChoice
 
 data class ConflictState(
     val destinationPath: String,
-    val existingBytes: Long,
+    val existingBytes: Long?,
     val incomingBytes: Long,
 )
 
@@ -34,7 +34,8 @@ fun ConflictScreen(
         Text(state.destinationPath, style = MaterialTheme.typography.bodyLarge)
         Text(
             "The Android file differs from the selected copy " +
-                "(${state.existingBytes} B existing, ${state.incomingBytes} B incoming).",
+                "(${state.existingBytes?.let { "$it B" } ?: "unknown size"} existing, " +
+                "${state.incomingBytes} B incoming).",
         )
         Text(
             "Replace removes only this Android copy. The Windows source is never changed.",

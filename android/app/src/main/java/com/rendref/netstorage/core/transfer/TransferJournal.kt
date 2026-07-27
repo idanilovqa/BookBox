@@ -28,6 +28,7 @@ data class FileProgress(
     val bytesWritten: Long,
     val state: FileState,
     val conflictChoice: ConflictChoice? = null,
+    val existingBytes: Long? = null,
 )
 
 @Serializable

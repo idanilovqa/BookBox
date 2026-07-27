@@ -6,11 +6,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -28,6 +31,15 @@ class SettingsScreenTest {
                 SettingsScreen(state, onAction = actions::add)
             }
         }
+        fun scrollToDisplayed(text: String) {
+            composeRule.onNode(hasScrollToIndexAction())
+                .performScrollToNode(hasText(text))
+            val node = composeRule.onNodeWithText(text)
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                node.isDisplayed()
+            }
+            node.assertIsDisplayed()
+        }
 
         listOf(
             "Settings",
@@ -44,17 +56,22 @@ class SettingsScreenTest {
             "Sign out",
             "Change server",
         ).forEach {
-            composeRule.onNodeWithText(it).performScrollTo().assertIsDisplayed()
+            scrollToDisplayed(it)
         }
         listOf(FINGERPRINT, "content://", "H:/", "password", "token").forEach {
             composeRule.onAllNodesWithText(it, substring = true)
                 .assertCountEquals(0)
         }
 
-        composeRule.onNodeWithText("Copy full fingerprint").performScrollTo().performClick()
-        composeRule.onNodeWithText("Rescan").performScrollTo().performClick()
-        composeRule.onNodeWithText("Choose destination").performScrollTo().performClick()
-        composeRule.onNodeWithText("Sign out").performScrollTo().performClick()
+        listOf(
+            "Copy full fingerprint",
+            "Rescan",
+            "Choose destination",
+            "Sign out",
+        ).forEach { label ->
+            scrollToDisplayed(label)
+            composeRule.onNodeWithText(label).performClick()
+        }
         assertEquals(
             listOf(
                 SettingsAction.CopyFingerprint,
@@ -65,7 +82,8 @@ class SettingsScreenTest {
             actions,
         )
 
-        composeRule.onNodeWithText("Change server").performScrollTo().performClick()
+        scrollToDisplayed("Change server")
+        composeRule.onNodeWithText("Change server").performClick()
         assertEquals(SettingsAction.RequestServerChange, actions.last())
         composeRule.runOnIdle {
             state = state.copy(confirmServerChange = true)

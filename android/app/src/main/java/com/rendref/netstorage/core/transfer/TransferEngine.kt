@@ -209,7 +209,10 @@ class TransferEngine(
                     )
                     return TransferResult.Completed
                 }
-                progress = progress.copy(state = FileState.WaitingForConflict)
+                progress = progress.copy(
+                    state = FileState.WaitingForConflict,
+                    existingBytes = existing.size,
+                )
                 record = record.withFile(index, progress).copy(
                     state = TransferState.WaitingForConflict,
                 )

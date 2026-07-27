@@ -8,12 +8,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import com.rendref.netstorage.core.model.BookCardDto
 import com.rendref.netstorage.core.model.BookDetailDto
@@ -48,6 +54,7 @@ import com.rendref.netstorage.feature.transfers.TransfersScreen
 import com.rendref.netstorage.feature.transfers.TransfersState
 import com.rendref.netstorage.core.transfer.ConflictChoice
 import com.rendref.netstorage.core.transfer.TransferState
+import androidx.test.espresso.Espresso.closeSoftKeyboard
 import org.junit.Rule
 import org.junit.Test
 
@@ -79,18 +86,24 @@ class AppShellJourneyTest {
         compose.onNodeWithText("Audiobooks").assertIsDisplayed()
         compose.onNode(hasSetTextAction() and androidx.compose.ui.test.hasText("Search audiobooks"))
             .performTextInput("Dune")
-        compose.onNodeWithContentDescription("Select Dune").performClick()
-        compose.onNodeWithText("Copy 1 selected").assertIsDisplayed()
-
-        compose.onNodeWithText("View raw files").performClick()
-        compose.onNodeWithText("RAW FOLDERS").assertIsDisplayed()
-        compose.onNodeWithText("Dune.m4b").assertIsDisplayed()
+        closeSoftKeyboard()
+        compose.onNodeWithText("View raw files")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        compose.onAllNodesWithText("RAW FOLDERS").assertCountEquals(1)
+        compose.onAllNodesWithText("Dune.m4b").assertCountEquals(1)
         compose.onNodeWithText("Return to audiobook").performClick()
         compose.onNodeWithText("Choose metadata match").performClick()
         compose.onNodeWithText("Choose metadata match").assertIsDisplayed()
         compose.onNodeWithText("Search providers").performClick()
 
         compose.onNodeWithText("Audiobooks").performClick()
+        compose.onNodeWithContentDescription("Select Dune")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        compose.onNodeWithText("Copy 1 selected").assertIsDisplayed()
         compose.onNodeWithText("Copy 1 selected").performClick()
         compose.onNodeWithText("Copy to Android").assertIsDisplayed()
         compose.onNodeWithText("Choose Android folder").performClick()
@@ -99,13 +112,17 @@ class AppShellJourneyTest {
 
         compose.onNodeWithText("File already exists").assertIsDisplayed()
         compose.onNodeWithText("Keep both").performClick()
-        compose.onNodeWithText("Transfers").assertIsDisplayed()
         compose.onNodeWithText("Dune").assertIsDisplayed()
-        compose.onNodeWithText("512 B / 1.0 KB").assertIsDisplayed()
+        compose.onNodeWithText(
+            "512 B of 1.0 KB",
+            substring = true,
+        ).assertIsDisplayed()
 
         compose.onNodeWithText("Settings").performClick()
         compose.onNodeWithText("Saved server").assertIsDisplayed()
         compose.onNodeWithText("Android destination").assertIsDisplayed()
+        compose.onNode(hasScrollToIndexAction())
+            .performScrollToNode(hasText("Sign out"))
         compose.onNodeWithText("Sign out").performClick()
         compose.onNodeWithText("Approved server: https://192.168.1.25:8443/")
             .assertIsDisplayed()

@@ -9,9 +9,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.StateRestorationTester
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.test.espresso.Espresso.pressBack
 import androidx.test.platform.app.InstrumentationRegistry
@@ -119,7 +122,12 @@ class ConnectedAppWiringTest {
         restoration.emulateSaveAndRestore()
         onNodeWithText("Choose metadata match").assertIsDisplayed()
         pressBack()
-        onNodeWithText("AUDIOBOOKS").assertIsDisplayed()
+        waitUntil(timeoutMillis = 5_000) {
+            onAllNodes(
+                androidx.compose.ui.test.hasText("AUDIOBOOK CATALOG"),
+            ).fetchSemanticsNodes().isNotEmpty()
+        }
+        onNodeWithText("AUDIOBOOK CATALOG").assertIsDisplayed()
 
         onNodeWithContentDescription("Select Server A Dune").performClick()
         onNodeWithText("Copy 1 selected").performClick()
@@ -146,6 +154,8 @@ class ConnectedAppWiringTest {
                 androidx.compose.ui.test.hasText("Saved server"),
             ).fetchSemanticsNodes().isNotEmpty()
         }
+        onNode(hasScrollToIndexAction())
+            .performScrollToNode(hasText("Sign out"))
         onNodeWithText("Sign out").performClick()
         waitUntil(timeoutMillis = 5_000) { signedOut.get() && reset.get() }
         assertTrue(signedOut.get())
@@ -173,6 +183,11 @@ class ConnectedAppWiringTest {
                 )
             }
         }
+        waitUntil(timeoutMillis = 5_000) {
+            onAllNodes(
+                androidx.compose.ui.test.hasText("Server A Dune"),
+            ).fetchSemanticsNodes().isNotEmpty()
+        }
         onNodeWithText("Server A Dune").assertIsDisplayed()
 
         runOnUiThread {
@@ -183,6 +198,11 @@ class ConnectedAppWiringTest {
                 AtomicReference(),
                 AtomicBoolean(),
             )
+        }
+        waitUntil(timeoutMillis = 5_000) {
+            onAllNodes(
+                androidx.compose.ui.test.hasText("Server B Foundation"),
+            ).fetchSemanticsNodes().isNotEmpty()
         }
         onNodeWithText("Server B Foundation").assertIsDisplayed()
         onNodeWithText("Server A Dune").assertDoesNotExist()

@@ -86,4 +86,25 @@ class TransferScreensTest {
             assertEquals(expected, choices.last())
         }
     }
+
+    @Test
+    fun conflictShowsUnknownSizeForLegacyJournalEntries() {
+        composeRule.setContent {
+            MaterialTheme {
+                ConflictScreen(
+                    state = ConflictState(
+                        destinationPath = "Dune/Dune.m4b",
+                        existingBytes = null,
+                        incomingBytes = 12,
+                    ),
+                    onChoice = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText(
+            "The Android file differs from the selected copy " +
+                "(unknown size existing, 12 B incoming).",
+        ).assertIsDisplayed()
+    }
 }

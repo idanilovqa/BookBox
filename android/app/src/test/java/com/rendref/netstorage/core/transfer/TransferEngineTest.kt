@@ -386,6 +386,11 @@ class TransferEngineTest {
             val conflict = engine.run("transfer-1", null) {}
 
             assertTrue(conflict is TransferResult.Conflict)
+            assertEquals(10L, (conflict as TransferResult.Conflict).existingBytes)
+            assertEquals(
+                10L,
+                journal.read("transfer-1")!!.files.single().existingBytes,
+            )
             assertEquals(emptyList<String>(), destination.deletedDocumentIds)
             assertEquals(0, server.requestCount)
 

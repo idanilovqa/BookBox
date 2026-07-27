@@ -3,20 +3,25 @@ package com.rendref.netstorage.feature.transfers
 import com.rendref.netstorage.core.model.ManifestDto
 import com.rendref.netstorage.core.model.ManifestFileDto
 import com.rendref.netstorage.core.transfer.DestinationDocument
+import com.rendref.netstorage.core.transfer.ConflictChoice
 import com.rendref.netstorage.core.transfer.FileProgress
 import com.rendref.netstorage.core.transfer.FileState
+import com.rendref.netstorage.core.transfer.JournalTemporaryWriter
 import com.rendref.netstorage.core.transfer.PlatformScheduleResult
 import com.rendref.netstorage.core.transfer.TransferDestination
 import com.rendref.netstorage.core.transfer.TransferJournal
 import com.rendref.netstorage.core.transfer.TransferRecord
 import com.rendref.netstorage.core.transfer.TransferScheduler
 import com.rendref.netstorage.core.transfer.TransferState
+import java.io.FileOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.UUID
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -95,6 +100,157 @@ class TransferActionControllerTest {
             assertEquals(TransferActionResult.Rejected, result)
             assertEquals(TransferState.Paused, journal.read(record.id)?.state)
         }
+
+    @Test
+    fun `conflict choice restores complete waiting journal when Android rejects scheduling`() {
+        val journal = TransferJournal(temporary.newFolder("conflict-schedule"))
+        val record = actionRecord(state = TransferState.WaitingForConflict).let {
+            it.copy(
+                files = it.files.map { file ->
+                    file.copy(
+                        state = FileState.WaitingForConflict,
+                        existingBytes = 9,
+                    )
+                },
+            )
+        }
+        journal.write(record)
+        val controller = TransferActionController(
+            journal = journal,
+            scheduler = TransferScheduler { PlatformScheduleResult.Failure },
+            destination = { RecordingDestination() },
+            cancelJob = {},
+            openConflict = {},
+        )
+
+        val result = controller.chooseConflict(record.id, ConflictChoice.Replace)
+
+        assertEquals(TransferActionResult.Rejected, result)
+        assertEquals(record, journal.read(record.id))
+    }
+
+    @Test
+    fun `conflict choice restores waiting journal when Android scheduling throws`() {
+        val journal = TransferJournal(temporary.newFolder("conflict-schedule-throw"))
+        val record = waitingConflictRecord()
+        journal.write(record)
+        val controller = TransferActionController(
+            journal = journal,
+            scheduler = TransferScheduler { error("simulated scheduler failure") },
+            destination = { RecordingDestination() },
+            cancelJob = {},
+            openConflict = {},
+        )
+
+        val result = controller.chooseConflict(record.id, ConflictChoice.KeepBoth)
+
+        assertEquals(TransferActionResult.Rejected, result)
+        assertEquals(record, journal.read(record.id))
+    }
+
+    @Test
+    fun `conflict choice rejects journal write failure without changing waiting state`() {
+        val filesDir = temporary.newFolder("conflict-journal-failure")
+        val readableJournal = TransferJournal(filesDir)
+        val record = waitingConflictRecord()
+        readableJournal.write(record)
+        val failingJournal = TransferJournal(
+            filesDir = filesDir,
+            temporaryWriter = JournalTemporaryWriter { _, _ ->
+                throw IOException("simulated journal failure")
+            },
+        )
+        val controller = TransferActionController(
+            journal = failingJournal,
+            scheduler = TransferScheduler { PlatformScheduleResult.Success },
+            destination = { RecordingDestination() },
+            cancelJob = {},
+            openConflict = {},
+        )
+
+        val result = controller.chooseConflict(record.id, ConflictChoice.Skip)
+
+        assertEquals(TransferActionResult.Rejected, result)
+        assertEquals(record, readableJournal.read(record.id))
+    }
+
+    @Test
+    fun `conflict choice rescues pending journal when rollback persistence fails`() {
+        val filesDir = temporary.newFolder("conflict-rollback-failure")
+        val readableJournal = TransferJournal(filesDir)
+        val record = waitingConflictRecord()
+        readableJournal.write(record)
+        var writes = 0
+        val rollbackFailingJournal = TransferJournal(
+            filesDir = filesDir,
+            temporaryWriter = JournalTemporaryWriter { temporaryFile, bytes ->
+                writes += 1
+                if (writes == 2) {
+                    throw IOException("simulated rollback failure")
+                }
+                FileOutputStream(temporaryFile).use { stream ->
+                    stream.write(bytes)
+                    stream.fd.sync()
+                }
+            },
+        )
+        var scheduleCalls = 0
+        val controller = TransferActionController(
+            journal = rollbackFailingJournal,
+            scheduler = TransferScheduler {
+                scheduleCalls += 1
+                if (scheduleCalls == 1) {
+                    PlatformScheduleResult.Failure
+                } else {
+                    PlatformScheduleResult.Success
+                }
+            },
+            destination = { RecordingDestination() },
+            cancelJob = {},
+            openConflict = {},
+        )
+
+        val result = controller.chooseConflict(record.id, ConflictChoice.Replace)
+
+        assertEquals(TransferActionResult.Accepted, result)
+        assertEquals(2, scheduleCalls)
+        assertEquals(TransferState.Pending, readableJournal.read(record.id)?.state)
+    }
+
+    @Test
+    fun `conflict choice surfaces rollback failure when rescue scheduling also fails`() {
+        val filesDir = temporary.newFolder("conflict-unrecoverable")
+        val readableJournal = TransferJournal(filesDir)
+        val record = waitingConflictRecord()
+        readableJournal.write(record)
+        var writes = 0
+        val rollbackFailingJournal = TransferJournal(
+            filesDir = filesDir,
+            temporaryWriter = JournalTemporaryWriter { temporaryFile, bytes ->
+                writes += 1
+                if (writes == 2) {
+                    throw IOException("simulated rollback failure")
+                }
+                FileOutputStream(temporaryFile).use { stream ->
+                    stream.write(bytes)
+                    stream.fd.sync()
+                }
+            },
+        )
+        val controller = TransferActionController(
+            journal = rollbackFailingJournal,
+            scheduler = TransferScheduler { PlatformScheduleResult.Failure },
+            destination = { RecordingDestination() },
+            cancelJob = {},
+            openConflict = {},
+        )
+
+        val failure = assertThrows(IllegalStateException::class.java) {
+            controller.chooseConflict(record.id, ConflictChoice.Replace)
+        }
+
+        assertTrue(failure.message!!.contains("journal rollback both failed"))
+    }
 
     @Test
     fun `pause and cancel target only the Android job for this transfer`() = runTest {
@@ -234,3 +390,15 @@ private fun actionRecord(
     destinationTree = "content://documents/tree/audiobooks",
     state = state,
 )
+
+private fun waitingConflictRecord() =
+    actionRecord(state = TransferState.WaitingForConflict).let { record ->
+        record.copy(
+            files = record.files.map { file ->
+                file.copy(
+                    state = FileState.WaitingForConflict,
+                    existingBytes = 9,
+                )
+            },
+        )
+    }

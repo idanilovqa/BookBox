@@ -2,6 +2,7 @@ package com.rendref.netstorage.feature.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -44,6 +45,7 @@ fun SettingsScreen(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = 20.dp),
+        contentPadding = PaddingValues(bottom = 64.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
@@ -130,7 +132,7 @@ fun SettingsScreen(
                 }
             }
             item {
-                TextButton(
+                OutlinedButton(
                     onClick = { onAction(SettingsAction.RequestServerChange) },
                     enabled = !state.isBusy,
                     modifier = Modifier.fillMaxWidth(),

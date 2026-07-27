@@ -39,9 +39,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import com.rendref.netstorage.core.network.TransferSelection
-import com.rendref.netstorage.core.transfer.ConflictChoice
 import com.rendref.netstorage.core.transfer.FileState
-import com.rendref.netstorage.core.transfer.TransferScheduleResult
 import com.rendref.netstorage.core.transfer.TransferStartRequest
 import com.rendref.netstorage.core.transfer.TransferStartResult
 import com.rendref.netstorage.core.transfer.TransferState
@@ -66,6 +64,7 @@ import com.rendref.netstorage.feature.transfers.ConflictScreen
 import com.rendref.netstorage.feature.transfers.ConflictState
 import com.rendref.netstorage.feature.transfers.PersistableOpenDocumentTree
 import com.rendref.netstorage.feature.transfers.TransferActionController
+import com.rendref.netstorage.feature.transfers.TransferActionResult
 import com.rendref.netstorage.feature.transfers.TransferSetupContent
 import com.rendref.netstorage.feature.transfers.TransferSetupState
 import com.rendref.netstorage.feature.transfers.TransfersScreen
@@ -523,6 +522,7 @@ internal fun ConnectedApp(
             }
             AppRoute.Conflict -> ConflictRoute(
                 runtime = runtime,
+                controller = transferController,
                 transferId = conflictTransferId,
                 modifier = modifier,
                 onResolved = {
@@ -582,6 +582,7 @@ internal fun AppScaffold(
 @Composable
 private fun ConflictRoute(
     runtime: ConnectedRuntime,
+    controller: TransferActionController,
     transferId: String?,
     modifier: Modifier,
     onResolved: () -> Unit,
@@ -597,12 +598,16 @@ private fun ConflictRoute(
         ConflictScreen(
             state = ConflictState(
                 destinationPath = incoming.destinationPath,
-                existingBytes = 0,
+                existingBytes = record.files[waitingIndex].existingBytes,
                 incomingBytes = incoming.size,
             ),
             onChoice = { choice ->
-                resolveConflict(runtime, record.id, choice)
-                onResolved()
+                if (
+                    controller.chooseConflict(record.id, choice) ==
+                    TransferActionResult.Accepted
+                ) {
+                    onResolved()
+                }
             },
             modifier = modifier,
         )
@@ -637,36 +642,6 @@ private fun handleBookReviewAction(
         is BookReviewAction.MergeGroups ->
             viewModel.mergeGroups(action.sourceId, action.targetId)
         BookReviewAction.SaveGrouping -> viewModel.saveGrouping()
-    }
-}
-
-private fun resolveConflict(
-    runtime: ConnectedRuntime,
-    transferId: String,
-    choice: ConflictChoice,
-) {
-    val pending = runtime.journal.update(transferId) { record ->
-        record.copy(
-            state = TransferState.Pending,
-            files = record.files.map { file ->
-                if (file.state == FileState.WaitingForConflict) {
-                    file.copy(
-                        state = FileState.Pending,
-                        conflictChoice = choice,
-                    )
-                } else {
-                    file
-                }
-            },
-        )
-    }
-    if (
-        runtime.scheduler.scheduleFromVisibleAction(pending) ==
-        TransferScheduleResult.Failure
-    ) {
-        runtime.journal.update(transferId) { record ->
-            record.copy(state = TransferState.WaitingForConflict)
-        }
     }
 }
 
