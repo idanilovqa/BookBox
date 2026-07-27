@@ -76,6 +76,10 @@ function Get-LatestBuildTool {
 
 $script:repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $artifacts = Join-Path $script:repo 'artifacts'
+$metadataPath = Join-Path $artifacts 'APK_METADATA.json'
+$checksumsPath = Join-Path $artifacts 'SHA256SUMS.txt'
+Remove-Item -LiteralPath $metadataPath, $checksumsPath `
+    -Force -ErrorAction SilentlyContinue
 $apks = @(@(
     Join-Path $artifacts "netStorage-v$Version-debug.apk"
     Join-Path $artifacts "netStorage-v$Version-release.apk"
@@ -147,7 +151,7 @@ foreach ($apk in $apks) {
     if ($minimum -ne '36' -or $target -ne '36') {
         throw "$([IO.Path]::GetFileName($apk)) requires min/target SDK 36."
     }
-    if ((Compare-Object $approvedPermissions $permissions).Count -ne 0) {
+    if (@(Compare-Object $approvedPermissions $permissions).Count -ne 0) {
         throw "$([IO.Path]::GetFileName($apk)) has an unapproved permission set: $($permissions -join ', ')"
     }
     if ($apk -like '*-release.apk' -and $debuggable -notmatch '^(?i:false)$') {
@@ -172,17 +176,27 @@ foreach ($apk in $apks) {
     })
 }
 $metadata = @($metadata | Sort-Object file)
-[IO.File]::WriteAllText(
-    (Join-Path $artifacts 'APK_METADATA.json'),
-    ($metadata | ConvertTo-Json -Depth 6),
-    [Text.UTF8Encoding]::new($false)
-)
 $checksumLines = @($metadata | ForEach-Object {
     "$($_.sha256)  $($_.file)"
 })
-[IO.File]::WriteAllLines(
-    (Join-Path $artifacts 'SHA256SUMS.txt'),
-    $checksumLines,
-    [Text.UTF8Encoding]::new($false)
-)
+$publicationID = [Guid]::NewGuid().ToString('N')
+$metadataTemporary = "$metadataPath.tmp-$publicationID"
+$checksumsTemporary = "$checksumsPath.tmp-$publicationID"
+try {
+    [IO.File]::WriteAllText(
+        $metadataTemporary,
+        ($metadata | ConvertTo-Json -Depth 6),
+        [Text.UTF8Encoding]::new($false)
+    )
+    [IO.File]::WriteAllLines(
+        $checksumsTemporary,
+        $checksumLines,
+        [Text.UTF8Encoding]::new($false)
+    )
+    Move-Item -LiteralPath $metadataTemporary -Destination $metadataPath -Force
+    Move-Item -LiteralPath $checksumsTemporary -Destination $checksumsPath -Force
+} finally {
+    Remove-Item -LiteralPath $metadataTemporary, $checksumsTemporary `
+        -Force -ErrorAction SilentlyContinue
+}
 Write-Host "PASS: verified $($metadata.Count) APK(s); wrote APK_METADATA.json and SHA256SUMS.txt."

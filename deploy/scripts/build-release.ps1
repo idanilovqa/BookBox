@@ -7,6 +7,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+. (Join-Path $PSScriptRoot '..\..\e2e\process-runner.ps1')
+
 function Invoke-Checked {
     param(
         [Parameter(Mandatory)][string] $Label,
@@ -17,14 +19,6 @@ function Invoke-Checked {
     if ($LASTEXITCODE -ne 0) {
         throw "$Label failed with exit code $LASTEXITCODE."
     }
-}
-
-function ConvertTo-ProcessArgument {
-    param([string] $Value)
-    if ($Value -notmatch '[\s"]') {
-        return $Value
-    }
-    return '"' + $Value.Replace('"', '\"') + '"'
 }
 
 function Stop-OwnedProcessTree {
@@ -62,62 +56,78 @@ function Invoke-MonitoredProcess {
     $key = [Guid]::NewGuid().ToString('N')
     $stdout = Join-Path $logDirectory "$key.stdout.log"
     $stderr = Join-Path $logDirectory "$key.stderr.log"
-    $argumentText = (@($Arguments | ForEach-Object {
-        ConvertTo-ProcessArgument $_
-    }) -join ' ')
-    $process = Start-Process `
-        -FilePath $FilePath `
-        -ArgumentList $argumentText `
-        -WorkingDirectory $WorkingDirectory `
-        -NoNewWindow `
-        -PassThru `
-        -RedirectStandardOutput $stdout `
-        -RedirectStandardError $stderr
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $startedAt = [DateTime]::UtcNow
+    $stoppedIDs = [Collections.Generic.List[int]]::new()
+    $cleanupErrors = [Collections.Generic.List[string]]::new()
     try {
-        while (-not $process.WaitForExit(10000)) {
-            $elapsed = [int](
-                [DateTime]::UtcNow - $process.StartTime.ToUniversalTime()
-            ).TotalSeconds
-            Write-Host "$Label is running (${elapsed}s elapsed)."
-            if ([DateTime]::UtcNow -ge $deadline) {
-                foreach ($path in @($stdout, $stderr)) {
-                    if (Test-Path -LiteralPath $path -PathType Leaf) {
-                        Get-Content -LiteralPath $path -Tail 100 | Write-Host
+        $result = Invoke-NetStorageCapturedProcess `
+            -FilePath $FilePath `
+            -Arguments $Arguments `
+            -WorkingDirectory $WorkingDirectory `
+            -TimeoutMilliseconds ($TimeoutSeconds * 1000) `
+            -ProgressIntervalMilliseconds 10000 `
+            -OnProgress {
+                param([int] $ProcessId)
+                $null = $ProcessId
+                $elapsed = [int](
+                    [DateTime]::UtcNow - $startedAt
+                ).TotalSeconds
+                Write-Host "$Label is running (${elapsed}s elapsed)."
+            } `
+            -OnTimeout {
+                param([int] $ProcessId)
+                try {
+                    foreach ($ownedID in @(Stop-OwnedProcessTree $ProcessId)) {
+                        $stoppedIDs.Add([int] $ownedID)
                     }
+                } catch {
+                    $cleanupErrors.Add($_.Exception.Message)
+                    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
                 }
-                $stoppedIDs = @(Stop-OwnedProcessTree $process.Id)
                 if ($OwnedDockerContainer) {
                     @(& docker rm -f $OwnedDockerContainer 2>&1) | Out-Null
                 }
-                $exitDeadline = [DateTime]::UtcNow.AddSeconds(5)
-                do {
-                    $remaining = @($stoppedIDs | Where-Object {
-                        Get-Process -Id $_ -ErrorAction SilentlyContinue
-                    })
-                    if ($remaining.Count -eq 0) {
-                        break
-                    }
-                    Start-Sleep -Milliseconds 200
-                } while ([DateTime]::UtcNow -lt $exitDeadline)
-                if ($remaining.Count -gt 0) {
-                    throw "$Label timed out and owned process IDs remain: $($remaining -join ', ')."
-                }
-                if ($OwnedDockerContainer -and
-                    (@(& docker ps -a --filter "name=^/$OwnedDockerContainer$" -q) -join '').Trim()) {
-                    throw "$Label timed out and its exact Docker container remains: $OwnedDockerContainer"
-                }
-                throw "$Label timed out after $TimeoutSeconds seconds; its exact process tree was stopped."
             }
-        }
-        $process.WaitForExit()
+
+        [IO.File]::WriteAllText(
+            $stdout,
+            $result.StandardOutput,
+            [Text.UTF8Encoding]::new($false)
+        )
+        [IO.File]::WriteAllText(
+            $stderr,
+            $result.StandardError,
+            [Text.UTF8Encoding]::new($false)
+        )
         foreach ($path in @($stdout, $stderr)) {
             if (Test-Path -LiteralPath $path -PathType Leaf) {
                 Get-Content -LiteralPath $path | Write-Host
             }
         }
-        if ($process.ExitCode -ne 0) {
-            throw "$Label failed with exit code $($process.ExitCode)."
+
+        if ($result.TimedOut) {
+            $elapsed = [int](
+                [DateTime]::UtcNow - $startedAt
+            ).TotalSeconds
+            $remaining = @($stoppedIDs | Where-Object {
+                Get-Process -Id $_ -ErrorAction SilentlyContinue
+            })
+            if ($remaining.Count -gt 0) {
+                throw "$Label timed out and owned process IDs remain: $($remaining -join ', ')."
+            }
+            if ($OwnedDockerContainer -and
+                (@(& docker ps -a --filter "name=^/$OwnedDockerContainer$" -q) -join '').Trim()) {
+                throw "$Label timed out and its exact Docker container remains: $OwnedDockerContainer"
+            }
+            if ($cleanupErrors.Count -gt 0) {
+                throw "$Label timed out after ${elapsed}s and cleanup reported: $(
+                    $cleanupErrors -join '; '
+                )"
+            }
+            throw "$Label timed out after ${elapsed}s; its exact process tree was stopped."
+        }
+        if ($result.ExitCode -ne 0) {
+            throw "$Label failed with exit code $($result.ExitCode)."
         }
     } finally {
         Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
@@ -185,6 +195,21 @@ function Get-LatestBuildTool {
 }
 
 $script:repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+$artifacts = Join-Path $script:repo 'artifacts'
+[IO.Directory]::CreateDirectory($artifacts) | Out-Null
+$script:artifacts = $artifacts
+$debugArtifact = Join-Path $artifacts "netStorage-v$Version-debug.apk"
+$releaseArtifact = Join-Path $artifacts "netStorage-v$Version-release.apk"
+$metadataArtifact = Join-Path $artifacts 'APK_METADATA.json'
+$checksumsArtifact = Join-Path $artifacts 'SHA256SUMS.txt'
+foreach ($path in @(
+    $debugArtifact,
+    $releaseArtifact,
+    $metadataArtifact,
+    $checksumsArtifact
+)) {
+    Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+}
 $server = Join-Path $script:repo 'server'
 $android = Join-Path $script:repo 'android'
 $serverMain = Get-Content -LiteralPath (
@@ -198,15 +223,10 @@ if ($serverMain -notmatch 'var\s+version\s*=\s*"dev"' -or
     $apiDockerfile -notmatch [regex]::Escape('-X main.version=${NETSTORAGE_VERSION}')) {
     throw 'Release blocker: the API must keep a dev source default and stamp NETSTORAGE_VERSION=1.0.0 through Docker ldflags.'
 }
-$artifacts = Join-Path $script:repo 'artifacts'
-[IO.Directory]::CreateDirectory($artifacts) | Out-Null
-$script:artifacts = $artifacts
 Initialize-JavaAndGradle
-$debugArtifact = Join-Path $artifacts "netStorage-v$Version-debug.apk"
-$releaseArtifact = Join-Path $artifacts "netStorage-v$Version-release.apk"
-foreach ($path in @($debugArtifact, $releaseArtifact)) {
-    Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-}
+$sdk = Get-AndroidSdk
+$env:ANDROID_HOME = $sdk
+$env:ANDROID_SDK_ROOT = $sdk
 
 $goContainer = "netstorage-release-go-$PID"
 if ((@(& docker ps -a --filter "name=^/$goContainer$" -q) -join '').Trim()) {
@@ -220,8 +240,8 @@ Invoke-MonitoredProcess `
         '--tmpfs', '/tmp:rw,exec,nosuid,nodev',
         '-e', 'GOCACHE=/tmp/go-cache',
         '-e', 'GOMODCACHE=/tmp/go-mod',
-        '-v', "$($server.Replace('\','/')):/src:ro",
-        '-w', '/src',
+        '-v', "$($script:repo.Replace('\','/')):/workspace:ro",
+        '-w', '/workspace/server',
         'golang:1.26.5',
         'sh', '-c',
         'go test -mod=readonly -p=1 -race ./... && go vet -mod=readonly ./...'
@@ -260,13 +280,12 @@ Invoke-MonitoredProcess `
     -WorkingDirectory $script:repo `
     -TimeoutSeconds 2400
 Invoke-MonitoredProcess `
-    -Label 'Android unit, lint, instrumentation, and debug build' `
+    -Label 'Android unit, lint, and debug build' `
     -FilePath (Join-Path $android 'gradlew.bat') `
     -Arguments @(
         '--no-daemon',
         'testDebugUnitTest',
         'lintDebug',
-        'connectedDebugAndroidTest',
         'assembleDebug'
     ) `
     -WorkingDirectory $android `

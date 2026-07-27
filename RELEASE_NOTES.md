@@ -15,7 +15,7 @@ Release status: implementation candidate. The API source keeps a `dev` default f
 - PostgreSQL catalog, metadata review, grouping corrections, worker jobs, and cover audit history
 - Open Library metadata plus optional Google Books metadata
 - Isolated worker cover publication with content-addressed original-cover backups
-- Docker Compose hardening, health checks, source-mutation checks, recovery tooling, and API 36 tests
+- Docker Compose hardening, health checks, source-mutation checks, synthetic recovery validation, and API 36 tests
 
 ## Source-write boundary
 

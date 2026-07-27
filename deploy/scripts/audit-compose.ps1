@@ -142,7 +142,13 @@ foreach ($resourceGroup in @($testResolved.volumes, $testResolved.networks)) {
     }
 }
 foreach ($service in $testResolved.services.PSObject.Properties.Value) {
-    foreach ($mount in @($service.volumes)) {
+    $volumesProperty = $service.PSObject.Properties['volumes']
+    $serviceVolumes = if ($null -eq $volumesProperty) {
+        @()
+    } else {
+        @($volumesProperty.Value)
+    }
+    foreach ($mount in $serviceVolumes) {
         if ($mount.type -eq 'bind' -and $mount.source -match '^(?i)H:') {
             throw 'Test Compose must never bind an H: path.'
         }

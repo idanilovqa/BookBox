@@ -11,7 +11,7 @@ Version 1 targets Android 16, API 36, and the Galaxy S23 Ultra. It uses a manual
 - [Install the Windows server and Android app](docs/installation.md)
 - [Use the Android app](docs/android.md)
 - [Run and maintain the server](docs/operations.md)
-- [Back up and recover netStorage](docs/backup-and-recovery.md)
+- [Review backup and recovery test status](docs/backup-and-recovery.md)
 - [Complete the Galaxy S23 Ultra checklist](docs/galaxy-s23-checklist.md)
 - [Read the v1.0.0 release notes](RELEASE_NOTES.md)
 
