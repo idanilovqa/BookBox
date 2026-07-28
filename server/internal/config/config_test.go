@@ -10,7 +10,7 @@ import (
 
 func TestLoadRequiresUniqueSafeRootIDs(t *testing.T) {
 	path := writeConfig(t, `
-listen: ":8443"
+listen: ":8787"
 roots:
   - {id: audiobooks, name: Audiobooks, container_path: /library/a}
   - {id: audiobooks, name: Duplicate, container_path: /library/b}
@@ -24,7 +24,7 @@ roots:
 
 func TestLoadAcceptsAudiobookRoot(t *testing.T) {
 	path := writeConfig(t, `
-listen: ":8443"
+listen: ":8787"
 roots:
   - {id: audiobooks, name: Audiobooks, container_path: /library/audiobooks}
 `)
@@ -35,9 +35,52 @@ roots:
 	}
 }
 
+func TestLoadAcceptsHTTPConfigurationWithoutTLS(t *testing.T) {
+	path := writeConfigRaw(t, `
+listen: ":8787"
+roots:
+  - id: audiobooks
+    name: Audiobooks
+    container_path: /library/audiobooks
+auth:
+  username: owner
+  password_hash_file: /run/bookbox-secrets/app_password_hash
+  session_key_file: /run/bookbox-secrets/session_key
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Listen != ":8787" {
+		t.Fatalf("listen = %q", cfg.Listen)
+	}
+}
+
+func TestLoadRejectsRemovedTLSSection(t *testing.T) {
+	_, err := Load(writeConfigRaw(t, `
+listen: ":8787"
+roots:
+  - id: audiobooks
+    name: Audiobooks
+    container_path: /library/audiobooks
+auth:
+  username: owner
+  password_hash_file: /run/bookbox-secrets/app_password_hash
+  session_key_file: /run/bookbox-secrets/session_key
+tls:
+  cert_path: /tmp/server.crt
+  key_path: /tmp/server.key
+  hosts: [bookbox.local]
+`))
+	if err == nil || !strings.Contains(err.Error(), "field tls not found") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestLoadRejectsUnsafeRootID(t *testing.T) {
 	path := writeConfig(t, `
-listen: ":8443"
+listen: ":8787"
 roots:
   - {id: ../audiobooks, name: Audiobooks, container_path: /library/audiobooks}
 `)
@@ -49,7 +92,7 @@ roots:
 
 func TestLoadRejectsUnknownFields(t *testing.T) {
 	path := writeConfig(t, `
-listen: ":8443"
+listen: ":8787"
 unexpected: true
 roots:
   - {id: audiobooks, name: Audiobooks, container_path: /library/audiobooks}
@@ -65,7 +108,7 @@ func TestLoadRequiresListenAndRoots(t *testing.T) {
 		"listen": `roots:
   - {id: audiobooks, name: Audiobooks, container_path: /library/audiobooks}
 `,
-		"roots": `listen: ":8443"
+		"roots": `listen: ":8787"
 `,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -78,7 +121,7 @@ func TestLoadRequiresListenAndRoots(t *testing.T) {
 
 func TestLoadRequiresAbsoluteContainerPath(t *testing.T) {
 	path := writeConfig(t, `
-listen: ":8443"
+listen: ":8787"
 roots:
   - {id: audiobooks, name: Audiobooks, container_path: library/audiobooks}
 `)
@@ -88,34 +131,19 @@ roots:
 	}
 }
 
-func TestLoadRequiresTLSAndAuthenticationConfiguration(t *testing.T) {
+func TestLoadRequiresAuthenticationConfiguration(t *testing.T) {
 	base := `
-listen: ":8443"
+listen: ":8787"
 roots:
   - {id: audiobooks, name: Audiobooks, container_path: /library/audiobooks}
 `
 	tests := map[string]string{
-		"missing TLS": base + `
-auth:
-  username: owner
-  password_hash_file: /run/secrets/app_password_hash
-  session_key_file: /run/secrets/session_key
-`,
-		"missing auth": base + `
-tls:
-  cert_path: /var/lib/bookbox/tls/server.crt
-  key_path: /var/lib/bookbox/tls/server.key
-  hosts: [localhost]
-`,
+		"missing auth": base,
 		"relative secret": base + `
-tls:
-  cert_path: /var/lib/bookbox/tls/server.crt
-  key_path: /var/lib/bookbox/tls/server.key
-  hosts: [localhost]
 auth:
   username: owner
   password_hash_file: secrets/app_password_hash
-  session_key_file: /run/secrets/session_key
+  session_key_file: /run/bookbox-secrets/session_key
 `,
 	}
 	for name, contents := range tests {
@@ -271,16 +299,12 @@ func TestLoadDatabaseDSNReadsPasswordOnlyFromProtectedFile(t *testing.T) {
 
 func writeConfig(t *testing.T, contents string) string {
 	t.Helper()
-	if !strings.Contains(contents, "\ntls:") {
+	if !strings.Contains(contents, "\nauth:") {
 		contents += `
-tls:
-  cert_path: /var/lib/bookbox/tls/server.crt
-  key_path: /var/lib/bookbox/tls/server.key
-  hosts: [localhost]
 auth:
   username: owner
-  password_hash_file: /run/secrets/app_password_hash
-  session_key_file: /run/secrets/session_key
+  password_hash_file: /run/bookbox-secrets/app_password_hash
+  session_key_file: /run/bookbox-secrets/session_key
 `
 	}
 	return writeConfigRaw(t, contents)

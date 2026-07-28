@@ -1,14 +1,8 @@
-listen: ":8443"
+listen: ":8787"
 roots:
   - id: audiobooks
     name: Audiobooks
     container_path: /library/audiobooks
-tls:
-  cert_path: /var/lib/bookbox/tls/server.crt
-  key_path: /var/lib/bookbox/tls/server.key
-  hosts:
-    - localhost
-    - 127.0.0.1
 auth:
   username: owner
   password_hash_file: /run/bookbox-secrets/app_password_hash

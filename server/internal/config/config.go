@@ -22,12 +22,6 @@ type Root struct {
 	ContainerPath string `yaml:"container_path"`
 }
 
-type TLS struct {
-	CertPath string   `yaml:"cert_path"`
-	KeyPath  string   `yaml:"key_path"`
-	Hosts    []string `yaml:"hosts"`
-}
-
 type Auth struct {
 	Username         string `yaml:"username"`
 	PasswordHashFile string `yaml:"password_hash_file"`
@@ -46,7 +40,6 @@ type Database struct {
 type Config struct {
 	Listen   string   `yaml:"listen"`
 	Roots    []Root   `yaml:"roots"`
-	TLS      TLS      `yaml:"tls"`
 	Auth     Auth     `yaml:"auth"`
 	Database Database `yaml:"database"`
 }
@@ -82,14 +75,11 @@ func Load(path string) (Config, error) {
 	if cfg.Listen == "" || len(cfg.Roots) == 0 {
 		return Config{}, errors.New("listen and roots are required")
 	}
-	if cfg.TLS.CertPath == "" || cfg.TLS.KeyPath == "" || len(cfg.TLS.Hosts) == 0 ||
-		cfg.Auth.Username == "" || cfg.Auth.PasswordHashFile == "" ||
+	if cfg.Auth.Username == "" || cfg.Auth.PasswordHashFile == "" ||
 		cfg.Auth.SessionKeyFile == "" {
-		return Config{}, errors.New("tls and auth configuration are required")
+		return Config{}, errors.New("auth configuration is required")
 	}
 	for name, path := range map[string]string{
-		"tls.cert_path":           cfg.TLS.CertPath,
-		"tls.key_path":            cfg.TLS.KeyPath,
 		"auth.password_hash_file": cfg.Auth.PasswordHashFile,
 		"auth.session_key_file":   cfg.Auth.SessionKeyFile,
 	} {
@@ -97,12 +87,6 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("%s must be absolute", name)
 		}
 	}
-	for _, host := range cfg.TLS.Hosts {
-		if strings.TrimSpace(host) == "" {
-			return Config{}, errors.New("tls.hosts cannot contain empty values")
-		}
-	}
-
 	seen := make(map[string]struct{}, len(cfg.Roots))
 	for _, root := range cfg.Roots {
 		if !safeRootID.MatchString(root.ID) {

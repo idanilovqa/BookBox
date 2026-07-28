@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
@@ -21,7 +20,6 @@ import (
 	"bookbox.local/server/internal/httpapi"
 	"bookbox.local/server/internal/library"
 	"bookbox.local/server/internal/metadata"
-	"bookbox.local/server/internal/tlsidentity"
 	"bookbox.local/server/internal/transfer"
 )
 
@@ -35,12 +33,12 @@ func main() {
 
 func run(args []string) error {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	return runWith(args, serveTLS, os.Stdout, logger)
+	return runWith(args, serveHTTP, os.Stdout, logger)
 }
 
-type serveTLSFunc func(*http.Server, string, string) error
+type serveHTTPFunc func(*http.Server) error
 
-func runWith(args []string, serve serveTLSFunc, output io.Writer, logger *slog.Logger) error {
+func runWith(args []string, serve serveHTTPFunc, output io.Writer, logger *slog.Logger) error {
 	flags := flag.NewFlagSet("bookbox-api", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	configPath := flags.String("config", "/etc/bookbox/config.yml", "path to the server configuration")
@@ -66,10 +64,6 @@ func runWith(args []string, serve serveTLSFunc, output io.Writer, logger *slog.L
 	if databasePool != nil {
 		defer databasePool.Close()
 	}
-	identity, err := tlsidentity.Ensure(cfg.TLS.CertPath, cfg.TLS.KeyPath, cfg.TLS.Hosts)
-	if err != nil {
-		return err
-	}
 	handler, _, err := buildHandler(cfg, secrets, version, logger, databasePool)
 	if err != nil {
 		return err
@@ -79,18 +73,8 @@ func runWith(args []string, serve serveTLSFunc, output io.Writer, logger *slog.L
 		Addr:              cfg.Listen,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
-		TLSConfig: &tls.Config{
-			MinVersion: tls.VersionTLS12,
-		},
 	}
-	if _, err := fmt.Fprintf(
-		output,
-		"BookBox certificate SHA-256: %s\n",
-		identity.SHA256Fingerprint,
-	); err != nil {
-		return err
-	}
-	return serve(server, cfg.TLS.CertPath, cfg.TLS.KeyPath)
+	return serve(server)
 }
 
 func openCatalogDatabase(ctx context.Context, cfg config.Config) (*pgxpool.Pool, error) {
@@ -186,6 +170,6 @@ func buildHandler(
 	return handler, tokens, nil
 }
 
-func serveTLS(server *http.Server, certPath, keyPath string) error {
-	return server.ListenAndServeTLS(certPath, keyPath)
+func serveHTTP(server *http.Server) error {
+	return server.ListenAndServe()
 }

@@ -10,19 +10,19 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/google/uuid"
 	"bookbox.local/server/internal/auth"
 	"bookbox.local/server/internal/catalog"
 	"bookbox.local/server/internal/config"
 	"bookbox.local/server/internal/database"
 	"bookbox.local/server/internal/testpostgres"
+	"github.com/google/uuid"
 )
 
-func TestRunLoadsSecretsCreatesIdentityAndServesMandatoryTLS(t *testing.T) {
+func TestRunLoadsSecretsAndServesHTTP(t *testing.T) {
 	directory := t.TempDir()
 	root := filepath.Join(directory, "library")
 	if err := os.Mkdir(root, 0o700); err != nil {
@@ -42,18 +42,15 @@ func TestRunLoadsSecretsCreatesIdentityAndServesMandatoryTLS(t *testing.T) {
 	if err := os.WriteFile(keyPath, []byte(strings.Repeat("s", 32)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	certPath := filepath.Join(directory, "tls", "server.crt")
-	tlsKeyPath := filepath.Join(directory, "tls", "server.key")
-	configPath := writeServerConfig(t, root, certPath, tlsKeyPath, hashPath, keyPath)
+	configPath := writeServerConfig(t, root, hashPath, keyPath)
 
 	errServed := errors.New("serve callback reached")
 	var served *http.Server
-	var servedCert, servedKey string
 	var output bytes.Buffer
 	err = runWith(
 		[]string{"-config", configPath},
-		func(server *http.Server, cert, key string) error {
-			served, servedCert, servedKey = server, cert, key
+		func(server *http.Server) error {
+			served = server
 			return errServed
 		},
 		&output,
@@ -62,17 +59,14 @@ func TestRunLoadsSecretsCreatesIdentityAndServesMandatoryTLS(t *testing.T) {
 	if !errors.Is(err, errServed) {
 		t.Fatalf("runWith() error = %v, want serve callback", err)
 	}
-	if served == nil || servedCert != certPath || servedKey != tlsKeyPath {
-		t.Fatalf("serve args = %#v, %q, %q", served, servedCert, servedKey)
+	if served == nil || served.Addr != ":8787" || served.TLSConfig != nil {
+		t.Fatalf("server = %#v", served)
 	}
-	if !regexp.MustCompile(`BookBox certificate SHA-256: ([0-9A-F]{2}:){31}[0-9A-F]{2}\n`).
-		MatchString(output.String()) {
-		t.Fatalf("fingerprint output = %q", output.String())
+	if served.ReadHeaderTimeout != 10*time.Second {
+		t.Fatalf("ReadHeaderTimeout = %v", served.ReadHeaderTimeout)
 	}
-	for _, path := range []string{certPath, tlsKeyPath} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("TLS path %q: %v", path, err)
-		}
+	if strings.Contains(strings.ToLower(output.String()), "certificate") {
+		t.Fatalf("unexpected TLS output %q", output.String())
 	}
 
 	health := httptest.NewRecorder()
@@ -104,15 +98,13 @@ func TestRunRejectsMalformedPasswordHashBeforeServing(t *testing.T) {
 	configPath := writeServerConfig(
 		t,
 		root,
-		filepath.Join(directory, "tls", "server.crt"),
-		filepath.Join(directory, "tls", "server.key"),
 		hashPath,
 		sessionKeyPath,
 	)
 	called := false
 	err := runWith(
 		[]string{"-config", configPath},
-		func(*http.Server, string, string) error {
+		func(*http.Server) error {
 			called = true
 			return nil
 		},
@@ -302,23 +294,18 @@ func TestBuildHandlerWiresPostgresCatalogIntoAuthenticatedBooksRoute(t *testing.
 	}
 }
 
-func writeServerConfig(t *testing.T, root, cert, tlsKey, hash, sessionKey string) string {
+func writeServerConfig(t *testing.T, root, hash, sessionKey string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yml")
 	contents := fmt.Sprintf(`
-listen: ":8443"
+listen: ":8787"
 roots:
   - {id: audiobooks, name: Audiobooks, container_path: %q}
-tls:
-  cert_path: %q
-  key_path: %q
-  hosts: [localhost, 127.0.0.1]
 auth:
   username: owner
   password_hash_file: %q
   session_key_file: %q
-`, filepath.ToSlash(root), filepath.ToSlash(cert), filepath.ToSlash(tlsKey),
-		filepath.ToSlash(hash), filepath.ToSlash(sessionKey))
+`, filepath.ToSlash(root), filepath.ToSlash(hash), filepath.ToSlash(sessionKey))
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
