@@ -108,7 +108,6 @@ function Test-SyntheticRecoveryResolvedScope {
 
     $volumeMounts = @(
         @('postgres', '/var/lib/postgresql', 'recovery_postgres_data', 'PostgreSQL data'),
-        @('bookbox-api', '/var/lib/bookbox', 'recovery_tls_data', 'TLS data'),
         @(
             'bookbox-catalog-worker',
             '/var/lib/bookbox/covers',
@@ -136,12 +135,12 @@ function Test-SyntheticRecoveryResolvedScope {
     $ports = @($api.ports)
     if (
         $ports.Count -ne 1 -or
-        [string] $ports[0].target -cne '8443' -or
-        [string] $ports[0].published -cne '18443' -or
+        [string] $ports[0].target -cne '8787' -or
+        [string] $ports[0].published -cne '18787' -or
         [string] $ports[0].host_ip -cne '127.0.0.1' -or
         [string] $ports[0].protocol -cne 'tcp'
     ) {
-        throw 'Synthetic recovery must expose only 127.0.0.1:18443 to API port 8443.'
+        throw 'Synthetic recovery must expose only 127.0.0.1:18787 to API port 8787.'
     }
 
     $secretRoot = Join-Path $root 'secrets'

@@ -24,7 +24,6 @@ function New-ResolvedScope {
 
     $volumeNames = [ordered]@{
         recovery_postgres_data = "${project}_recovery_postgres_data"
-        recovery_tls_data = "${project}_recovery_tls_data"
         recovery_cover_cache = "${project}_recovery_cover_cache"
         recovery_cover_backups = "${project}_recovery_cover_backups"
     }
@@ -43,8 +42,8 @@ function New-ResolvedScope {
             'bookbox-api' = [pscustomobject]@{
                 ports = @(
                     [pscustomobject]@{
-                        target = 8443
-                        published = '18443'
+                        target = 8787
+                        published = '18787'
                         host_ip = '127.0.0.1'
                         protocol = 'tcp'
                     }
@@ -61,11 +60,6 @@ function New-ResolvedScope {
                         source = $config
                         target = '/etc/bookbox/config.yml'
                         read_only = $true
-                    },
-                    [pscustomobject]@{
-                        type = 'volume'
-                        source = 'recovery_tls_data'
-                        target = '/var/lib/bookbox'
                     }
                 )
             }
@@ -113,9 +107,6 @@ function New-ResolvedScope {
         volumes = [pscustomobject]@{
             recovery_postgres_data = [pscustomobject]@{
                 name = $volumeNames.recovery_postgres_data
-            }
-            recovery_tls_data = [pscustomobject]@{
-                name = $volumeNames.recovery_tls_data
             }
             recovery_cover_cache = [pscustomobject]@{
                 name = $volumeNames.recovery_cover_cache

@@ -258,18 +258,6 @@ function Get-Container {
     $id
 }
 
-function Get-Fingerprint {
-    $text = @(Invoke-Docker ($compose + @(
-        'logs', '--no-color', 'bookbox-api'
-    ))) -join [Environment]::NewLine
-    $match = [regex]::Match(
-        $text,
-        'BookBox certificate SHA-256:\s*((?:[0-9A-F]{2}:){31}[0-9A-F]{2})'
-    )
-    if (-not $match.Success) { throw 'API TLS fingerprint was not logged.' }
-    $match.Groups[1].Value
-}
-
 function Assert-VolumeFile {
     param([string] $Volume, [string] $Name, [string] $Expected)
     $actual = @(Invoke-Docker @(
@@ -302,7 +290,7 @@ if (
 ) {
     throw 'Unsafe synthetic recovery root.'
 }
-foreach ($port in @(18443, 18474)) {
+foreach ($port in @(18787, 18474)) {
     if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue) {
         throw "Synthetic recovery port is already in use: $port"
     }
@@ -331,18 +319,14 @@ try {
         "BOOKBOX_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $path (Join-Path $secrets 'google_books_key.txt'))"
         "BOOKBOX_RECOVERY_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $path (Join-Path $secrets 'google_books_key.txt'))"
         'BOOKBOX_BIND_ADDRESS=127.0.0.1'
-        'HOST_PORT=18443'
+        'BOOKBOX_HOST_PORT=18787'
     ) -join [Environment]::NewLine)
     Write-Utf8 $config @'
-listen: ":8443"
+listen: ":8787"
 roots:
   - id: audiobooks
     name: Audiobooks
     container_path: /library/audiobooks
-tls:
-  cert_path: /var/lib/bookbox/tls/server.crt
-  key_path: /var/lib/bookbox/tls/server.key
-  hosts: [localhost, 127.0.0.1]
 auth:
   username: owner
   password_hash_file: /run/bookbox-secrets/app_password_hash
@@ -404,8 +388,6 @@ database:
             "printf '%s' '$($probe[2])' > '/target/$($probe[1])'"
         ) | Out-Null
     }
-    $fingerprint = Get-Fingerprint
-
     $operationFile = Join-Path $root 'recovery-operation.json'
     Write-Utf8 $operationFile ([ordered]@{
         Destination = $backup
@@ -422,11 +404,8 @@ database:
     )
     $manifest = Get-Content (Join-Path $backup 'manifest.json') -Raw |
         ConvertFrom-Json
-    if (
-        $manifest.appVersion -cne '1.0.0' -or
-        $manifest.certificateFingerprintSha256 -cne $fingerprint
-    ) {
-        throw 'Backup manifest did not preserve version and TLS identity.'
+    if ($manifest.appVersion -cne '1.0.0') {
+        throw 'Backup manifest did not preserve the application version.'
     }
 
     Invoke-Monitored 'down-before-restore' $docker ($compose + @(
@@ -437,7 +416,7 @@ database:
         ProjectName = $project
         ComposeFile = @($baseCompose, $testCompose)
         EnvironmentFile = $environment
-        BaseUrl = 'https://127.0.0.1:18443'
+        BaseUrl = 'http://127.0.0.1:18787'
         TimeoutSeconds = [Math]::Min($TimeoutSeconds, 1800)
     } | ConvertTo-Json -Depth 4)
     Invoke-Monitored 'restore' 'powershell.exe' @(
@@ -446,9 +425,6 @@ database:
         '-Operation', 'restore', '-ArgumentsFile', $operationFile
     ) ([Math]::Min($TimeoutSeconds + 300, 1800))
 
-    if ((Get-Fingerprint) -cne $fingerprint) {
-        throw 'Restored TLS fingerprint changed.'
-    }
     $postgres = Get-Container 'postgres'
     $probe = @(Invoke-Docker @(
         'exec', $postgres, 'psql', '-U', 'bookbox', '-d', 'bookbox',
@@ -466,7 +442,7 @@ database:
         EnvironmentFile = $environment
         CurrentPasswordFile = $currentPasswordFile
         NewPasswordFile = $newPasswordFile
-        BaseUrl = 'https://127.0.0.1:18443'
+        BaseUrl = 'http://127.0.0.1:18787'
         Username = 'owner'
         TimeoutSeconds = [Math]::Min($TimeoutSeconds, 600)
     } | ConvertTo-Json -Depth 4)
@@ -475,7 +451,7 @@ database:
         '-File', (Join-Path $PSScriptRoot 'invoke-synthetic-recovery.ps1'),
         '-Operation', 'rotate', '-ArgumentsFile', $operationFile
     ) ([Math]::Min($TimeoutSeconds + 120, 900))
-    Write-Output 'PASS: synthetic recovery restored PostgreSQL, TLS, config, cover volumes, password, and sessions.'
+    Write-Output 'PASS: synthetic recovery restored PostgreSQL, config, cover volumes, password, and sessions.'
 } catch {
     $primaryFailure = $_
     $failureRoot = Join-Path (
@@ -518,7 +494,7 @@ database:
             $safeToDelete = $false
             throw "Recovery resources remain: $($remaining -join ', ')"
         }
-        $listeners = foreach ($port in @(18443, 18474)) {
+        $listeners = foreach ($port in @(18787, 18474)) {
             Get-NetTCPConnection -State Listen -LocalPort $port `
                 -ErrorAction SilentlyContinue
         }

@@ -6,8 +6,8 @@ if (-not (Test-Path -LiteralPath $compose -PathType Leaf)) {
     throw "Compose file does not exist: $compose"
 }
 $composeText = Get-Content -LiteralPath $compose -Raw
-if ($composeText -notmatch [regex]::Escape('host_ip: "${BOOKBOX_BIND_ADDRESS:-127.0.0.1}"')) {
-    throw 'Compose does not default the API bind to loopback.'
+if ($composeText -notmatch [regex]::Escape('host_ip: "${BOOKBOX_BIND_ADDRESS:?Set BOOKBOX_BIND_ADDRESS to a private LAN address}"')) {
+    throw 'Compose must require an explicit private LAN bind address.'
 }
 
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
@@ -44,9 +44,28 @@ if ($gitAttributeLines -cnotcontains 'deploy/entrypoint-worker.sh text eol=lf') 
 }
 $environmentExample = Join-Path $repo 'deploy\.env.example'
 $environmentExampleLines = @(Get-Content -LiteralPath $environmentExample)
-if ($environmentExampleLines -cnotcontains 'BOOKBOX_BIND_ADDRESS=127.0.0.1') {
-    throw 'The example API bind does not default to loopback.'
+if (-not @($environmentExampleLines | Where-Object {
+    $_ -match '^BOOKBOX_BIND_ADDRESS=(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)'
+})) {
+    throw 'The example API bind must use an RFC1918 private address.'
 }
+if ($environmentExampleLines -cnotcontains 'BOOKBOX_HOST_PORT=8787') {
+    throw 'The example API host port must be 8787.'
+}
+$bindRecord = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+    Where-Object {
+        $_.AddressState -eq 'Preferred' -and
+        $_.IPAddress -match '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)'
+    } |
+    Where-Object {
+        (Get-NetConnectionProfile -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue).
+            NetworkCategory -eq 'Private'
+    } |
+    Select-Object -First 1
+if (-not $bindRecord) {
+    throw 'Smoke test requires an assigned RFC1918 address on a Windows Private network.'
+}
+$bindAddress = $bindRecord.IPAddress
 $project = ('bookbox-smoke-' + [Guid]::NewGuid().ToString('N')).ToLowerInvariant()
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
 $scratch = [IO.Path]::GetFullPath((Join-Path $tempRoot $project))
@@ -137,17 +156,11 @@ try {
     New-Item -ItemType Directory -Force (Join-Path $library 'Author\Book') | Out-Null
 
     $configText = @"
-listen: ":8443"
+listen: ":8787"
 roots:
   - id: audiobooks
     name: Audiobooks
     container_path: /library/audiobooks
-tls:
-  cert_path: /var/lib/bookbox/tls/server.crt
-  key_path: /var/lib/bookbox/tls/server.key
-  hosts:
-    - localhost
-    - 127.0.0.1
 auth:
   username: owner
   password_hash_file: /run/bookbox-secrets/app_password_hash
@@ -192,8 +205,8 @@ database:
         "BOOKBOX_PASSWORD_HASH_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'app_password_hash.txt'))"
         "BOOKBOX_SESSION_KEY_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'session_key.bin'))"
         "BOOKBOX_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'google_books_key.txt'))"
-        'BOOKBOX_BIND_ADDRESS=127.0.0.1'
-        'HOST_PORT=0'
+        "BOOKBOX_BIND_ADDRESS=$bindAddress"
+        'BOOKBOX_HOST_PORT=0'
     ) -join [Environment]::NewLine
     [IO.File]::WriteAllText($envFile, $envText, [Text.UTF8Encoding]::new($false))
 
@@ -241,19 +254,20 @@ database:
     Invoke-Docker ($composeArgs + @('up', '-d', '--wait', '--wait-timeout', '180')) | Out-Null
 
     $publishedPorts = @(
-        Invoke-Docker ($composeArgs + @('port', 'bookbox-api', '8443')) |
+        Invoke-Docker ($composeArgs + @('port', 'bookbox-api', '8787')) |
             ForEach-Object { $_.ToString().Trim() } |
             Where-Object { $_ }
     )
     if (
         $publishedPorts.Count -ne 1 -or
-        $publishedPorts[0] -notmatch '^127\.0\.0\.1:(?<port>[1-9][0-9]{0,4})$'
+        $publishedPorts[0] -notmatch ('^{0}:(?<port>[1-9][0-9]{{0,4}})$' -f
+            [regex]::Escape($bindAddress))
     ) {
-        throw "Unexpected Compose HTTPS publication: $($publishedPorts -join ', ')"
+        throw "Unexpected Compose HTTP publication: $($publishedPorts -join ', ')"
     }
     $port = [int]$Matches.port
     if ($port -gt 65535) {
-        throw "Compose returned an invalid HTTPS port: $port"
+        throw "Compose returned an invalid HTTP port: $port"
     }
 
     $apiID = (Invoke-Docker ($composeArgs + @('ps', '-q', 'bookbox-api')) | Select-Object -First 1).Trim()
@@ -357,23 +371,9 @@ database:
         throw 'A copied container secret differs from its source.'
     }
 
-    Invoke-Docker @('exec', $apiID, 'test', '-w', '/var/lib/bookbox/tls') | Out-Null
-    Invoke-Docker @('exec', $apiID, 'test', '-s', '/var/lib/bookbox/tls/server.crt') | Out-Null
-    Invoke-Docker @('exec', $apiID, 'test', '-s', '/var/lib/bookbox/tls/server.key') | Out-Null
-    $tlsKeyMode = @(Invoke-Docker @(
-        'exec', $apiID, 'stat', '-c', '%a', '/var/lib/bookbox/tls/server.key'
-    ))[0].ToString().Trim()
-    if ($tlsKeyMode -ne '600') {
-        throw "The TLS private key has unexpected mode: $tlsKeyMode"
-    }
-    Invoke-Docker @(
-        'exec', $apiID, 'openssl', 'x509',
-        '-in', '/var/lib/bookbox/tls/server.crt',
-        '-noout', '-checkend', '0'
-    ) | Out-Null
-    $healthBody = @(& curl.exe --fail --silent --show-error --insecure "https://127.0.0.1:$port/v1/health")
+    $healthBody = @(& curl.exe --fail --silent --show-error "http://${bindAddress}:$port/v1/health")
     if ($LASTEXITCODE -ne 0) {
-        throw 'The host HTTPS health request failed.'
+        throw 'The host HTTP health request failed.'
     }
     $health = $healthBody -join ''
     if (($health | ConvertFrom-Json).status -ne 'ok') {
@@ -387,10 +387,10 @@ database:
         [Text.UTF8Encoding]::new($false)
     )
     $loginBody = @(
-        & curl.exe --fail --silent --show-error --insecure `
+        & curl.exe --fail --silent --show-error `
             --header 'Content-Type: application/json' `
             --data-binary "@$loginFile" `
-            "https://127.0.0.1:$port/v1/session"
+            "http://${bindAddress}:$port/v1/session"
     )
     if ($LASTEXITCODE -ne 0) {
         throw 'The smoke login request failed.'
@@ -403,9 +403,9 @@ database:
     $books = $null
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         $booksBody = @(
-            & curl.exe --fail --silent --show-error --insecure `
+            & curl.exe --fail --silent --show-error `
                 --header "Authorization: Bearer $accessToken" `
-                "https://127.0.0.1:$port/v1/books?limit=10"
+                "http://${bindAddress}:$port/v1/books?limit=10"
         )
         if ($LASTEXITCODE -ne 0) {
             throw 'The authenticated catalog request failed.'

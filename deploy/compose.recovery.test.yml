@@ -7,9 +7,9 @@ services:
 
   bookbox-api:
     ports: !override
-      - name: recovery-https
-        target: 8443
-        published: "18443"
+      - name: recovery-http
+        target: 8787
+        published: "18787"
         host_ip: 127.0.0.1
         protocol: tcp
     volumes:
@@ -21,9 +21,6 @@ services:
         source: "${BOOKBOX_RECOVERY_CONFIG_HOST_FILE:?Set the task-scoped recovery config}"
         target: /etc/bookbox/config.yml
         read_only: true
-      - type: volume
-        source: recovery_tls_data
-        target: /var/lib/bookbox
 
   bookbox-catalog-worker:
     environment:
@@ -55,6 +52,5 @@ secrets:
 
 volumes:
   recovery_postgres_data:
-  recovery_tls_data:
   recovery_cover_cache:
   recovery_cover_backups:

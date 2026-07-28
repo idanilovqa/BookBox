@@ -10,7 +10,7 @@ param(
     [string] $CurrentPasswordFile,
     [Parameter(Mandatory)]
     [string] $NewPasswordFile,
-    [string] $BaseUrl = 'https://127.0.0.1:18443',
+    [string] $BaseUrl = 'http://127.0.0.1:18787',
     [string] $Username = 'owner',
     [ValidateRange(30, 600)]
     [int] $TimeoutSeconds = 180
@@ -64,7 +64,7 @@ function Invoke-SessionRequest {
             [Text.UTF8Encoding]::new($false)
         )
         $code = @(
-            & curl.exe --silent --show-error --insecure --output $response `
+            & curl.exe --silent --show-error --output $response `
                 --write-out '%{http_code}' --header 'Content-Type: application/json' `
                 --data-binary "@$request" ($BaseUrl.TrimEnd('/') + $Path)
         ) -join ''

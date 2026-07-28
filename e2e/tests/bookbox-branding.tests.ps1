@@ -3,18 +3,25 @@ $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $runtimeRoots = @('android', 'server', 'deploy', 'e2e', 'README.md', 'RELEASE_NOTES.md')
 Push-Location $repo
 try {
-    $matches = @(
+    $allMatches = @(
         & rg -n -i 'netstorage' @runtimeRoots --glob '!bookbox-branding.tests.ps1'
     )
+    $legacyIdentifierMatches = @($allMatches | Where-Object {
+        $_ -notmatch '^README\.md:\d+:- \[Migrate from netStorage\]\(docs/migration-from-netstorage\.md\)$' -and
+        $_ -notmatch '^RELEASE_NOTES\.md:\d+:.*\bnetStorage\b.*(?:migrat|rename|old app|old deployment)'
+    })
     $legacyPaths = @(
         & rg --files |
-            Where-Object { $_ -match '(?i)netstorage' }
+            Where-Object {
+                $_ -match '(?i)netstorage' -and
+                $_ -cne 'docs\migration-from-netstorage.md'
+            }
     )
 } finally {
     Pop-Location
 }
-if ($matches.Count -gt 0) {
-    throw "Legacy product identifiers remain:`n$($matches -join "`n")"
+if ($legacyIdentifierMatches.Count -gt 0) {
+    throw "Legacy product identifiers remain:`n$($legacyIdentifierMatches -join "`n")"
 }
 if ($legacyPaths.Count -gt 0) {
     throw "Legacy product identifiers remain in paths:`n$($legacyPaths -join "`n")"

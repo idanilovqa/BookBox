@@ -89,8 +89,18 @@ foreach ($serviceName in @('bookbox-api', 'bookbox-catalog-worker')) {
         throw "$serviceName does not use the dedicated non-root user."
     }
 }
-if ($api.ports[0].host_ip -ne '127.0.0.1' -and -not (Test-Path -LiteralPath (Join-Path (Split-Path $compose) '.env'))) {
-    throw 'Example deployment must default the API bind to loopback.'
+if (
+    [string]$api.ports[0].target -cne '8787' -or
+    [string]$api.ports[0].published -cne '8787' -or
+    [string]$api.ports[0].name -cne 'http'
+) {
+    throw 'Production API must publish named HTTP port 8787 by default.'
+}
+if (
+    -not (Test-Path -LiteralPath (Join-Path (Split-Path $compose) '.env')) -and
+    [string]$api.ports[0].host_ip -notmatch '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)'
+) {
+    throw 'Example deployment must use an RFC1918 private bind address.'
 }
 foreach ($secret in @('postgres_password', 'app_password_hash', 'session_key', 'google_books_key')) {
     if (-not $resolved.secrets.$secret.file) {

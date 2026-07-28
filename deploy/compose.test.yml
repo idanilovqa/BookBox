@@ -21,9 +21,6 @@ services:
         source: "${BOOKBOX_TEST_CONFIG_HOST_FILE:?Set BOOKBOX_TEST_CONFIG_HOST_FILE}"
         target: /etc/bookbox/config.yml
         read_only: true
-      - type: volume
-        source: test_tls_data
-        target: /var/lib/bookbox
 
   bookbox-catalog-worker:
     environment:
@@ -96,9 +93,9 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,mode=1777
     ports:
-      - name: proxied-https
-        target: 18443
-        published: "18443"
+      - name: proxied-http
+        target: 18787
+        published: "18787"
         host_ip: 127.0.0.1
         protocol: tcp
       - name: control
@@ -124,6 +121,5 @@ secrets:
 
 volumes:
   test_postgres_data:
-  test_tls_data:
   test_cover_cache:
   test_cover_backups:

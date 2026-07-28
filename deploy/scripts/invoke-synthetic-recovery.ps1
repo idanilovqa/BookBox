@@ -123,7 +123,7 @@ foreach ($entry in $exactPaths.GetEnumerator()) {
 }
 if (
     ($properties.Name -contains 'BaseUrl' -and
-        [string] $document.BaseUrl -cne 'https://127.0.0.1:18443') -or
+        [string] $document.BaseUrl -cne 'http://127.0.0.1:18787') -or
     ($properties.Name -contains 'Username' -and
         [string] $document.Username -cne 'owner') -or
     ($properties.Name -contains 'AppVersion' -and

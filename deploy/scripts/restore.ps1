@@ -9,7 +9,7 @@ param(
     [Parameter(Mandatory)]
     [string] $EnvironmentFile,
     [string] $DatabaseName = 'bookbox',
-    [string] $BaseUrl = 'https://127.0.0.1:18443',
+    [string] $BaseUrl = 'http://127.0.0.1:18787',
     [ValidateRange(30, 1800)]
     [int] $TimeoutSeconds = 300
 )
@@ -79,32 +79,6 @@ function Import-Volume {
     ) | Out-Null
 }
 
-function Get-CertificateFingerprint {
-    param([string] $Volume)
-    $copy = Join-Path $script:backup ".restored-certificate-$([Guid]::NewGuid().ToString('N')).crt"
-    Invoke-Docker @(
-        'run', '--rm', '--network', 'none', '--read-only',
-        '--mount', "type=volume,src=$Volume,dst=/source,readonly",
-        '--mount', "type=bind,src=$($script:backup.Replace('\','/')),dst=/output",
-        '--entrypoint', 'sh', 'postgres:18-alpine', '-c',
-        "test -f /source/tls/server.crt && cp /source/tls/server.crt /output/$([IO.Path]::GetFileName($copy))"
-    ) | Out-Null
-    try {
-        $certificate = New-Object Security.Cryptography.X509Certificates.X509Certificate2($copy)
-        $algorithm = [Security.Cryptography.SHA256]::Create()
-        try {
-            return ([BitConverter]::ToString(
-                $algorithm.ComputeHash($certificate.RawData)
-            )).Replace('-', ':')
-        } finally {
-            $algorithm.Dispose()
-            $certificate.Dispose()
-        }
-    } finally {
-        Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
-    }
-}
-
 if ($ProjectName -notlike 'bookbox-recovery-*') {
     throw 'This build permits restore only for a bookbox-recovery-* synthetic project.'
 }
@@ -129,7 +103,6 @@ if ($manifest.formatVersion -ne 1 -or
 }
 $allowed = @(
     'database.dump',
-    'tls_data.tar.gz',
     'cover_cache.tar.gz',
     'cover_backups.tar.gz',
     'config.yml'
@@ -201,19 +174,13 @@ if (-not (Test-Path -LiteralPath $activeConfig -PathType Leaf) -or
 }
 
 $postgresVolume = Get-ServiceVolume $resolved 'postgres' '/var/lib/postgresql'
-$tlsVolume = Get-ServiceVolume $resolved 'bookbox-api' '/var/lib/bookbox'
 $cacheVolume = Get-ServiceVolume $resolved 'bookbox-catalog-worker' '/var/lib/bookbox/covers'
 $coverBackupVolume = Get-ServiceVolume $resolved 'bookbox-catalog-worker' '/var/lib/bookbox/backups'
-foreach ($volume in @($postgresVolume, $tlsVolume, $cacheVolume, $coverBackupVolume)) {
+foreach ($volume in @($postgresVolume, $cacheVolume, $coverBackupVolume)) {
     Assert-EmptyVolume $volume
 }
-Import-Volume $tlsVolume 'tls_data.tar.gz'
 Import-Volume $cacheVolume 'cover_cache.tar.gz'
 Import-Volume $coverBackupVolume 'cover_backups.tar.gz'
-if ((Get-CertificateFingerprint $tlsVolume) -cne
-    [string] $manifest.certificateFingerprintSha256) {
-    throw 'Restored certificate fingerprint does not match the backup manifest.'
-}
 
 Invoke-Docker (@($composeArgs) + @('up', '-d', 'postgres')) | Out-Null
 $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)

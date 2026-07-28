@@ -21,7 +21,6 @@ $requirements = [ordered]@{
     'Toxiproxy readiness' = '18474'
     'Toxiproxy JSON file upload' = '(?s)toxiproxy-proxy\.json.*?--data-binary.*?@\$proxyConfig'
     'runtime version stamp' = "(?s)/v1/health.*?version -cne '1\.0\.0'"
-    'TLS fingerprint argument' = 'e2eFingerprint'
     'base URL argument' = 'e2eBaseUrl'
     'username argument' = 'e2eUsername'
     'password argument' = 'e2ePassword'
@@ -77,6 +76,20 @@ if ($runText -match '(?i)Remove-Item[^\r\n]*H:\\') {
 }
 if ($runText -match '(?i)BOOKBOX_TEST_LIBRARY_PATH=H:') {
     throw 'E2E run script must never mount H: as its synthetic library.'
+}
+if ($runText -match '(?i)tls|certificate|fingerprint|https://|8443|18443|--insecure|--no-check-certificate') {
+    throw 'E2E run script still contains TLS behavior.'
+}
+if ($runText -notmatch '18787') {
+    throw 'E2E run script must use the task-scoped HTTP port 18787.'
+}
+if (
+    [regex]::Matches(
+        $runText,
+        [regex]::Escape('-Pkotlin.compiler.execution.strategy=in-process')
+    ).Count -lt 2
+) {
+    throw 'Every no-daemon E2E Gradle lane must keep the Kotlin compiler in-process.'
 }
 if ($runText -match '(?i)\bsdkmanager(?:\.bat)?\b') {
     throw 'E2E must use the already-installed API 36 image without downloads.'

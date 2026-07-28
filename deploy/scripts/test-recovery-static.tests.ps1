@@ -59,8 +59,6 @@ $requirements = [ordered]@{
     'ignore blank stopped-service output' = '(?s)\$running\s*=.*?Where-Object.*?IsNullOrWhiteSpace'
     'password and session rotation' = 'rotate-password\.ps1'
     'database restore probe' = 'recovery_probe'
-    'TLS fingerprint verification' = 'certificateFingerprintSha256'
-    'post-restore fingerprint expression' = 'if\s*\(\(Get-Fingerprint\)\s+-cne\s+\$fingerprint\)'
     'cover cache probe' = 'cover-cache-probe'
     'cover backup probe' = 'cover-backup-probe'
     'old refresh rejection' = 'rotate-password\.ps1'
@@ -69,7 +67,11 @@ $requirements = [ordered]@{
     'asynchronous process output' = 'ReadToEndAsync'
     'finally cleanup' = '(?s)finally\s*\{.*?down.*?--volumes'
     'project resource audit' = 'com\.docker\.compose\.project'
-    'task ports' = '18443.*18474'
+    'task ports' = '18787.*18474'
+}
+
+if ($text -match '(?i)tls|certificate|fingerprint|https://|8443|18443|--insecure|--no-check-certificate') {
+    throw 'Synthetic recovery still contains TLS behavior.'
 }
 
 foreach ($entry in $requirements.GetEnumerator()) {

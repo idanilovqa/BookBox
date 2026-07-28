@@ -213,7 +213,7 @@ foreach ($path in @(
 $server = Join-Path $script:repo 'server'
 $android = Join-Path $script:repo 'android'
 $serverMain = Get-Content -LiteralPath (
-    Join-Path $server 'cmd\api\main.go'
+    Join-Path $server 'cmd\bookbox-api\main.go'
 ) -Raw
 $apiDockerfile = Get-Content -LiteralPath (
     Join-Path $script:repo 'deploy\Dockerfile.api'
@@ -284,6 +284,7 @@ Invoke-MonitoredProcess `
     -FilePath (Join-Path $android 'gradlew.bat') `
     -Arguments @(
         '--no-daemon',
+        '-Pkotlin.compiler.execution.strategy=in-process',
         'testDebugUnitTest',
         'lintDebug',
         'assembleDebug'
@@ -312,7 +313,11 @@ if ((Test-Path -LiteralPath $keystore -PathType Leaf) -and
     Invoke-MonitoredProcess `
         -Label 'Android unsigned release build' `
         -FilePath (Join-Path $android 'gradlew.bat') `
-        -Arguments @('--no-daemon', 'assembleRelease') `
+        -Arguments @(
+            '--no-daemon',
+            '-Pkotlin.compiler.execution.strategy=in-process',
+            'assembleRelease'
+        ) `
         -WorkingDirectory $android `
         -TimeoutSeconds 1200
     $unsigned = Join-Path $android 'app\build\outputs\apk\release\app-release-unsigned.apk'

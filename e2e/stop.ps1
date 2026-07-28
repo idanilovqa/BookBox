@@ -16,7 +16,7 @@ param(
 
     [string] $EmulatorSerial,
 
-    [int[]] $TaskPorts = @(18443, 18474),
+    [int[]] $TaskPorts = @(18787, 18474),
 
     [switch] $ValidateOnly
 )

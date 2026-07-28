@@ -137,41 +137,15 @@ $schemaVersion = [int64] (@(
     )
 )[0].ToString().Trim())
 
-$tlsVolume = Get-ServiceVolume $resolved 'bookbox-api' '/var/lib/bookbox'
 $cacheVolume = Get-ServiceVolume $resolved 'bookbox-catalog-worker' '/var/lib/bookbox/covers'
 $coverBackupVolume = Get-ServiceVolume $resolved 'bookbox-catalog-worker' '/var/lib/bookbox/backups'
-Export-Volume $tlsVolume 'tls_data.tar.gz'
 Export-Volume $cacheVolume 'cover_cache.tar.gz'
 Export-Volume $coverBackupVolume 'cover_backups.tar.gz'
 Copy-Item -LiteralPath $config -Destination (Join-Path $script:destination 'config.yml')
 
-$certificateCopy = Join-Path $script:destination '.certificate.crt'
-Invoke-Docker @(
-    'run', '--rm', '--network', 'none', '--read-only',
-    '--mount', "type=volume,src=$tlsVolume,dst=/source,readonly",
-    '--mount', "type=bind,src=$($script:destination.Replace('\','/')),dst=/output",
-    '--entrypoint', 'sh', 'postgres:18-alpine', '-c',
-    'test -f /source/tls/server.crt && cp /source/tls/server.crt /output/.certificate.crt'
-) | Out-Null
-try {
-    $certificate = New-Object Security.Cryptography.X509Certificates.X509Certificate2($certificateCopy)
-    $algorithm = [Security.Cryptography.SHA256]::Create()
-    try {
-        $fingerprint = ([BitConverter]::ToString(
-            $algorithm.ComputeHash($certificate.RawData)
-        )).Replace('-', ':')
-    } finally {
-        $algorithm.Dispose()
-        $certificate.Dispose()
-    }
-} finally {
-    Remove-Item -LiteralPath $certificateCopy -Force -ErrorAction SilentlyContinue
-}
-
 $entries = [Collections.Generic.List[object]]::new()
 foreach ($definition in @(
     @('database.dump', 'postgres-custom'),
-    @('tls_data.tar.gz', 'docker-volume-tar-gzip'),
     @('cover_cache.tar.gz', 'docker-volume-tar-gzip'),
     @('cover_backups.tar.gz', 'docker-volume-tar-gzip'),
     @('config.yml', 'configuration')
@@ -194,7 +168,6 @@ foreach ($definition in @(
         schemaVersion = $schemaVersion
         databaseName = $DatabaseName
         projectName = $ProjectName
-        certificateFingerprintSha256 = $fingerprint
         files = @($entries)
     } | ConvertTo-Json -Depth 8),
     [Text.UTF8Encoding]::new($false)

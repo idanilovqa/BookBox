@@ -29,7 +29,7 @@ $sourceAfter = Join-Path $taskRoot 'source-after.json'
 $ownedProcessIds = [Collections.Generic.List[int]]::new()
 $ownedLongLivedProcessIds = [Collections.Generic.List[int]]::new()
 $taskPorts = [Collections.Generic.List[int]]::new()
-$taskPorts.Add(18443)
+$taskPorts.Add(18787)
 $taskPorts.Add(18474)
 $adb = ''
 $emulatorSerial = ''
@@ -319,25 +319,11 @@ function Wait-Toxiproxy {
     throw 'Toxiproxy control endpoint did not become ready.'
 }
 
-function Get-ApiFingerprint {
-    $apiLogs = Invoke-DockerChecked ($composeArgs + @(
-        'logs', '--no-color', 'bookbox-api'
-    ))
-    $match = [regex]::Match(
-        ($apiLogs -join [Environment]::NewLine),
-        'BookBox certificate SHA-256:\s*((?:[0-9A-F]{2}:){31}[0-9A-F]{2})'
-    )
-    if (-not $match.Success) {
-        throw 'The API did not print its TLS fingerprint.'
-    }
-    $match.Groups[1].Value
-}
-
 function Assert-ApiVersion {
     $body = @(
-        & curl.exe --fail --silent --show-error --insecure `
+        & curl.exe --fail --silent --show-error `
             --connect-timeout 3 --max-time 10 `
-            'https://127.0.0.1:18443/v1/health'
+            'http://127.0.0.1:18787/v1/health'
     )
     if ($LASTEXITCODE -ne 0) {
         throw 'Unable to read the public runtime health version.'
@@ -479,7 +465,7 @@ if (
 ) {
     throw 'Refusing an unsafe E2E temporary root.'
 }
-foreach ($port in @(18443, 18474)) {
+foreach ($port in @(18787, 18474)) {
     if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue) {
         throw "Task-scoped port $port is already in use."
     }
@@ -510,25 +496,18 @@ try {
         "BOOKBOX_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $composePath (Join-Path $secrets 'google_books_key.txt'))"
         "BOOKBOX_TEST_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $composePath (Join-Path $secrets 'google_books_key.txt'))"
         'BOOKBOX_BIND_ADDRESS=127.0.0.1'
-        'HOST_PORT=18443'
+        'BOOKBOX_HOST_PORT=18787'
     ) -join [Environment]::NewLine
     # Create this before any fallible fixture setup so finally cleanup can
     # always resolve the unique Compose project and remove the task root.
     Write-Utf8 -Path $environmentFile -Value $environment
 
     Write-Utf8 -Path $config -Value @'
-listen: ":8443"
+listen: ":8787"
 roots:
   - id: audiobooks
     name: Audiobooks
     container_path: /library/audiobooks
-tls:
-  cert_path: /var/lib/bookbox/tls/server.crt
-  key_path: /var/lib/bookbox/tls/server.key
-  hosts:
-    - localhost
-    - 127.0.0.1
-    - 10.0.2.2
 auth:
   username: owner
   password_hash_file: /run/bookbox-secrets/app_password_hash
@@ -654,7 +633,7 @@ database:
         -WorkingDirectory $repoRoot
 
     Wait-Toxiproxy
-    $proxyBody = '{"name":"bookbox","listen":"0.0.0.0:18443","upstream":"bookbox-api:8443"}'
+    $proxyBody = '{"name":"bookbox","listen":"0.0.0.0:18787","upstream":"bookbox-api:8787"}'
     $proxyConfig = Join-Path $taskRoot 'toxiproxy-proxy.json'
     Write-Utf8 -Path $proxyConfig -Value $proxyBody
     $null = & curl.exe --fail --silent --show-error `
@@ -666,10 +645,9 @@ database:
         throw 'Unable to configure the task-scoped Toxiproxy route.'
     }
     & (Join-Path $repoRoot 'deploy\scripts\wait-healthy.ps1') `
-        -BaseUrl 'https://127.0.0.1:18443' `
+        -BaseUrl 'http://127.0.0.1:18787' `
         -TimeoutSeconds 180
     Assert-ApiVersion
-    $fingerprint = Get-ApiFingerprint
 
     $localTooling = Join-Path $repoRoot '.tooling'
     $localJdk = Join-Path $localTooling 'jdk17\jdk-17.0.19+10'
@@ -821,6 +799,7 @@ database:
         -FilePath $env:ComSpec `
         -Arguments (@('/d', '/s', '/c', 'call', $gradle) + @(
             '--no-daemon',
+            '-Pkotlin.compiler.execution.strategy=in-process',
             '--console=plain',
             ':app:connectedDebugAndroidTest',
             '-Pandroid.testInstrumentationRunnerArguments.notClass=com.rendref.bookbox.e2e.RealServerJourneyTest'
@@ -831,11 +810,11 @@ database:
         -FilePath $env:ComSpec `
         -Arguments (@('/d', '/s', '/c', 'call', $gradle) + @(
             '--no-daemon',
+            '-Pkotlin.compiler.execution.strategy=in-process',
             '--console=plain',
             ':app:connectedDebugAndroidTest',
             '-Pandroid.testInstrumentationRunnerArguments.class=com.rendref.bookbox.e2e.RealServerJourneyTest',
-            '-Pandroid.testInstrumentationRunnerArguments.e2eBaseUrl=https://10.0.2.2:18443/',
-            "-Pandroid.testInstrumentationRunnerArguments.e2eFingerprint=$fingerprint",
+            '-Pandroid.testInstrumentationRunnerArguments.e2eBaseUrl=http://10.0.2.2:18787/',
             "-Pandroid.testInstrumentationRunnerArguments.e2eUsername=$username",
             "-Pandroid.testInstrumentationRunnerArguments.e2ePassword=$password",
             '-Pandroid.testInstrumentationRunnerArguments.e2eToxiproxyPort=18474'

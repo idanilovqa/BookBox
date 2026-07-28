@@ -1,5 +1,5 @@
 param(
-    [string] $BaseUrl = 'https://127.0.0.1:8443',
+    [string] $BaseUrl = 'http://127.0.0.1:8787',
     [ValidateRange(1, 1800)]
     [int] $TimeoutSeconds = 180
 )
@@ -15,7 +15,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
     $previous = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        $body = @(& curl.exe --fail --silent --show-error --insecure `
+        $body = @(& curl.exe --fail --silent --show-error `
             --connect-timeout 3 --max-time 5 $uri 2>$null)
         $exitCode = $LASTEXITCODE
     } finally {

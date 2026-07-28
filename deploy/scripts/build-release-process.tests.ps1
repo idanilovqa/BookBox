@@ -41,6 +41,14 @@ if (
 ) {
     throw 'Release builds must export the resolved Android SDK to every Gradle lane.'
 }
+if (
+    [regex]::Matches(
+        $text,
+        [regex]::Escape('-Pkotlin.compiler.execution.strategy=in-process')
+    ).Count -lt 2
+) {
+    throw 'Every no-daemon Gradle release lane must keep the Kotlin compiler in-process.'
+}
 foreach ($sidecar in @('APK_METADATA.json', 'SHA256SUMS.txt')) {
     if ($text -notmatch [regex]::Escape($sidecar)) {
         throw "Release startup must remove the prior $sidecar."
