@@ -1,123 +1,125 @@
 # Install BookBox
 
-These steps install the server on Windows and sideload the Android 16 app on a Galaxy S23 Ultra.
+These steps install the Windows server, headless discovery process, and Android 16 app.
 
-## Prepare Windows
+## Network requirements
 
-Install Docker Desktop and select Linux containers. Confirm Docker Desktop can bind the drive that holds your audiobook library. The default library is:
+Use a Windows computer and Android phone on the same trusted private LAN. Reserve the Windows computer's IPv4 address in your router. Do not use guest Wi-Fi, a Windows Public network profile, WAN access, or router port forwarding.
 
-```text
-H:\Audiobooks
-```
+BookBox v1 uses unencrypted HTTP. Other devices on the LAN can observe the username, password, session tokens, catalog data, and audiobook bytes. Use a private network you control.
 
-Reserve the Windows computer's LAN IPv4 address in your router's DHCP settings. Use an address from your private home network. Do not configure router port forwarding for BookBox.
+## Prepare the server files
 
-Open PowerShell in the repository root:
+Install Docker Desktop with Linux containers and confirm that Docker can access your audiobook folder. Open PowerShell in the repository root:
 
 ```powershell
 Copy-Item deploy\.env.example deploy\.env
-Copy-Item deploy\config.yml.example deploy\config.yml
+Copy-Item deploy\config.example.yml deploy\config.yml
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\new-secrets.ps1
 ```
 
-If the repository contains `deploy\config.example.yml` instead of `deploy\config.yml.example`, copy that file. The secret generator asks for the Android app password twice and writes restricted secret files without printing plaintext.
-
-Edit `deploy\.env`:
+Set the source library, reserved Windows address, and port in `deploy\.env`:
 
 ```dotenv
 BOOKBOX_LIBRARY_PATH=H:/Audiobooks
-BOOKBOX_BIND_ADDRESS=192.168.1.50
-HOST_PORT=8443
+BOOKBOX_BIND_ADDRESS=192.168.1.25
+BOOKBOX_HOST_PORT=8787
 ```
 
-Replace `192.168.1.50` with the reserved Windows address. Avoid `0.0.0.0`; bind the service to the chosen private-LAN interface.
+Use an RFC1918 address assigned to a Windows interface with a Private network profile. Keep `listen: ":8787"` in `deploy\config.yml` unless you change the container port and related deployment files.
 
-Add the same address to `tls.hosts` in `deploy\config.yml` before the first start:
-
-```yaml
-tls:
-  cert_path: /var/lib/bookbox/tls/server.crt
-  key_path: /var/lib/bookbox/tls/server.key
-  hosts:
-    - localhost
-    - 127.0.0.1
-    - 192.168.1.50
-```
-
-Keep the container root at `/library/audiobooks`. The host path belongs in `.env`.
-
-## Validate and start
+Validate and build the deployment:
 
 ```powershell
 docker compose --env-file deploy\.env -f deploy\compose.yml config
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\audit-compose.ps1
-docker compose --env-file deploy\.env -f deploy\compose.yml up -d --build
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\wait-healthy.ps1 `
-  -BaseUrl https://192.168.1.50:8443
+docker compose --env-file deploy\.env -f deploy\compose.yml build
+```
+
+## Build and install discovery
+
+Build the Windows discovery executable:
+
+```powershell
+New-Item -ItemType Directory -Force artifacts | Out-Null
+Set-Location server
+go build -o ..\artifacts\bookbox-discovery.exe .\cmd\bookbox-discovery
+Set-Location ..
+```
+
+Open an elevated PowerShell window in the repository root. Set the same private address and port, then install the executable, scheduled task, and firewall rules:
+
+```powershell
+$env:BOOKBOX_BIND_ADDRESS = '192.168.1.25'
+$env:BOOKBOX_HOST_PORT = '8787'
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\install-bookbox-discovery.ps1 `
+  -SourceExecutable artifacts\bookbox-discovery.exe
+```
+
+The installer creates two inbound Windows Firewall rules:
+
+- TCP 8787 for BookBox HTTP
+- UDP 5353 for mDNS
+
+Both rules use the Private profile, the selected local address, and `LocalSubnet` as the remote scope. The installer copies the executable and managed scripts under `%LOCALAPPDATA%\BookBox`, writes an ownership manifest, and registers `\BookBox\BookBox Discovery` for logon. The process has no tray window.
+
+## Start and verify
+
+Start the Docker deployment and discovery process:
+
+```powershell
+$env:BOOKBOX_BIND_ADDRESS = '192.168.1.25'
+$env:BOOKBOX_HOST_PORT = '8787'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\start-bookbox.ps1
+```
+
+The start script waits for the API, starts discovery, checks process ownership, and confirms that `bookbox.local` resolves to the selected address.
+
+Run these checks on Windows:
+
+```powershell
+Resolve-DnsName bookbox.local -Type A
+Invoke-RestMethod http://bookbox.local:8787/v1/ready
 docker compose --env-file deploy\.env -f deploy\compose.yml ps
 ```
 
-The API, catalog worker, and PostgreSQL should report healthy. PostgreSQL and the worker publish no host ports.
+Use `http://192.168.1.25:8787` if an Android device cannot resolve `bookbox.local`.
 
-## Open the private Windows Firewall port
-
-Run an elevated PowerShell window:
+Stop the deployment and the discovery process started by this command:
 
 ```powershell
-New-NetFirewallRule `
-  -DisplayName 'BookBox HTTPS 8443' `
-  -Direction Inbound `
-  -Protocol TCP `
-  -LocalPort 8443 `
-  -Action Allow `
-  -Profile Private
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\stop-bookbox.ps1
 ```
 
-Change the port if `HOST_PORT` differs. Keep the rule on the Private profile.
-
-## Record the server fingerprint
+After a later logon starts the installed task, pass its state directory when stopping:
 
 ```powershell
-docker compose --env-file deploy\.env -f deploy\compose.yml logs bookbox-api
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\stop-bookbox.ps1 `
+  -StateDirectory "$env:LOCALAPPDATA\BookBox\state" `
+  -ComposeFile deploy\compose.yml
 ```
 
-Copy the full value after `BookBox certificate SHA-256:` from the local Windows console. Do not send the fingerprint through the same network path that you are verifying.
+Remove discovery from an elevated PowerShell window:
 
-## Build or obtain the APK
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\remove-bookbox-discovery.ps1
+```
 
-The full local release gate creates a debug-signed sideload package:
+## Build and install Android
+
+Run the release build:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\build-release.ps1
 ```
 
-The output is `artifacts\BookBox-v1.0.0-debug.apk`. `artifacts\SHA256SUMS.txt` records its digest. A signed release APK appears beside it when you configure the optional keystore described in [Release notes](../RELEASE_NOTES.md).
+The debug package is `artifacts\BookBox-v1.0.0-debug.apk`. Compare its digest with `artifacts\SHA256SUMS.txt`, copy it to the phone, and install it. If Android asks for permission to install unknown apps, grant permission to the file manager used for this installation and revoke it afterward.
 
-Copy the APK to the Galaxy. In Samsung Settings, allow the chosen file manager or browser to install unknown apps for this installation. Open the APK, install it, then revoke that permission if you do not use it for other packages.
+Open BookBox and enter `http://bookbox.local:8787`. Use the username from `deploy\config.yml` and the password entered during secret generation. Enter the private-IP URL if `.local` resolution fails.
 
-## Connect once
-
-1. Put the Galaxy and Windows computer on the same trusted home Wi-Fi.
-2. Open BookBox.
-3. Enter `https://192.168.1.50:8443`.
-4. Inspect the certificate and compare the full fingerprint with the Windows console.
-5. Approve the pin only after every character matches.
-6. Sign in as `owner` with the app password from secret generation.
-
-The app remembers the server address, certificate pin, and sign-in state. It does not use automatic discovery.
-
-## Choose the Android destination
-
-Tap **Choose Android folder**. Select or create an internal-storage folder such as `Audiobooks`, then grant access in Android's system picker. BookBox stores the persisted tree permission.
-
-The app writes only to this Android tree. It cannot delete, move, rename, tag, or upload files in the Windows source library.
-
-Android 16 asks for notification permission when you start the first background transfer. Grant it so the required transfer progress notification can appear. If you deny it, return to the app's notification settings and grant permission before testing background copies.
-
-## Run the first scan
-
-The worker scans at startup. Open Audiobooks and pull to refresh, or request a rescan from Settings. Large libraries take time because the worker probes audio files and may query metadata providers.
-
-Use Folders mode to compare raw source grouping. Search by title, author, genre, or year. Open **View raw files** on a card before copying if the grouping needs review.
+Choose a dedicated Android destination folder with the system folder picker before the first copy. BookBox retains access to that folder without broad storage permission.
 
 Continue with [Android usage](android.md), [operations](operations.md), and the [Galaxy checklist](galaxy-s23-checklist.md).

@@ -14,15 +14,16 @@ Build SHA-256: ____________________
 
 Test date: ____________________
 
-Record evidence for each item. Leave failed or untested items unchecked. Add the observed result and any issue reference.
+Record evidence for each item. Leave failed or untested items unchecked.
 
 ## Install and private LAN
 
-- [ ] The APK signature verifies before sideload.
-- [ ] Android installs and launches the selected v1.0.0 APK.
-- [ ] The app reaches the reserved Windows address on trusted home Wi-Fi.
-- [ ] The app cannot reach BookBox from mobile data or an untrusted external network.
+- [ ] The APK signature and checksum verify before sideload.
+- [ ] Android installs and launches the selected BookBox APK.
+- [ ] Windows uses a Private network profile.
+- [ ] Windows Firewall limits TCP 8787 and UDP 5353 to Private plus `LocalSubnet`.
 - [ ] The router has no BookBox port-forwarding rule.
+- [ ] The app cannot reach BookBox from mobile data, guest Wi-Fi, or an external network.
 
 Evidence:
 
@@ -30,13 +31,14 @@ Evidence:
 
 ```
 
-## Identity and remembered connection
+## Discovery and sign-in
 
-- [ ] The fingerprint on the Galaxy matches the full fingerprint printed on Windows.
-- [ ] A one-character mismatch blocks sign-in and shows no credential request.
-- [ ] The app remembers the approved server after process restart.
-- [ ] The app restores sign-in after a Galaxy reboot without storing the plaintext password.
-- [ ] A deliberate server certificate change requires a fresh comparison and approval.
+- [ ] `bookbox.local` resolves to the reserved Windows private address.
+- [ ] The app connects with `bookbox.local`, username, and password.
+- [ ] The app connects with the private-IP fallback.
+- [ ] A wrong password fails without saving it.
+- [ ] **Sign in again** requires the password.
+- [ ] **Reset saved connection** clears tokens and the saved server but keeps downloads and history.
 
 Evidence:
 
@@ -46,12 +48,11 @@ Evidence:
 
 ## Catalog and navigation
 
-- [ ] Audiobooks mode displays cards with cover, title, author, year, and genre where available.
-- [ ] Search finds a known book by title.
-- [ ] Search finds known entries by author, genre, and year.
+- [ ] Audiobooks mode displays available covers and metadata.
+- [ ] Search finds a known book by title and author.
 - [ ] Folders mode browses the raw hierarchy.
-- [ ] **View raw files** opens the containing folder, highlights the book's assigned files, and keeps sibling files visible.
-- [ ] A folder containing distinct `.m4b` books displays separate cards and copies them into separate Android subfolders.
+- [ ] **View raw files** opens the containing folder and marks assigned files.
+- [ ] Separate `.m4b` books in one source folder appear as separate catalog items.
 
 Evidence:
 
@@ -63,9 +64,9 @@ Evidence:
 
 - [ ] Android's system picker grants a dedicated destination tree.
 - [ ] The app remembers the destination after process restart.
-- [ ] A copied audiobook appears under the expected Android-relative path.
+- [ ] A copied audiobook appears at the expected Android path.
 - [ ] The copied bytes match the server transfer manifest.
-- [ ] Deleting or moving the Android copy with another app does not change Windows.
+- [ ] Deleting or moving the Android copy does not change Windows.
 
 Evidence:
 
@@ -76,12 +77,12 @@ Evidence:
 ## Background and recovery
 
 - [ ] A user-started transfer continues with the screen off.
-- [ ] A fresh install requests notification permission in transfer context.
-- [ ] Android displays the transfer notification while work runs.
-- [ ] A Wi-Fi interruption pauses or retries without corrupting the final file.
+- [ ] Android requests notification permission during a transfer.
+- [ ] Android displays transfer progress when notification permission is granted.
+- [ ] A Wi-Fi interruption does not corrupt the final file.
 - [ ] The transfer resumes from a verified byte range after Wi-Fi returns.
-- [ ] A reboot leaves unfinished work visible and requires the documented user resume action.
-- [ ] Samsung battery settings used during the test are recorded below.
+- [ ] Reboot leaves unfinished work visible and requires the documented resume action.
+- [ ] The tester records the Samsung battery setting used.
 
 Evidence and battery setting:
 
@@ -92,9 +93,9 @@ Evidence and battery setting:
 ## Destination conflicts
 
 - [ ] **Replace** changes only the conflicting Android destination file.
-- [ ] **Keep both** creates a deterministic alternate Android filename.
+- [ ] **Keep both** creates a numbered Android filename.
 - [ ] **Skip** leaves the existing Android file unchanged.
-- [ ] The app waits for a choice and does not resolve a destination conflict on its own.
+- [ ] The app waits for the user's conflict choice.
 
 Evidence:
 
@@ -104,11 +105,22 @@ Evidence:
 
 ## Windows source boundary
 
-- [ ] A before-and-after manifest proves that Android browse, search, review, and copy actions changed no Windows source file.
-- [ ] The API container shows the audiobook bind as read-only.
-- [ ] Android exposes no upload, source delete, source move, source rename, or tag-edit action.
-- [ ] A worker cover publication changes only the expected recognized cover path.
-- [ ] PostgreSQL contains the matching worker cover event and original-cover backup key.
+- [ ] A before-and-after manifest shows no source change from Android browse, search, review, or copy.
+- [ ] The API container mounts the audiobook source read-only.
+- [ ] Android exposes no source upload, delete, move, rename, or tag-edit action.
+- [ ] A worker cover publication changes one recognized cover path.
+- [ ] PostgreSQL contains the matching cover event and backup key.
+
+Evidence:
+
+```text
+
+```
+
+## HTTP risk acknowledgment
+
+- [ ] The tester used a trusted private LAN controlled by the operator.
+- [ ] The tester understands that HTTP exposes credentials, tokens, metadata, and audiobook bytes to LAN observers.
 
 Evidence:
 
@@ -118,8 +130,8 @@ Evidence:
 
 ## Sign-off
 
-- [ ] Every required item above passed.
-- [ ] Failures have issue references and block release sign-off.
+- [ ] Each required item passed.
+- [ ] Issue references document failures and block release sign-off.
 
 Tester signature: ____________________
 

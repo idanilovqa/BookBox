@@ -1,35 +1,43 @@
 # Backup and recovery
 
-BookBox's recovery test uses a unique synthetic Docker project and a temporary
-library. It verifies a PostgreSQL dump, the TLS identity volume, non-secret
-configuration, the cover cache, original-cover backups, and password/session
-rotation:
+The automated recovery test uses a synthetic Docker project and temporary library:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File deploy\scripts\test-recovery.ps1
 ```
 
-The test never reads `H:\Audiobooks`. It removes only its matching
-`bookbox-recovery-<run-id>` containers, networks, volumes, local images, and
-temporary directory. Failure diagnostics exclude secret files and backup
-payloads.
+The test verifies a PostgreSQL dump, non-secret configuration, cover cache, original-cover backups, and secret rotation. Its backup payload contains:
+
+- `database.dump`
+- `cover_cache.tar.gz`
+- `cover_backups.tar.gz`
+- `config.yml`
+- `manifest.json`
+
+The manifest records file sizes and SHA-256 digests. The restore test rejects missing, extra, renamed, or changed payload files.
+
+The synthetic test never reads `H:\Audiobooks`. It removes only resources that match its `bookbox-recovery-<run-id>` project and temporary root.
 
 ## Production status
 
-Production backup, restore, and operator cover rollback are intentionally
-disabled in this implementation candidate until their high-impact permissions
-are explicitly approved and the guarded production paths pass the release
-tests. Do not adapt the synthetic scripts by removing their project-name or
-temporary-root checks.
+The current implementation candidate does not enable production backup or restore. `backup.ps1` and `restore.ps1` accept only synthetic `bookbox-recovery-*` projects under the guarded temporary recovery root. Do not weaken those checks for a production deployment.
 
-The intended production backup payload is PostgreSQL, the TLS
-certificate/private-key volume, cover cache, original-cover backup volume, and
-non-secret configuration. It must exclude the application password hash,
-PostgreSQL password, session key, Google Books key, and Android credentials.
+Keep a separate backup of the Windows audiobook source with your normal Windows backup tool. BookBox does not include source audio in its catalog backup. Android downloads also remain outside the server backup.
 
-An eventual cover rollback command must accept an audited cover-event UUID,
-verify the recorded hashes and confined recognized cover path, replace only
-that one cover from its backup, append a new audit event, and trigger a catalog
-rescan. It must never be callable from Android or change audio, tags, or
-folders.
+If the catalog database becomes unavailable and no approved production restore exists, preserve the Windows source library, create new BookBox secrets and empty BookBox volumes, then let the worker rebuild the catalog. Review decisions, worker jobs, and cover audit history do not survive a clean catalog rebuild.
+
+## Secret handling
+
+Do not place these files in a recovery archive:
+
+- application password hash
+- PostgreSQL password
+- session key
+- Google Books key
+
+Generate new secrets for a clean installation. Each Android user must enter the current BookBox password after session invalidation.
+
+## Cover recovery boundary
+
+An operator cover rollback must use an audited cover-event UUID, verify the recorded hashes and confined cover path, replace one recognized cover file from its backup, append a new audit event, and request a catalog rescan. Android must not expose this operation. Stop if the current cover digest differs from the selected event.

@@ -1,273 +1,145 @@
 # Set up the BookBox server on Windows
 
-This first server release exposes configured audiobook files over authenticated HTTPS. The API can browse and download from the library bind, but Docker mounts that bind read-only and the API has no upload, rename, move, tag-edit, or delete route. PostgreSQL stores the v1 catalog, scan state, indexed metadata, grouping and match reviews, worker jobs, and cover audit events.
+BookBox exposes configured audiobook files through an authenticated HTTP API. Docker mounts the source library read-only in the API container. The API has no upload, rename, move, tag-edit, or delete route. The catalog worker can write validated cover images through its separate library mount and records each cover change.
 
 ## Prerequisites
 
-- Windows 11 with Docker Desktop running Linux containers
-- A private home network
-- `H:\Audiobooks` (or another folder you choose)
+- Windows 11 with Docker Desktop using Linux containers
+- Go for building the Windows discovery executable
 - PowerShell 5.1 or newer
+- A trusted private home network
+- `H:\Audiobooks`, or another source folder
 
-In Docker Desktop, allow access to the drive that contains the library. On current Docker Desktop releases this is normally available through WSL integration; if Docker reports that the bind source is unavailable, open Docker Desktop settings and grant the relevant drive/folder access. Do not continue until Docker can bind the folder.
+Reserve the Windows computer's LAN IPv4 address in your router. Confirm that Windows assigns the interface a Private network profile:
 
-Reserve the Windows computer's current LAN IPv4 address in the router's DHCP settings. Before the first API start, use that exact reserved address for `BOOKBOX_BIND_ADDRESS` and add it under `tls.hosts` in `deploy\config.yml`. A stable local DNS name may be an additional SAN, but Android still needs a reachable reserved bind address. The server certificate is generated only when it is absent. Changing `tls.hosts` later does not rotate an existing certificate.
+```powershell
+Get-NetConnectionProfile
+Get-NetIPAddress -AddressFamily IPv4
+```
+
+BookBox rejects non-RFC1918 discovery addresses. Do not bind BookBox to `0.0.0.0`.
 
 ## Create configuration and secrets
 
-Run these commands from the repository root:
+Run from the repository root:
 
 ```powershell
 Copy-Item deploy\.env.example deploy\.env
 Copy-Item deploy\config.example.yml deploy\config.yml
-New-Item -ItemType Directory -Force deploy\secrets | Out-Null
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\new-secrets.ps1
 ```
 
-Expected result: untracked local files `deploy\.env` and `deploy\config.yml` exist. Git ignores them and live secret files.
+The secret script asks for the application password twice. It writes a PostgreSQL password, Argon2id application password hash, raw session key, and optional empty Google Books key file under `deploy\secrets`. It refuses to overwrite non-empty core secrets.
 
-Edit `deploy\.env`. Set `BOOKBOX_LIBRARY_PATH=H:/Audiobooks` and leave `HOST_PORT=8443` unless that port is already used. The safe example bind is `127.0.0.1`, which is local-only. For Android, replace it with the explicitly reserved LAN IPv4 address, such as `192.168.1.50`. Do not use `0.0.0.0`: it listens on every Windows interface, potentially including VPN and other non-home networks. All host-source variables are required.
+Edit `deploy\.env`:
 
-Edit `deploy\config.yml` and add the reserved LAN address or stable DNS name before the first start:
-
-```yaml
-tls:
-  cert_path: /var/lib/bookbox/tls/server.crt
-  key_path: /var/lib/bookbox/tls/server.key
-  hosts:
-    - localhost
-    - 127.0.0.1
-    - 192.168.1.50 # replace with the reserved address
+```dotenv
+BOOKBOX_LIBRARY_PATH=H:/Audiobooks
+BOOKBOX_CONFIG_HOST_FILE=./config.yml
+BOOKBOX_POSTGRES_PASSWORD_HOST_FILE=./secrets/postgres_password.txt
+BOOKBOX_PASSWORD_HASH_HOST_FILE=./secrets/app_password_hash.txt
+BOOKBOX_SESSION_KEY_HOST_FILE=./secrets/session_key.bin
+BOOKBOX_GOOGLE_BOOKS_KEY_HOST_FILE=./secrets/google_books_key.txt
+BOOKBOX_BIND_ADDRESS=192.168.1.25
+BOOKBOX_HOST_PORT=8787
 ```
 
-Keep the container paths and secret-file paths from the example unchanged. Secret values belong in files, never in `.env` or YAML.
+Replace the example address with the reserved address assigned to the Windows computer. Keep secrets out of `.env` and `deploy\config.yml`.
 
-Generate a printable PostgreSQL password and an exact raw 32-byte session key without a byte-order mark:
-
-```powershell
-$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-$postgresBytes = New-Object byte[] 32
-$sessionBytes = New-Object byte[] 32
-$rng.GetBytes($postgresBytes)
-$rng.GetBytes($sessionBytes)
-$rng.Dispose()
-
-$postgresPassword = [Convert]::ToBase64String($postgresBytes)
-[IO.File]::WriteAllText(
-    (Resolve-Path deploy\secrets).Path + '\postgres_password.txt',
-    $postgresPassword,
-    [Text.UTF8Encoding]::new($false)
-)
-[IO.File]::WriteAllBytes(
-    (Resolve-Path deploy\secrets).Path + '\session_key.bin',
-    $sessionBytes
-)
-
-[Array]::Clear($postgresBytes, 0, $postgresBytes.Length)
-[Array]::Clear($sessionBytes, 0, $sessionBytes.Length)
-$postgresPassword = $null
-```
-
-Restrict the local secrets to your Windows account and `SYSTEM`:
-
-```powershell
-$secretDirectory = (Resolve-Path deploy\secrets).Path
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-& icacls $secretDirectory /inheritance:r /grant:r "${identity}:(OI)(CI)(F)" '*S-1-5-18:(OI)(CI)(F)'
-if ($LASTEXITCODE -ne 0) { throw 'Failed to secure the secrets directory.' }
-Get-ChildItem -LiteralPath $secretDirectory -File | ForEach-Object {
-    & icacls $_.FullName /inheritance:r /grant:r "${identity}:(F)" '*S-1-5-18:(F)'
-    if ($LASTEXITCODE -ne 0) { throw "Failed to secure secret file: $($_.Name)" }
-}
-```
-
-Expected result: each `icacls` command reports one successfully processed file or directory and no failures.
-
-## Generate the app password hash
-
-Compose secrets do not exist yet, so bootstrap the admin binary by building the Dockerfile directly under a unique temporary image tag:
-
-```powershell
-$bootstrapTag = 'bookbox-bootstrap-' + [Guid]::NewGuid().ToString('N')
-docker build -f deploy\Dockerfile.api -t $bootstrapTag .
-```
-
-Expected result: Docker reports a successful image build tagged with the generated name.
-
-The following PowerShell reads the password twice without displaying it, sends it only over redirected stdin, accepts exactly one Argon2id output line, and writes UTF-8 without a byte-order mark:
-
-```powershell
-$firstSecure = Read-Host 'App password' -AsSecureString
-$secondSecure = Read-Host 'Confirm app password' -AsSecureString
-
-function Convert-SecureValue([Security.SecureString]$Value) {
-    $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Value)
-    try {
-        [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
-    } finally {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)
-    }
-}
-
-$first = Convert-SecureValue $firstSecure
-$second = Convert-SecureValue $secondSecure
-if ($first -cne $second) {
-    $first = $null
-    $second = $null
-    throw 'Passwords do not match.'
-}
-
-$startInfo = [Diagnostics.ProcessStartInfo]::new()
-$startInfo.FileName = 'docker'
-$startInfo.Arguments = "run --rm -i --entrypoint bookbox-admin $bootstrapTag hash-password --stdin"
-$startInfo.UseShellExecute = $false
-$startInfo.CreateNoWindow = $true
-$startInfo.RedirectStandardInput = $true
-$startInfo.RedirectStandardOutput = $true
-$startInfo.RedirectStandardError = $true
-$process = [Diagnostics.Process]::new()
-$process.StartInfo = $startInfo
-if (-not $process.Start()) { throw 'Could not start Docker.' }
-$process.StandardInput.WriteLine($first)
-$process.StandardInput.WriteLine($second)
-$process.StandardInput.Close()
-$hashOutput = $process.StandardOutput.ReadToEnd()
-$hashError = $process.StandardError.ReadToEnd()
-$process.WaitForExit()
-$first = $null
-$second = $null
-if ($process.ExitCode -ne 0) {
-    throw "Password hashing failed: $hashError"
-}
-
-$hashLines = @($hashOutput -split '\r?\n' | Where-Object { $_ })
-if (
-    $hashLines.Count -ne 1 -or
-    $hashLines[0] -notmatch '^\$argon2id\$v=19\$m=65536,t=3,p=2\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+$'
-) {
-    throw 'The admin command did not return exactly one valid Argon2id line.'
-}
-[IO.File]::WriteAllText(
-    (Resolve-Path deploy\secrets).Path + '\app_password_hash.txt',
-    $hashLines[0],
-    [Text.UTF8Encoding]::new($false)
-)
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-& icacls deploy\secrets\app_password_hash.txt /inheritance:r /grant:r "${identity}:(F)" '*S-1-5-18:(F)'
-if ($LASTEXITCODE -ne 0) { throw 'Failed to secure the app password hash.' }
-docker image rm $bootstrapTag
-```
-
-Expected result: one secret file is created, `icacls` reports success, and Docker removes only the uniquely tagged bootstrap image. The plaintext password is not an argument, console output, environment variable, or file.
-
-## Validate and start
-
-Always supply the deploy env file when running Compose from the repository root:
+## Validate and build
 
 ```powershell
 docker compose --env-file deploy\.env -f deploy\compose.yml config
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\audit-compose.ps1
 docker compose --env-file deploy\.env -f deploy\compose.yml build
-docker compose --env-file deploy\.env -f deploy\compose.yml up -d --wait --wait-timeout 180
+```
+
+Compose should resolve the project as `bookbox-prod`, publish only the API port, keep PostgreSQL on an internal network, and mount the API source library read-only.
+
+## Install the discovery process
+
+Build the executable:
+
+```powershell
+New-Item -ItemType Directory -Force artifacts | Out-Null
+Push-Location server
+go build -o ..\artifacts\bookbox-discovery.exe .\cmd\bookbox-discovery
+Pop-Location
+```
+
+Open an elevated PowerShell window. Supply the selected address and port:
+
+```powershell
+$env:BOOKBOX_BIND_ADDRESS = '192.168.1.25'
+$env:BOOKBOX_HOST_PORT = '8787'
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\install-bookbox-discovery.ps1 `
+  -SourceExecutable artifacts\bookbox-discovery.exe
+```
+
+The installer copies the executable to `%LOCALAPPDATA%\BookBox\bin\bookbox-discovery.exe`, copies managed scripts under `%LOCALAPPDATA%\BookBox\scripts`, writes `bookbox-install.json`, registers `\BookBox\BookBox Discovery` for logon, and installs these inbound firewall rules:
+
+| Name | Protocol | Port | Profile | Remote scope |
+|---|---:|---:|---|---|
+| BookBox HTTP 8787 | TCP | 8787 | Private | LocalSubnet |
+| BookBox mDNS | UDP | 5353 | Private | LocalSubnet |
+
+Each rule also binds to the selected private local address. The installer refuses to replace unrelated rules or scheduled tasks with matching names.
+
+## Start and verify
+
+Set the environment in the PowerShell session used to start BookBox:
+
+```powershell
+$env:BOOKBOX_BIND_ADDRESS = '192.168.1.25'
+$env:BOOKBOX_HOST_PORT = '8787'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\start-bookbox.ps1
+```
+
+The script starts Compose, waits up to two minutes for `http://192.168.1.25:8787/v1/ready`, starts discovery, and verifies `bookbox.local`.
+
+Inspect the result:
+
+```powershell
+Resolve-DnsName bookbox.local -Type A
+Invoke-RestMethod http://bookbox.local:8787/v1/ready
 docker compose --env-file deploy\.env -f deploy\compose.yml ps
 ```
 
-The equivalent short commands from inside the `deploy` directory are:
+Android should connect to `http://bookbox.local:8787`. Use `http://192.168.1.25:8787` as the fallback.
+
+## Stop and remove discovery
+
+Stop BookBox without deleting named volumes:
 
 ```powershell
-docker compose -f compose.yml config
-docker compose -f compose.yml build
-docker compose -f compose.yml up -d --wait --wait-timeout 180
-docker compose -f compose.yml ps
+$env:BOOKBOX_BIND_ADDRESS = '192.168.1.25'
+$env:BOOKBOX_HOST_PORT = '8787'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\stop-bookbox.ps1
 ```
 
-Expected results:
+The stop script shuts down its owned discovery process, runs Compose `down --remove-orphans`, and checks that the selected TCP listener closed. Named database and cover volumes remain.
 
-- `config` renders the project as `bookbox-prod`, the audiobook destination as `/library/audiobooks` with `read_only: true`, and no published PostgreSQL port.
-- `build` finishes both Go binaries and the nonroot runtime image.
-- `up -d` creates the persistent PostgreSQL and TLS volumes and starts both services.
-- `ps` shows `postgres` and `bookbox-api` as healthy, with HTTPS published on port `8443`.
-
-The image uses UID/GID `10001`, a read-only root filesystem, no Linux capabilities, no-new-privileges, and a writable tmpfs only for copied mode-`0600` API secrets. The audiobook bind is read-only. TLS state is the only writable API volume.
-
-## Firewall and Android connection
-
-In an elevated PowerShell window, read `HOST_PORT` from the deploy environment and allow only that port on the private Windows Firewall profile:
+After a later logon starts the installed task, point the stop script at its state directory:
 
 ```powershell
-$hostPortSetting = @(
-    Get-Content deploy\.env |
-        Where-Object { $_ -match '^HOST_PORT=(?<port>[1-9][0-9]{0,4})$' }
-)
-if ($hostPortSetting.Count -ne 1) { throw 'deploy\.env must contain one valid HOST_PORT.' }
-$hostPort = [int]($hostPortSetting[0] -replace '^HOST_PORT=', '')
-if ($hostPort -gt 65535) { throw 'HOST_PORT is outside the TCP port range.' }
-New-NetFirewallRule `
-    -DisplayName "BookBox HTTPS $hostPort" `
-    -Direction Inbound `
-    -Protocol TCP `
-    -LocalPort $hostPort `
-    -Action Allow `
-    -Profile Private
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\stop-bookbox.ps1 `
+  -StateDirectory "$env:LOCALAPPDATA\BookBox\state" `
+  -ComposeFile deploy\compose.yml
 ```
 
-Do not forward port `8443` on the router. This service is intended for the home LAN.
-
-Inspect the first API log:
+To remove discovery, open elevated PowerShell:
 
 ```powershell
-docker compose --env-file deploy\.env -f deploy\compose.yml logs bookbox-api
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\remove-bookbox-discovery.ps1
 ```
 
-Find `BookBox certificate SHA-256: ...`. On the Galaxy S23 Ultra, enter `https://<reserved-address>:<HOST_PORT>` once and compare the entire fingerprint shown by Android with this local log before approving it. Never approve an unexpected fingerprint. Reject the connection if any character differs, even if the server address appears correct.
+The removal script checks the ownership manifest, installed-file hashes, task definition, and firewall scope before removal. It refuses missing, modified, external, or unrelated targets. Optional `-InstallDirectory`, `-TaskName`, and `-TaskPath` parameters support installations created with matching custom values.
 
-## Back up or intentionally rotate the TLS identity
+## Security boundary
 
-The TLS volume contains the private key that Android pins. Back it up before an update or SAN change. Stop only the API, copy the volume to a protected local archive, secure that archive, and restart:
+HTTP provides no transport encryption. A device on the LAN can capture credentials, tokens, catalog requests, and audiobook bytes. Use BookBox only on a trusted private LAN. Keep the two firewall rules on Private plus `LocalSubnet`; do not allow guest/public networks, WAN access, or router port forwarding.
 
-```powershell
-docker compose --env-file deploy\.env -f deploy\compose.yml stop bookbox-api
-$backupDirectory = (New-Item -ItemType Directory -Force "backups\bookbox-$(Get-Date -Format yyyyMMdd-HHmmss)").FullName
-docker run --rm --read-only `
-    -v bookbox-prod_tls_data:/source:ro `
-    -v "${backupDirectory}:/backup" `
-    alpine:3.22 `
-    tar -czf /backup/bookbox-tls.tar.gz -C /source .
-if ($LASTEXITCODE -ne 0) { throw 'TLS backup failed.' }
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-& icacls "$backupDirectory\bookbox-tls.tar.gz" /inheritance:r /grant:r "${identity}:(F)" '*S-1-5-18:(F)'
-if ($LASTEXITCODE -ne 0) { throw 'Failed to secure the TLS backup.' }
-docker compose --env-file deploy\.env -f deploy\compose.yml start bookbox-api
-```
-
-Adding or changing `tls.hosts` does not update an existing certificate. To rotate deliberately, first make and verify the backup above, then stop and remove only the API container, remove only `bookbox-prod_tls_data`, and recreate the API:
-
-```powershell
-docker compose --env-file deploy\.env -f deploy\compose.yml stop bookbox-api
-docker compose --env-file deploy\.env -f deploy\compose.yml rm -f bookbox-api
-docker volume rm bookbox-prod_tls_data
-docker compose --env-file deploy\.env -f deploy\compose.yml up -d --wait --wait-timeout 180
-docker compose --env-file deploy\.env -f deploy\compose.yml logs bookbox-api
-```
-
-This intentionally changes the server identity. Verify the new fingerprint from the local Windows host and approve a fresh pin on Android. Do not approve it merely because a rotation was expected. Never remove `bookbox-prod_postgres_data` during certificate rotation.
-
-## Routine operation
-
-```powershell
-# Start existing containers
-docker compose --env-file deploy\.env -f deploy\compose.yml start
-
-# Stop without deleting data
-docker compose --env-file deploy\.env -f deploy\compose.yml stop
-
-# Restart only the API
-docker compose --env-file deploy\.env -f deploy\compose.yml restart bookbox-api
-
-# Follow API logs
-docker compose --env-file deploy\.env -f deploy\compose.yml logs -f --tail 100 bookbox-api
-
-# Rebuild after an update
-docker compose --env-file deploy\.env -f deploy\compose.yml build
-docker compose --env-file deploy\.env -f deploy\compose.yml up -d --wait --wait-timeout 180
-```
-
-Never run `docker compose down --volumes` for the production project. It deletes the persistent TLS identity and PostgreSQL data. Back up the named volumes before any intentional migration or destructive maintenance.
+QR-based HTTPS pairing and a Windows tray approval companion remain roadmap items. The current discovery process advertises the hostname and does not approve users or devices.
