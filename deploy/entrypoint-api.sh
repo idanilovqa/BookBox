@@ -16,8 +16,8 @@ copy_secret() {
     mv "$temporary_path" "$destination_path"
 }
 
-copy_secret /run/secrets/app_password_hash.source /run/netstorage-secrets/app_password_hash
-copy_secret /run/secrets/session_key.source /run/netstorage-secrets/session_key
-copy_secret /run/secrets/postgres_password /run/netstorage-secrets/postgres_password
+copy_secret /run/secrets/app_password_hash.source /run/bookbox-secrets/app_password_hash
+copy_secret /run/secrets/session_key.source /run/bookbox-secrets/session_key
+copy_secret /run/secrets/postgres_password /run/bookbox-secrets/postgres_password
 
-exec /usr/local/bin/netstorage-api -config /etc/netstorage/config.yml "$@"
+exec /usr/local/bin/bookbox-api -config /etc/bookbox/config.yml "$@"

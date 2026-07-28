@@ -8,43 +8,43 @@ services:
         source: test_postgres_data
         target: /var/lib/postgresql
 
-  netstorage-api:
+  bookbox-api:
     # Android reaches the API only through the task-scoped Toxiproxy service.
     # The API itself has no published host port in the isolated topology.
     ports: !reset []
     volumes:
       - type: bind
-        source: "${NETSTORAGE_TEST_LIBRARY_PATH:?Set a task-scoped NETSTORAGE_TEST_LIBRARY_PATH}"
+        source: "${BOOKBOX_TEST_LIBRARY_PATH:?Set a task-scoped BOOKBOX_TEST_LIBRARY_PATH}"
         target: /library/audiobooks
         read_only: true
       - type: bind
-        source: "${NETSTORAGE_TEST_CONFIG_HOST_FILE:?Set NETSTORAGE_TEST_CONFIG_HOST_FILE}"
-        target: /etc/netstorage/config.yml
+        source: "${BOOKBOX_TEST_CONFIG_HOST_FILE:?Set BOOKBOX_TEST_CONFIG_HOST_FILE}"
+        target: /etc/bookbox/config.yml
         read_only: true
       - type: volume
         source: test_tls_data
-        target: /var/lib/netstorage
+        target: /var/lib/bookbox
 
-  netstorage-catalog-worker:
+  bookbox-catalog-worker:
     environment:
-      NETSTORAGE_SCAN_INTERVAL: 5s
-      NETSTORAGE_OPENLIBRARY_BASE_URL: "${NETSTORAGE_TEST_OPENLIBRARY_URL:-http://provider-fixtures:8080/openlibrary}"
-      NETSTORAGE_GOOGLE_BOOKS_BASE_URL: "${NETSTORAGE_TEST_GOOGLE_BOOKS_URL:-http://provider-fixtures:8080/googlebooks}"
+      BOOKBOX_SCAN_INTERVAL: 5s
+      BOOKBOX_OPENLIBRARY_BASE_URL: "${BOOKBOX_TEST_OPENLIBRARY_URL:-http://provider-fixtures:8080/openlibrary}"
+      BOOKBOX_GOOGLE_BOOKS_BASE_URL: "${BOOKBOX_TEST_GOOGLE_BOOKS_URL:-http://provider-fixtures:8080/googlebooks}"
     volumes:
       # The caller must supply a disposable copy. Never point this at H:.
       - type: bind
-        source: "${NETSTORAGE_TEST_LIBRARY_PATH:?Set a task-scoped NETSTORAGE_TEST_LIBRARY_PATH}"
+        source: "${BOOKBOX_TEST_LIBRARY_PATH:?Set a task-scoped BOOKBOX_TEST_LIBRARY_PATH}"
         target: /library/audiobooks
       - type: bind
-        source: "${NETSTORAGE_TEST_CONFIG_HOST_FILE:?Set NETSTORAGE_TEST_CONFIG_HOST_FILE}"
-        target: /etc/netstorage/config.yml
+        source: "${BOOKBOX_TEST_CONFIG_HOST_FILE:?Set BOOKBOX_TEST_CONFIG_HOST_FILE}"
+        target: /etc/bookbox/config.yml
         read_only: true
       - type: volume
         source: test_cover_cache
-        target: /var/lib/netstorage/covers
+        target: /var/lib/bookbox/covers
       - type: volume
         source: test_cover_backups
-        target: /var/lib/netstorage/backups
+        target: /var/lib/bookbox/backups
     depends_on:
       provider-fixtures:
         condition: service_healthy
@@ -109,18 +109,18 @@ services:
     networks:
       - outbound
     depends_on:
-      netstorage-api:
+      bookbox-api:
         condition: service_healthy
 
 secrets:
   postgres_password:
-    file: "${NETSTORAGE_TEST_POSTGRES_PASSWORD_HOST_FILE:?Set test PostgreSQL secret}"
+    file: "${BOOKBOX_TEST_POSTGRES_PASSWORD_HOST_FILE:?Set test PostgreSQL secret}"
   app_password_hash:
-    file: "${NETSTORAGE_TEST_PASSWORD_HASH_HOST_FILE:?Set test app-password hash}"
+    file: "${BOOKBOX_TEST_PASSWORD_HASH_HOST_FILE:?Set test app-password hash}"
   session_key:
-    file: "${NETSTORAGE_TEST_SESSION_KEY_HOST_FILE:?Set test session key}"
+    file: "${BOOKBOX_TEST_SESSION_KEY_HOST_FILE:?Set test session key}"
   google_books_key:
-    file: "${NETSTORAGE_TEST_GOOGLE_BOOKS_KEY_HOST_FILE:?Set test Google key file}"
+    file: "${BOOKBOX_TEST_GOOGLE_BOOKS_KEY_HOST_FILE:?Set test Google key file}"
 
 volumes:
   test_postgres_data:

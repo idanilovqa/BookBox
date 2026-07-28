@@ -9,12 +9,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"netstorage.local/server/internal/catalog"
-	"netstorage.local/server/internal/config"
-	"netstorage.local/server/internal/covers"
-	"netstorage.local/server/internal/media"
-	"netstorage.local/server/internal/metadata"
-	"netstorage.local/server/internal/scanner"
+	"bookbox.local/server/internal/catalog"
+	"bookbox.local/server/internal/config"
+	"bookbox.local/server/internal/covers"
+	"bookbox.local/server/internal/media"
+	"bookbox.local/server/internal/metadata"
+	"bookbox.local/server/internal/scanner"
 )
 
 func TestWorkerSchedulesStartupAndSixHourScans(t *testing.T) {

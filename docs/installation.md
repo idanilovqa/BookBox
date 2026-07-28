@@ -1,4 +1,4 @@
-# Install netStorage
+# Install BookBox
 
 These steps install the server on Windows and sideload the Android 16 app on a Galaxy S23 Ultra.
 
@@ -10,7 +10,7 @@ Install Docker Desktop and select Linux containers. Confirm Docker Desktop can b
 H:\Audiobooks
 ```
 
-Reserve the Windows computer's LAN IPv4 address in your router's DHCP settings. Use an address from your private home network. Do not configure router port forwarding for netStorage.
+Reserve the Windows computer's LAN IPv4 address in your router's DHCP settings. Use an address from your private home network. Do not configure router port forwarding for BookBox.
 
 Open PowerShell in the repository root:
 
@@ -25,8 +25,8 @@ If the repository contains `deploy\config.example.yml` instead of `deploy\config
 Edit `deploy\.env`:
 
 ```dotenv
-NETSTORAGE_LIBRARY_PATH=H:/Audiobooks
-NETSTORAGE_BIND_ADDRESS=192.168.1.50
+BOOKBOX_LIBRARY_PATH=H:/Audiobooks
+BOOKBOX_BIND_ADDRESS=192.168.1.50
 HOST_PORT=8443
 ```
 
@@ -36,8 +36,8 @@ Add the same address to `tls.hosts` in `deploy\config.yml` before the first star
 
 ```yaml
 tls:
-  cert_path: /var/lib/netstorage/tls/server.crt
-  key_path: /var/lib/netstorage/tls/server.key
+  cert_path: /var/lib/bookbox/tls/server.crt
+  key_path: /var/lib/bookbox/tls/server.key
   hosts:
     - localhost
     - 127.0.0.1
@@ -65,7 +65,7 @@ Run an elevated PowerShell window:
 
 ```powershell
 New-NetFirewallRule `
-  -DisplayName 'netStorage HTTPS 8443' `
+  -DisplayName 'BookBox HTTPS 8443' `
   -Direction Inbound `
   -Protocol TCP `
   -LocalPort 8443 `
@@ -78,10 +78,10 @@ Change the port if `HOST_PORT` differs. Keep the rule on the Private profile.
 ## Record the server fingerprint
 
 ```powershell
-docker compose --env-file deploy\.env -f deploy\compose.yml logs netstorage-api
+docker compose --env-file deploy\.env -f deploy\compose.yml logs bookbox-api
 ```
 
-Copy the full value after `netStorage certificate SHA-256:` from the local Windows console. Do not send the fingerprint through the same network path that you are verifying.
+Copy the full value after `BookBox certificate SHA-256:` from the local Windows console. Do not send the fingerprint through the same network path that you are verifying.
 
 ## Build or obtain the APK
 
@@ -91,14 +91,14 @@ The full local release gate creates a debug-signed sideload package:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\build-release.ps1
 ```
 
-The output is `artifacts\netStorage-v1.0.0-debug.apk`. `artifacts\SHA256SUMS.txt` records its digest. A signed release APK appears beside it when you configure the optional keystore described in [Release notes](../RELEASE_NOTES.md).
+The output is `artifacts\BookBox-v1.0.0-debug.apk`. `artifacts\SHA256SUMS.txt` records its digest. A signed release APK appears beside it when you configure the optional keystore described in [Release notes](../RELEASE_NOTES.md).
 
 Copy the APK to the Galaxy. In Samsung Settings, allow the chosen file manager or browser to install unknown apps for this installation. Open the APK, install it, then revoke that permission if you do not use it for other packages.
 
 ## Connect once
 
 1. Put the Galaxy and Windows computer on the same trusted home Wi-Fi.
-2. Open netStorage.
+2. Open BookBox.
 3. Enter `https://192.168.1.50:8443`.
 4. Inspect the certificate and compare the full fingerprint with the Windows console.
 5. Approve the pin only after every character matches.
@@ -108,7 +108,7 @@ The app remembers the server address, certificate pin, and sign-in state. It doe
 
 ## Choose the Android destination
 
-Tap **Choose Android folder**. Select or create an internal-storage folder such as `Audiobooks`, then grant access in Android's system picker. netStorage stores the persisted tree permission.
+Tap **Choose Android folder**. Select or create an internal-storage folder such as `Audiobooks`, then grant access in Android's system picker. BookBox stores the persisted tree permission.
 
 The app writes only to this Android tree. It cannot delete, move, rename, tag, or upload files in the Windows source library.
 

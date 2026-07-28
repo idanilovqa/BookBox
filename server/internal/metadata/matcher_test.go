@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"netstorage.local/server/internal/catalog"
+	"bookbox.local/server/internal/catalog"
 )
 
 func TestScoreUsesNormalizedWeightedEvidence(t *testing.T) {

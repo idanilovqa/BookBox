@@ -10,7 +10,7 @@ if (-not (Test-Path -LiteralPath $runnerPath -PathType Leaf)) {
 . $runnerPath
 
 foreach ($expectedExitCode in @(0, 7)) {
-    $result = Invoke-NetStorageCapturedProcess `
+    $result = Invoke-BookBoxCapturedProcess `
         -FilePath $env:ComSpec `
         -Arguments @('/d', '/c', "exit $expectedExitCode") `
         -WorkingDirectory $e2eRoot `

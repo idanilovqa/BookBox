@@ -34,12 +34,12 @@ function Get-ValidatedScope {
         [string] $RunRoot
     )
 
-    if ($ComposeProject -notmatch '^netstorage-e2e-([0-9a-f]{32})$') {
+    if ($ComposeProject -notmatch '^bookbox-e2e-([0-9a-f]{32})$') {
         throw 'E2E cleanup project name is not task-scoped.'
     }
     $projectRunID = $Matches[1]
     $expectedParent = [System.IO.Path]::GetFullPath(
-        (Join-Path ([System.IO.Path]::GetTempPath()) 'netstorage-e2e')
+        (Join-Path ([System.IO.Path]::GetTempPath()) 'bookbox-e2e')
     ).TrimEnd('\')
     $resolvedRoot = [System.IO.Path]::GetFullPath($RunRoot).TrimEnd('\')
     if (
@@ -216,7 +216,7 @@ function Stop-ExactEmulatorSerial {
         [Parameter(Mandatory)][string] $Serial
     )
 
-    $result = Invoke-NetStorageCapturedProcess `
+    $result = Invoke-BookBoxCapturedProcess `
         -FilePath $Executable `
         -Arguments @('-s', $Serial, 'emu', 'kill') `
         -WorkingDirectory $PSScriptRoot `

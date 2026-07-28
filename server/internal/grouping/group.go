@@ -13,8 +13,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"netstorage.local/server/internal/catalog"
-	"netstorage.local/server/internal/scanner"
+	"bookbox.local/server/internal/catalog"
+	"bookbox.local/server/internal/scanner"
 )
 
 type Evidence struct {

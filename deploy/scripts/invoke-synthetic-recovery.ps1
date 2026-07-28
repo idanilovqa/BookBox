@@ -14,7 +14,7 @@ Set-StrictMode -Version Latest
 $argumentPath = [IO.Path]::GetFullPath($ArgumentsFile)
 $runRoot = [IO.Path]::GetDirectoryName($argumentPath)
 $expectedParent = [IO.Path]::GetFullPath(
-    (Join-Path ([IO.Path]::GetTempPath()) 'netstorage-recovery')
+    (Join-Path ([IO.Path]::GetTempPath()) 'bookbox-recovery')
 ).TrimEnd('\')
 $runID = [IO.Path]::GetFileName($runRoot)
 if (
@@ -31,7 +31,7 @@ if (
 }
 
 $document = Get-Content -LiteralPath $argumentPath -Raw | ConvertFrom-Json
-if ([string] $document.ProjectName -cne "netstorage-recovery-$runID") {
+if ([string] $document.ProjectName -cne "bookbox-recovery-$runID") {
     throw 'Synthetic recovery project does not match its task-scoped temp root.'
 }
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))

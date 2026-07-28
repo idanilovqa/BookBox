@@ -63,16 +63,16 @@ try {
         $inputText | & docker run --rm -i `
             -v "$($server.Replace('\', '/')):/src" `
             -w /src golang:1.26.5 `
-            go run ./cmd/netstorage-admin hash-password --stdin
+            go run ./cmd/bookbox-admin hash-password --stdin
     )
     if ($LASTEXITCODE -ne 0) {
-        throw 'netstorage-admin password hashing failed.'
+        throw 'bookbox-admin password hashing failed.'
     }
     $hash = @($hashOutput | Where-Object {
         $_ -match '^\$argon2id\$v=19\$m=65536,t=3,p=2\$'
     })
     if ($hash.Count -ne 1) {
-        throw 'netstorage-admin returned an unexpected password hash.'
+        throw 'bookbox-admin returned an unexpected password hash.'
     }
 } finally {
     if ($null -ne $inputBytes) {

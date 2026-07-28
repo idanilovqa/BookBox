@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"netstorage.local/server/internal/auth"
-	"netstorage.local/server/internal/config"
-	"netstorage.local/server/internal/library"
-	"netstorage.local/server/internal/transfer"
+	"bookbox.local/server/internal/auth"
+	"bookbox.local/server/internal/config"
+	"bookbox.local/server/internal/library"
+	"bookbox.local/server/internal/transfer"
 )
 
 func TestTransferManifestEndpointIsStrictAuthenticatedAndPrivate(t *testing.T) {

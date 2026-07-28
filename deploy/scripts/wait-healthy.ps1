@@ -25,7 +25,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
         try {
             $status = (($body -join '') | ConvertFrom-Json)
             if ($status.ready -eq $true) {
-                Write-Host 'PASS: netStorage API is ready (database, migrations, roots).'
+                Write-Host 'PASS: BookBox API is ready (database, migrations, roots).'
                 exit 0
             }
             $lastState = 'components not ready'
@@ -40,9 +40,9 @@ while ([DateTime]::UtcNow -lt $deadline) {
             0,
             [int][Math]::Ceiling(($deadline - [DateTime]::UtcNow).TotalSeconds)
         )
-        Write-Host "Waiting for netStorage readiness: $lastState; ${remaining}s remaining"
+        Write-Host "Waiting for BookBox readiness: $lastState; ${remaining}s remaining"
         $nextProgress = [DateTime]::UtcNow.AddSeconds(10)
     }
     Start-Sleep -Seconds 2
 }
-throw "netStorage readiness timed out after $TimeoutSeconds seconds ($lastState)."
+throw "BookBox readiness timed out after $TimeoutSeconds seconds ($lastState)."

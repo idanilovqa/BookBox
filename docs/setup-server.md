@@ -1,4 +1,4 @@
-# Set up the netStorage server on Windows
+# Set up the BookBox server on Windows
 
 This first server release exposes configured audiobook files over authenticated HTTPS. The API can browse and download from the library bind, but Docker mounts that bind read-only and the API has no upload, rename, move, tag-edit, or delete route. PostgreSQL stores the v1 catalog, scan state, indexed metadata, grouping and match reviews, worker jobs, and cover audit events.
 
@@ -11,7 +11,7 @@ This first server release exposes configured audiobook files over authenticated 
 
 In Docker Desktop, allow access to the drive that contains the library. On current Docker Desktop releases this is normally available through WSL integration; if Docker reports that the bind source is unavailable, open Docker Desktop settings and grant the relevant drive/folder access. Do not continue until Docker can bind the folder.
 
-Reserve the Windows computer's current LAN IPv4 address in the router's DHCP settings. Before the first API start, use that exact reserved address for `NETSTORAGE_BIND_ADDRESS` and add it under `tls.hosts` in `deploy\config.yml`. A stable local DNS name may be an additional SAN, but Android still needs a reachable reserved bind address. The server certificate is generated only when it is absent. Changing `tls.hosts` later does not rotate an existing certificate.
+Reserve the Windows computer's current LAN IPv4 address in the router's DHCP settings. Before the first API start, use that exact reserved address for `BOOKBOX_BIND_ADDRESS` and add it under `tls.hosts` in `deploy\config.yml`. A stable local DNS name may be an additional SAN, but Android still needs a reachable reserved bind address. The server certificate is generated only when it is absent. Changing `tls.hosts` later does not rotate an existing certificate.
 
 ## Create configuration and secrets
 
@@ -25,14 +25,14 @@ New-Item -ItemType Directory -Force deploy\secrets | Out-Null
 
 Expected result: untracked local files `deploy\.env` and `deploy\config.yml` exist. Git ignores them and live secret files.
 
-Edit `deploy\.env`. Set `NETSTORAGE_LIBRARY_PATH=H:/Audiobooks` and leave `HOST_PORT=8443` unless that port is already used. The safe example bind is `127.0.0.1`, which is local-only. For Android, replace it with the explicitly reserved LAN IPv4 address, such as `192.168.1.50`. Do not use `0.0.0.0`: it listens on every Windows interface, potentially including VPN and other non-home networks. All host-source variables are required.
+Edit `deploy\.env`. Set `BOOKBOX_LIBRARY_PATH=H:/Audiobooks` and leave `HOST_PORT=8443` unless that port is already used. The safe example bind is `127.0.0.1`, which is local-only. For Android, replace it with the explicitly reserved LAN IPv4 address, such as `192.168.1.50`. Do not use `0.0.0.0`: it listens on every Windows interface, potentially including VPN and other non-home networks. All host-source variables are required.
 
 Edit `deploy\config.yml` and add the reserved LAN address or stable DNS name before the first start:
 
 ```yaml
 tls:
-  cert_path: /var/lib/netstorage/tls/server.crt
-  key_path: /var/lib/netstorage/tls/server.key
+  cert_path: /var/lib/bookbox/tls/server.crt
+  key_path: /var/lib/bookbox/tls/server.key
   hosts:
     - localhost
     - 127.0.0.1
@@ -87,7 +87,7 @@ Expected result: each `icacls` command reports one successfully processed file o
 Compose secrets do not exist yet, so bootstrap the admin binary by building the Dockerfile directly under a unique temporary image tag:
 
 ```powershell
-$bootstrapTag = 'netstorage-bootstrap-' + [Guid]::NewGuid().ToString('N')
+$bootstrapTag = 'bookbox-bootstrap-' + [Guid]::NewGuid().ToString('N')
 docker build -f deploy\Dockerfile.api -t $bootstrapTag .
 ```
 
@@ -118,7 +118,7 @@ if ($first -cne $second) {
 
 $startInfo = [Diagnostics.ProcessStartInfo]::new()
 $startInfo.FileName = 'docker'
-$startInfo.Arguments = "run --rm -i --entrypoint netstorage-admin $bootstrapTag hash-password --stdin"
+$startInfo.Arguments = "run --rm -i --entrypoint bookbox-admin $bootstrapTag hash-password --stdin"
 $startInfo.UseShellExecute = $false
 $startInfo.CreateNoWindow = $true
 $startInfo.RedirectStandardInput = $true
@@ -181,10 +181,10 @@ docker compose -f compose.yml ps
 
 Expected results:
 
-- `config` renders the project as `netstorage-prod`, the audiobook destination as `/library/audiobooks` with `read_only: true`, and no published PostgreSQL port.
+- `config` renders the project as `bookbox-prod`, the audiobook destination as `/library/audiobooks` with `read_only: true`, and no published PostgreSQL port.
 - `build` finishes both Go binaries and the nonroot runtime image.
 - `up -d` creates the persistent PostgreSQL and TLS volumes and starts both services.
-- `ps` shows `postgres` and `netstorage-api` as healthy, with HTTPS published on port `8443`.
+- `ps` shows `postgres` and `bookbox-api` as healthy, with HTTPS published on port `8443`.
 
 The image uses UID/GID `10001`, a read-only root filesystem, no Linux capabilities, no-new-privileges, and a writable tmpfs only for copied mode-`0600` API secrets. The audiobook bind is read-only. TLS state is the only writable API volume.
 
@@ -201,7 +201,7 @@ if ($hostPortSetting.Count -ne 1) { throw 'deploy\.env must contain one valid HO
 $hostPort = [int]($hostPortSetting[0] -replace '^HOST_PORT=', '')
 if ($hostPort -gt 65535) { throw 'HOST_PORT is outside the TCP port range.' }
 New-NetFirewallRule `
-    -DisplayName "netStorage HTTPS $hostPort" `
+    -DisplayName "BookBox HTTPS $hostPort" `
     -Direction Inbound `
     -Protocol TCP `
     -LocalPort $hostPort `
@@ -214,41 +214,41 @@ Do not forward port `8443` on the router. This service is intended for the home 
 Inspect the first API log:
 
 ```powershell
-docker compose --env-file deploy\.env -f deploy\compose.yml logs netstorage-api
+docker compose --env-file deploy\.env -f deploy\compose.yml logs bookbox-api
 ```
 
-Find `netStorage certificate SHA-256: ...`. On the Galaxy S23 Ultra, enter `https://<reserved-address>:<HOST_PORT>` once and compare the entire fingerprint shown by Android with this local log before approving it. Never approve an unexpected fingerprint. Reject the connection if any character differs, even if the server address appears correct.
+Find `BookBox certificate SHA-256: ...`. On the Galaxy S23 Ultra, enter `https://<reserved-address>:<HOST_PORT>` once and compare the entire fingerprint shown by Android with this local log before approving it. Never approve an unexpected fingerprint. Reject the connection if any character differs, even if the server address appears correct.
 
 ## Back up or intentionally rotate the TLS identity
 
 The TLS volume contains the private key that Android pins. Back it up before an update or SAN change. Stop only the API, copy the volume to a protected local archive, secure that archive, and restart:
 
 ```powershell
-docker compose --env-file deploy\.env -f deploy\compose.yml stop netstorage-api
-$backupDirectory = (New-Item -ItemType Directory -Force "backups\netstorage-$(Get-Date -Format yyyyMMdd-HHmmss)").FullName
+docker compose --env-file deploy\.env -f deploy\compose.yml stop bookbox-api
+$backupDirectory = (New-Item -ItemType Directory -Force "backups\bookbox-$(Get-Date -Format yyyyMMdd-HHmmss)").FullName
 docker run --rm --read-only `
-    -v netstorage-prod_tls_data:/source:ro `
+    -v bookbox-prod_tls_data:/source:ro `
     -v "${backupDirectory}:/backup" `
     alpine:3.22 `
-    tar -czf /backup/netstorage-tls.tar.gz -C /source .
+    tar -czf /backup/bookbox-tls.tar.gz -C /source .
 if ($LASTEXITCODE -ne 0) { throw 'TLS backup failed.' }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-& icacls "$backupDirectory\netstorage-tls.tar.gz" /inheritance:r /grant:r "${identity}:(F)" '*S-1-5-18:(F)'
+& icacls "$backupDirectory\bookbox-tls.tar.gz" /inheritance:r /grant:r "${identity}:(F)" '*S-1-5-18:(F)'
 if ($LASTEXITCODE -ne 0) { throw 'Failed to secure the TLS backup.' }
-docker compose --env-file deploy\.env -f deploy\compose.yml start netstorage-api
+docker compose --env-file deploy\.env -f deploy\compose.yml start bookbox-api
 ```
 
-Adding or changing `tls.hosts` does not update an existing certificate. To rotate deliberately, first make and verify the backup above, then stop and remove only the API container, remove only `netstorage-prod_tls_data`, and recreate the API:
+Adding or changing `tls.hosts` does not update an existing certificate. To rotate deliberately, first make and verify the backup above, then stop and remove only the API container, remove only `bookbox-prod_tls_data`, and recreate the API:
 
 ```powershell
-docker compose --env-file deploy\.env -f deploy\compose.yml stop netstorage-api
-docker compose --env-file deploy\.env -f deploy\compose.yml rm -f netstorage-api
-docker volume rm netstorage-prod_tls_data
+docker compose --env-file deploy\.env -f deploy\compose.yml stop bookbox-api
+docker compose --env-file deploy\.env -f deploy\compose.yml rm -f bookbox-api
+docker volume rm bookbox-prod_tls_data
 docker compose --env-file deploy\.env -f deploy\compose.yml up -d --wait --wait-timeout 180
-docker compose --env-file deploy\.env -f deploy\compose.yml logs netstorage-api
+docker compose --env-file deploy\.env -f deploy\compose.yml logs bookbox-api
 ```
 
-This intentionally changes the server identity. Verify the new fingerprint from the local Windows host and approve a fresh pin on Android. Do not approve it merely because a rotation was expected. Never remove `netstorage-prod_postgres_data` during certificate rotation.
+This intentionally changes the server identity. Verify the new fingerprint from the local Windows host and approve a fresh pin on Android. Do not approve it merely because a rotation was expected. Never remove `bookbox-prod_postgres_data` during certificate rotation.
 
 ## Routine operation
 
@@ -260,10 +260,10 @@ docker compose --env-file deploy\.env -f deploy\compose.yml start
 docker compose --env-file deploy\.env -f deploy\compose.yml stop
 
 # Restart only the API
-docker compose --env-file deploy\.env -f deploy\compose.yml restart netstorage-api
+docker compose --env-file deploy\.env -f deploy\compose.yml restart bookbox-api
 
 # Follow API logs
-docker compose --env-file deploy\.env -f deploy\compose.yml logs -f --tail 100 netstorage-api
+docker compose --env-file deploy\.env -f deploy\compose.yml logs -f --tail 100 bookbox-api
 
 # Rebuild after an update
 docker compose --env-file deploy\.env -f deploy\compose.yml build

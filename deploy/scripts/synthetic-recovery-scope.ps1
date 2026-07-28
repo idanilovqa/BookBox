@@ -79,7 +79,7 @@ function Test-SyntheticRecoveryResolvedScope {
 
     $root = [IO.Path]::GetFullPath($RunRoot).TrimEnd('\')
     $parent = [IO.Path]::GetFullPath(
-        (Join-Path ([IO.Path]::GetTempPath()) 'netstorage-recovery')
+        (Join-Path ([IO.Path]::GetTempPath()) 'bookbox-recovery')
     ).TrimEnd('\')
     $runID = [IO.Path]::GetFileName($root)
     if (
@@ -89,7 +89,7 @@ function Test-SyntheticRecoveryResolvedScope {
             $parent,
             [StringComparison]::OrdinalIgnoreCase
         ) -or
-        $ProjectName -cne "netstorage-recovery-$runID" -or
+        $ProjectName -cne "bookbox-recovery-$runID" -or
         [string] $Resolved.name -cne $ProjectName
     ) {
         throw 'Synthetic recovery resolved project is outside the exact task scope.'
@@ -97,27 +97,27 @@ function Test-SyntheticRecoveryResolvedScope {
 
     $library = Join-Path $root 'library'
     $config = Join-Path $root 'config.yml'
-    Assert-Mount 'netstorage-api' '/library/audiobooks' 'bind' $library $true `
+    Assert-Mount 'bookbox-api' '/library/audiobooks' 'bind' $library $true `
         'API library bind'
-    Assert-Mount 'netstorage-api' '/etc/netstorage/config.yml' 'bind' $config $true `
+    Assert-Mount 'bookbox-api' '/etc/bookbox/config.yml' 'bind' $config $true `
         'API config bind'
-    Assert-Mount 'netstorage-catalog-worker' '/library/audiobooks' 'bind' $library $false `
+    Assert-Mount 'bookbox-catalog-worker' '/library/audiobooks' 'bind' $library $false `
         'worker library bind'
-    Assert-Mount 'netstorage-catalog-worker' '/etc/netstorage/config.yml' 'bind' $config $true `
+    Assert-Mount 'bookbox-catalog-worker' '/etc/bookbox/config.yml' 'bind' $config $true `
         'worker config bind'
 
     $volumeMounts = @(
         @('postgres', '/var/lib/postgresql', 'recovery_postgres_data', 'PostgreSQL data'),
-        @('netstorage-api', '/var/lib/netstorage', 'recovery_tls_data', 'TLS data'),
+        @('bookbox-api', '/var/lib/bookbox', 'recovery_tls_data', 'TLS data'),
         @(
-            'netstorage-catalog-worker',
-            '/var/lib/netstorage/covers',
+            'bookbox-catalog-worker',
+            '/var/lib/bookbox/covers',
             'recovery_cover_cache',
             'cover cache'
         ),
         @(
-            'netstorage-catalog-worker',
-            '/var/lib/netstorage/backups',
+            'bookbox-catalog-worker',
+            '/var/lib/bookbox/backups',
             'recovery_cover_backups',
             'cover backups'
         )
@@ -132,7 +132,7 @@ function Test-SyntheticRecoveryResolvedScope {
         }
     }
 
-    $api = Get-Service 'netstorage-api'
+    $api = Get-Service 'bookbox-api'
     $ports = @($api.ports)
     if (
         $ports.Count -ne 1 -or

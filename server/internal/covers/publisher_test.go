@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"netstorage.local/server/internal/catalog"
-	"netstorage.local/server/internal/config"
-	"netstorage.local/server/internal/library"
+	"bookbox.local/server/internal/catalog"
+	"bookbox.local/server/internal/config"
+	"bookbox.local/server/internal/library"
 )
 
 func TestPublisherReplacesOnlyRecognizedCoverAndBacksUpOriginal(t *testing.T) {
@@ -248,7 +248,7 @@ func TestPublisherRejectsMissingBooksBlankProvidersAndUnsafeBackupRootsBeforeWri
 	}{
 		{name: "relative", backupRoot: func(publisherFixture) string { return "relative-backup" }},
 		{name: "inside source root", backupRoot: func(fixture publisherFixture) string {
-			return filepath.Join(fixture.root, ".netstorage-backups")
+			return filepath.Join(fixture.root, ".bookbox-backups")
 		}},
 	} {
 		test := test

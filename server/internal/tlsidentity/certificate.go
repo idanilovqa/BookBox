@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	creationMarkerMagic = "netstorage-tls-creation-v1"
+	creationMarkerMagic = "bookbox-tls-creation-v1"
 	creationMarkerStale = 5 * time.Minute
 )
 
@@ -383,7 +383,7 @@ func generateIdentity(dnsNames []string, ipAddresses []net.IP, now time.Time) ([
 	}
 	template := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "netStorage"},
+		Subject:      pkix.Name{CommonName: "BookBox"},
 		NotBefore:    now.Add(-5 * time.Minute),
 		NotAfter:     now.AddDate(5, 0, 0),
 		DNSNames:     dnsNames,

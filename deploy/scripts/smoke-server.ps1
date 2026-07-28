@@ -6,7 +6,7 @@ if (-not (Test-Path -LiteralPath $compose -PathType Leaf)) {
     throw "Compose file does not exist: $compose"
 }
 $composeText = Get-Content -LiteralPath $compose -Raw
-if ($composeText -notmatch [regex]::Escape('host_ip: "${NETSTORAGE_BIND_ADDRESS:-127.0.0.1}"')) {
+if ($composeText -notmatch [regex]::Escape('host_ip: "${BOOKBOX_BIND_ADDRESS:-127.0.0.1}"')) {
     throw 'Compose does not default the API bind to loopback.'
 }
 
@@ -44,10 +44,10 @@ if ($gitAttributeLines -cnotcontains 'deploy/entrypoint-worker.sh text eol=lf') 
 }
 $environmentExample = Join-Path $repo 'deploy\.env.example'
 $environmentExampleLines = @(Get-Content -LiteralPath $environmentExample)
-if ($environmentExampleLines -cnotcontains 'NETSTORAGE_BIND_ADDRESS=127.0.0.1') {
+if ($environmentExampleLines -cnotcontains 'BOOKBOX_BIND_ADDRESS=127.0.0.1') {
     throw 'The example API bind does not default to loopback.'
 }
-$project = ('netstorage-smoke-' + [Guid]::NewGuid().ToString('N')).ToLowerInvariant()
+$project = ('bookbox-smoke-' + [Guid]::NewGuid().ToString('N')).ToLowerInvariant()
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
 $scratch = [IO.Path]::GetFullPath((Join-Path $tempRoot $project))
 if (
@@ -69,8 +69,8 @@ $secrets = Join-Path $scratch 'secrets'
 $config = Join-Path $scratch 'config.yml'
 $envFile = Join-Path $scratch '.env'
 $ownedImages = @(
-    "${project}-netstorage-api:latest"
-    "${project}-netstorage-catalog-worker:latest"
+    "${project}-bookbox-api:latest"
+    "${project}-bookbox-catalog-worker:latest"
 )
 $cleanupRequired = $false
 $primaryError = $null
@@ -143,21 +143,21 @@ roots:
     name: Audiobooks
     container_path: /library/audiobooks
 tls:
-  cert_path: /var/lib/netstorage/tls/server.crt
-  key_path: /var/lib/netstorage/tls/server.key
+  cert_path: /var/lib/bookbox/tls/server.crt
+  key_path: /var/lib/bookbox/tls/server.key
   hosts:
     - localhost
     - 127.0.0.1
 auth:
   username: owner
-  password_hash_file: /run/netstorage-secrets/app_password_hash
-  session_key_file: /run/netstorage-secrets/session_key
+  password_hash_file: /run/bookbox-secrets/app_password_hash
+  session_key_file: /run/bookbox-secrets/session_key
 database:
   host: postgres
   port: 5432
-  name: netstorage
-  username: netstorage
-  password_file: /run/netstorage-secrets/postgres_password
+  name: bookbox
+  username: bookbox
+  password_file: /run/bookbox-secrets/postgres_password
   ssl_mode: disable
 "@
     [IO.File]::WriteAllText($config, $configText, [Text.UTF8Encoding]::new($false))
@@ -186,13 +186,13 @@ database:
         $Path.Replace('\', '/')
     }
     $envText = @(
-        "NETSTORAGE_LIBRARY_PATH=$(& $toComposePath $library)"
-        "NETSTORAGE_CONFIG_HOST_FILE=$(& $toComposePath $config)"
-        "NETSTORAGE_POSTGRES_PASSWORD_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'postgres_password.txt'))"
-        "NETSTORAGE_PASSWORD_HASH_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'app_password_hash.txt'))"
-        "NETSTORAGE_SESSION_KEY_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'session_key.bin'))"
-        "NETSTORAGE_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'google_books_key.txt'))"
-        'NETSTORAGE_BIND_ADDRESS=127.0.0.1'
+        "BOOKBOX_LIBRARY_PATH=$(& $toComposePath $library)"
+        "BOOKBOX_CONFIG_HOST_FILE=$(& $toComposePath $config)"
+        "BOOKBOX_POSTGRES_PASSWORD_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'postgres_password.txt'))"
+        "BOOKBOX_PASSWORD_HASH_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'app_password_hash.txt'))"
+        "BOOKBOX_SESSION_KEY_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'session_key.bin'))"
+        "BOOKBOX_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $toComposePath (Join-Path $secrets 'google_books_key.txt'))"
+        'BOOKBOX_BIND_ADDRESS=127.0.0.1'
         'HOST_PORT=0'
     ) -join [Environment]::NewLine
     [IO.File]::WriteAllText($envFile, $envText, [Text.UTF8Encoding]::new($false))
@@ -205,7 +205,7 @@ database:
     $passwordHashOutput = @(
         $adminInput |
             & docker run --rm -i --network none --read-only `
-                --entrypoint /usr/local/bin/netstorage-admin `
+                --entrypoint /usr/local/bin/bookbox-admin `
                 $ownedImages[0] hash-password --stdin 2>&1
     )
     if ($LASTEXITCODE -ne 0 -or $passwordHashOutput.Count -ne 1) {
@@ -223,7 +223,7 @@ database:
 
     Invoke-Docker ($composeArgs + @(
         'run', '--rm', '--no-deps', '--entrypoint', 'ffmpeg',
-        'netstorage-catalog-worker',
+        'bookbox-catalog-worker',
         '-hide_banner', '-loglevel', 'error',
         '-f', 'lavfi', '-i', 'anullsrc=channel_layout=mono:sample_rate=8000',
         '-t', '0.25', '-c:a', 'aac', '-y',
@@ -241,7 +241,7 @@ database:
     Invoke-Docker ($composeArgs + @('up', '-d', '--wait', '--wait-timeout', '180')) | Out-Null
 
     $publishedPorts = @(
-        Invoke-Docker ($composeArgs + @('port', 'netstorage-api', '8443')) |
+        Invoke-Docker ($composeArgs + @('port', 'bookbox-api', '8443')) |
             ForEach-Object { $_.ToString().Trim() } |
             Where-Object { $_ }
     )
@@ -256,7 +256,7 @@ database:
         throw "Compose returned an invalid HTTPS port: $port"
     }
 
-    $apiID = (Invoke-Docker ($composeArgs + @('ps', '-q', 'netstorage-api')) | Select-Object -First 1).Trim()
+    $apiID = (Invoke-Docker ($composeArgs + @('ps', '-q', 'bookbox-api')) | Select-Object -First 1).Trim()
     if (-not $apiID) {
         throw 'Compose did not return an API container ID.'
     }
@@ -280,12 +280,12 @@ database:
     if ($inspection.HostConfig.Init -ne $true) {
         throw 'The API does not enable an init process.'
     }
-    if (-not $inspection.HostConfig.Tmpfs.'/run/netstorage-secrets') {
+    if (-not $inspection.HostConfig.Tmpfs.'/run/bookbox-secrets') {
         throw 'The API copied-secret tmpfs is missing.'
     }
 
     $workerID = (Invoke-Docker ($composeArgs + @(
-        'ps', '-q', 'netstorage-catalog-worker'
+        'ps', '-q', 'bookbox-catalog-worker'
     )) | Select-Object -First 1).Trim()
     if (-not $workerID) {
         throw 'Compose did not return a catalog worker container ID.'
@@ -318,7 +318,7 @@ database:
     }
     $workerDatabaseMode = (Invoke-Docker @(
         'exec', $workerID, 'stat', '-c', '%a %u %g',
-        '/run/netstorage-secrets/postgres_password'
+        '/run/bookbox-secrets/postgres_password'
     ) | Select-Object -First 1).Trim()
     if ($workerDatabaseMode -ne '600 10001 10001') {
         throw "The worker database secret has unexpected mode/owner: $workerDatabaseMode"
@@ -331,7 +331,7 @@ database:
     )) {
         $mode = (Invoke-Docker @(
             'exec', $apiID, 'stat', '-c', '%a %u %g',
-            "/run/netstorage-secrets/$secretName"
+            "/run/bookbox-secrets/$secretName"
         ) | Select-Object -First 1).Trim()
         if ($mode -ne '600 10001 10001') {
             throw "Copied secret $secretName has unexpected mode/owner: $mode"
@@ -340,10 +340,10 @@ database:
     $sourceHashDigest = (Get-FileHash -LiteralPath (Join-Path $secrets 'app_password_hash.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
     $sourceKeyDigest = (Get-FileHash -LiteralPath (Join-Path $secrets 'session_key.bin') -Algorithm SHA256).Hash.ToLowerInvariant()
     $sourceDatabaseDigest = (Get-FileHash -LiteralPath (Join-Path $secrets 'postgres_password.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
-    $containerHashLine = @(Invoke-Docker @('exec', $apiID, 'sha256sum', '/run/netstorage-secrets/app_password_hash'))[0].ToString()
-    $containerKeyLine = @(Invoke-Docker @('exec', $apiID, 'sha256sum', '/run/netstorage-secrets/session_key'))[0].ToString()
-    $containerDatabaseLine = @(Invoke-Docker @('exec', $apiID, 'sha256sum', '/run/netstorage-secrets/postgres_password'))[0].ToString()
-    $workerDatabaseLine = @(Invoke-Docker @('exec', $workerID, 'sha256sum', '/run/netstorage-secrets/postgres_password'))[0].ToString()
+    $containerHashLine = @(Invoke-Docker @('exec', $apiID, 'sha256sum', '/run/bookbox-secrets/app_password_hash'))[0].ToString()
+    $containerKeyLine = @(Invoke-Docker @('exec', $apiID, 'sha256sum', '/run/bookbox-secrets/session_key'))[0].ToString()
+    $containerDatabaseLine = @(Invoke-Docker @('exec', $apiID, 'sha256sum', '/run/bookbox-secrets/postgres_password'))[0].ToString()
+    $workerDatabaseLine = @(Invoke-Docker @('exec', $workerID, 'sha256sum', '/run/bookbox-secrets/postgres_password'))[0].ToString()
     $containerHashDigest = ($containerHashLine -split '\s+')[0]
     $containerKeyDigest = ($containerKeyLine -split '\s+')[0]
     $containerDatabaseDigest = ($containerDatabaseLine -split '\s+')[0]
@@ -357,18 +357,18 @@ database:
         throw 'A copied container secret differs from its source.'
     }
 
-    Invoke-Docker @('exec', $apiID, 'test', '-w', '/var/lib/netstorage/tls') | Out-Null
-    Invoke-Docker @('exec', $apiID, 'test', '-s', '/var/lib/netstorage/tls/server.crt') | Out-Null
-    Invoke-Docker @('exec', $apiID, 'test', '-s', '/var/lib/netstorage/tls/server.key') | Out-Null
+    Invoke-Docker @('exec', $apiID, 'test', '-w', '/var/lib/bookbox/tls') | Out-Null
+    Invoke-Docker @('exec', $apiID, 'test', '-s', '/var/lib/bookbox/tls/server.crt') | Out-Null
+    Invoke-Docker @('exec', $apiID, 'test', '-s', '/var/lib/bookbox/tls/server.key') | Out-Null
     $tlsKeyMode = @(Invoke-Docker @(
-        'exec', $apiID, 'stat', '-c', '%a', '/var/lib/netstorage/tls/server.key'
+        'exec', $apiID, 'stat', '-c', '%a', '/var/lib/bookbox/tls/server.key'
     ))[0].ToString().Trim()
     if ($tlsKeyMode -ne '600') {
         throw "The TLS private key has unexpected mode: $tlsKeyMode"
     }
     Invoke-Docker @(
         'exec', $apiID, 'openssl', 'x509',
-        '-in', '/var/lib/netstorage/tls/server.crt',
+        '-in', '/var/lib/bookbox/tls/server.crt',
         '-noout', '-checkend', '0'
     ) | Out-Null
     $healthBody = @(& curl.exe --fail --silent --show-error --insecure "https://127.0.0.1:$port/v1/health")
@@ -418,7 +418,7 @@ database:
     }
     if (@($books.items).Count -ne 1) {
         $workerLogs = Invoke-Docker ($composeArgs + @(
-            'logs', '--no-color', 'netstorage-catalog-worker'
+            'logs', '--no-color', 'bookbox-catalog-worker'
         ))
         throw "The startup scan did not index exactly one audiobook:`n$($workerLogs -join [Environment]::NewLine)"
     }

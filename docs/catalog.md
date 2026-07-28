@@ -49,7 +49,7 @@ container, and set:
 
 ```yaml
 environment:
-  NETSTORAGE_GOOGLE_BOOKS_API_KEY_FILE: /run/secrets/google_books_api_key
+  BOOKBOX_GOOGLE_BOOKS_API_KEY_FILE: /run/secrets/google_books_api_key
 ```
 
 Do not put the key itself in Compose, the application configuration, logs, or a
@@ -64,13 +64,13 @@ refuses path components, symlinks, non-cover destinations, and candidates that
 are not a material quality improvement.
 
 Existing cover bytes are stored content-addressed under
-`/var/lib/netstorage/backups` before replacement. Creating or replacing a cover
+`/var/lib/bookbox/backups` before replacement. Creating or replacing a cover
 records its hashes, dimensions, provider, destination, action, and backup key in
 the cover event history. An already-good cover is a successful no-op.
 
 ## Restoring a backed-up cover
 
-1. Stop `netstorage-catalog-worker` so it cannot publish concurrently.
+1. Stop `bookbox-catalog-worker` so it cannot publish concurrently.
 2. Find the replacement event and its `backupKey` in PostgreSQL cover history.
 3. Verify the backup file name equals the SHA-256 hash of its bytes.
 4. Copy that file back to the event's exact recognized cover destination using

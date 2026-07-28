@@ -1,4 +1,4 @@
-module netstorage.local/server
+module bookbox.local/server
 
 go 1.26.5
 

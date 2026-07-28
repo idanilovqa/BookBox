@@ -5,7 +5,7 @@ services:
         source: recovery_postgres_data
         target: /var/lib/postgresql
 
-  netstorage-api:
+  bookbox-api:
     ports: !override
       - name: recovery-https
         target: 8443
@@ -14,44 +14,44 @@ services:
         protocol: tcp
     volumes:
       - type: bind
-        source: "${NETSTORAGE_RECOVERY_LIBRARY_PATH:?Set a task-scoped recovery library}"
+        source: "${BOOKBOX_RECOVERY_LIBRARY_PATH:?Set a task-scoped recovery library}"
         target: /library/audiobooks
         read_only: true
       - type: bind
-        source: "${NETSTORAGE_RECOVERY_CONFIG_HOST_FILE:?Set the task-scoped recovery config}"
-        target: /etc/netstorage/config.yml
+        source: "${BOOKBOX_RECOVERY_CONFIG_HOST_FILE:?Set the task-scoped recovery config}"
+        target: /etc/bookbox/config.yml
         read_only: true
       - type: volume
         source: recovery_tls_data
-        target: /var/lib/netstorage
+        target: /var/lib/bookbox
 
-  netstorage-catalog-worker:
+  bookbox-catalog-worker:
     environment:
-      NETSTORAGE_SCAN_INTERVAL: 5s
+      BOOKBOX_SCAN_INTERVAL: 5s
     volumes:
       - type: bind
-        source: "${NETSTORAGE_RECOVERY_LIBRARY_PATH:?Set a task-scoped recovery library}"
+        source: "${BOOKBOX_RECOVERY_LIBRARY_PATH:?Set a task-scoped recovery library}"
         target: /library/audiobooks
       - type: bind
-        source: "${NETSTORAGE_RECOVERY_CONFIG_HOST_FILE:?Set the task-scoped recovery config}"
-        target: /etc/netstorage/config.yml
+        source: "${BOOKBOX_RECOVERY_CONFIG_HOST_FILE:?Set the task-scoped recovery config}"
+        target: /etc/bookbox/config.yml
         read_only: true
       - type: volume
         source: recovery_cover_cache
-        target: /var/lib/netstorage/covers
+        target: /var/lib/bookbox/covers
       - type: volume
         source: recovery_cover_backups
-        target: /var/lib/netstorage/backups
+        target: /var/lib/bookbox/backups
 
 secrets:
   postgres_password:
-    file: "${NETSTORAGE_RECOVERY_POSTGRES_PASSWORD_HOST_FILE:?Set recovery PostgreSQL secret}"
+    file: "${BOOKBOX_RECOVERY_POSTGRES_PASSWORD_HOST_FILE:?Set recovery PostgreSQL secret}"
   app_password_hash:
-    file: "${NETSTORAGE_RECOVERY_PASSWORD_HASH_HOST_FILE:?Set recovery app-password hash}"
+    file: "${BOOKBOX_RECOVERY_PASSWORD_HASH_HOST_FILE:?Set recovery app-password hash}"
   session_key:
-    file: "${NETSTORAGE_RECOVERY_SESSION_KEY_HOST_FILE:?Set recovery session key}"
+    file: "${BOOKBOX_RECOVERY_SESSION_KEY_HOST_FILE:?Set recovery session key}"
   google_books_key:
-    file: "${NETSTORAGE_RECOVERY_GOOGLE_BOOKS_KEY_HOST_FILE:?Set recovery Google key file}"
+    file: "${BOOKBOX_RECOVERY_GOOGLE_BOOKS_KEY_HOST_FILE:?Set recovery Google key file}"
 
 volumes:
   recovery_postgres_data:

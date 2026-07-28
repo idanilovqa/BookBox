@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"netstorage.local/server/internal/config"
+	"bookbox.local/server/internal/config"
 )
 
 func TestOpenRegularReadsConfinedFileAndRejectsSymlinkComponents(t *testing.T) {

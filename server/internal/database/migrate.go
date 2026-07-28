@@ -11,7 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"netstorage.local/server/migrations"
+	"bookbox.local/server/migrations"
 )
 
 const migrationAdvisoryLock int64 = 0x4e53544f52414745

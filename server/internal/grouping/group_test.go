@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"netstorage.local/server/internal/catalog"
-	"netstorage.local/server/internal/media"
-	"netstorage.local/server/internal/scanner"
+	"bookbox.local/server/internal/catalog"
+	"bookbox.local/server/internal/media"
+	"bookbox.local/server/internal/scanner"
 )
 
 func TestInferKeepsChaptersAndSplitsDistinctM4BBooks(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const DSNEnvironment = "NETSTORAGE_TEST_POSTGRES_DSN"
+const DSNEnvironment = "BOOKBOX_TEST_POSTGRES_DSN"
 
 func Open(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -27,7 +27,7 @@ func Open(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatalf("parse PostgreSQL test DSN: %v", err)
 	}
-	databaseName := "netstorage_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	databaseName := "bookbox_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	admin, err := pgxpool.NewWithConfig(ctx, adminConfig)
 	if err != nil {
 		t.Fatalf("open PostgreSQL admin pool: %v", err)

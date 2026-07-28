@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	tokenIssuer       = "netstorage"
-	tokenAudience     = "netstorage-android"
+	tokenIssuer       = "bookbox"
+	tokenAudience     = "bookbox-android"
 	TokenKindAccess   = "access"
 	TokenKindRefresh  = "refresh"
 	accessTokenTTL    = 15 * time.Minute

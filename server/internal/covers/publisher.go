@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"netstorage.local/server/internal/catalog"
-	"netstorage.local/server/internal/library"
+	"bookbox.local/server/internal/catalog"
+	"bookbox.local/server/internal/library"
 )
 
 var (
@@ -327,7 +327,7 @@ func (publisher *Publisher) backup(source []byte) (string, error) {
 
 func atomicReplace(target string, data []byte, mode os.FileMode) error {
 	directory := filepath.Dir(target)
-	temp, err := os.CreateTemp(directory, ".netstorage-cover-*")
+	temp, err := os.CreateTemp(directory, ".bookbox-cover-*")
 	if err != nil {
 		return err
 	}

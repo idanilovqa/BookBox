@@ -103,14 +103,14 @@ auth:
 `,
 		"missing auth": base + `
 tls:
-  cert_path: /var/lib/netstorage/tls/server.crt
-  key_path: /var/lib/netstorage/tls/server.key
+  cert_path: /var/lib/bookbox/tls/server.crt
+  key_path: /var/lib/bookbox/tls/server.key
   hosts: [localhost]
 `,
 		"relative secret": base + `
 tls:
-  cert_path: /var/lib/netstorage/tls/server.crt
-  key_path: /var/lib/netstorage/tls/server.key
+  cert_path: /var/lib/bookbox/tls/server.crt
+  key_path: /var/lib/bookbox/tls/server.key
   hosts: [localhost]
 auth:
   username: owner
@@ -243,15 +243,15 @@ func TestLoadDatabaseDSNReadsPasswordOnlyFromProtectedFile(t *testing.T) {
 	dsn, err := LoadDatabaseDSN(Database{
 		Host:         "postgres",
 		Port:         5432,
-		Name:         "netstorage",
-		Username:     "netstorage",
+		Name:         "bookbox",
+		Username:     "bookbox",
 		PasswordFile: passwordPath,
 		SSLMode:      "disable",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(dsn, "netstorage:p%40ss%20word@postgres:5432/netstorage") {
+	if !strings.Contains(dsn, "bookbox:p%40ss%20word@postgres:5432/bookbox") {
 		t.Fatalf("database DSN does not contain escaped file secret: %q", dsn)
 	}
 
@@ -260,8 +260,8 @@ func TestLoadDatabaseDSNReadsPasswordOnlyFromProtectedFile(t *testing.T) {
 	if _, err := LoadDatabaseDSN(Database{
 		Host:         "postgres",
 		Port:         5432,
-		Name:         "netstorage",
-		Username:     "netstorage",
+		Name:         "bookbox",
+		Username:     "bookbox",
 		PasswordFile: passwordPath,
 		SSLMode:      "disable",
 	}); err == nil || strings.Contains(err.Error(), secret) {
@@ -274,8 +274,8 @@ func writeConfig(t *testing.T, contents string) string {
 	if !strings.Contains(contents, "\ntls:") {
 		contents += `
 tls:
-  cert_path: /var/lib/netstorage/tls/server.crt
-  key_path: /var/lib/netstorage/tls/server.key
+  cert_path: /var/lib/bookbox/tls/server.crt
+  key_path: /var/lib/bookbox/tls/server.key
   hosts: [localhost]
 auth:
   username: owner

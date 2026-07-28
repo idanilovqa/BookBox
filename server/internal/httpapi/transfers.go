@@ -16,8 +16,8 @@ import (
 	"strconv"
 	"sync"
 
-	"netstorage.local/server/internal/library"
-	"netstorage.local/server/internal/transfer"
+	"bookbox.local/server/internal/library"
+	"bookbox.local/server/internal/transfer"
 )
 
 const maxManifestBodyBytes = 1 << 20

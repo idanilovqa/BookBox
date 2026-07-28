@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"netstorage.local/server/internal/testpostgres"
+	"bookbox.local/server/internal/testpostgres"
 )
 
 func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {

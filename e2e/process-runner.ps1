@@ -1,4 +1,4 @@
-function ConvertTo-NetStorageProcessArgument {
+function ConvertTo-BookBoxProcessArgument {
     param([Parameter(Mandatory)][AllowEmptyString()][string] $Value)
 
     if ($Value -notmatch '[\s"]') {
@@ -7,7 +7,7 @@ function ConvertTo-NetStorageProcessArgument {
     '"' + $Value.Replace('"', '\"') + '"'
 }
 
-function Invoke-NetStorageCapturedProcess {
+function Invoke-BookBoxCapturedProcess {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $FilePath,
@@ -26,7 +26,7 @@ function Invoke-NetStorageCapturedProcess {
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $FilePath
     $startInfo.Arguments = ($Arguments | ForEach-Object {
-        ConvertTo-NetStorageProcessArgument $_
+        ConvertTo-BookBoxProcessArgument $_
     }) -join ' '
     $startInfo.WorkingDirectory = $WorkingDirectory
     $startInfo.UseShellExecute = $false

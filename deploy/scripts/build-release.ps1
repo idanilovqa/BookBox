@@ -60,7 +60,7 @@ function Invoke-MonitoredProcess {
     $stoppedIDs = [Collections.Generic.List[int]]::new()
     $cleanupErrors = [Collections.Generic.List[string]]::new()
     try {
-        $result = Invoke-NetStorageCapturedProcess `
+        $result = Invoke-BookBoxCapturedProcess `
             -FilePath $FilePath `
             -Arguments $Arguments `
             -WorkingDirectory $WorkingDirectory `
@@ -198,8 +198,8 @@ $script:repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $artifacts = Join-Path $script:repo 'artifacts'
 [IO.Directory]::CreateDirectory($artifacts) | Out-Null
 $script:artifacts = $artifacts
-$debugArtifact = Join-Path $artifacts "netStorage-v$Version-debug.apk"
-$releaseArtifact = Join-Path $artifacts "netStorage-v$Version-release.apk"
+$debugArtifact = Join-Path $artifacts "BookBox-v$Version-debug.apk"
+$releaseArtifact = Join-Path $artifacts "BookBox-v$Version-release.apk"
 $metadataArtifact = Join-Path $artifacts 'APK_METADATA.json'
 $checksumsArtifact = Join-Path $artifacts 'SHA256SUMS.txt'
 foreach ($path in @(
@@ -219,16 +219,16 @@ $apiDockerfile = Get-Content -LiteralPath (
     Join-Path $script:repo 'deploy\Dockerfile.api'
 ) -Raw
 if ($serverMain -notmatch 'var\s+version\s*=\s*"dev"' -or
-    $apiDockerfile -notmatch '(?m)^ARG NETSTORAGE_VERSION=1\.0\.0$' -or
-    $apiDockerfile -notmatch [regex]::Escape('-X main.version=${NETSTORAGE_VERSION}')) {
-    throw 'Release blocker: the API must keep a dev source default and stamp NETSTORAGE_VERSION=1.0.0 through Docker ldflags.'
+    $apiDockerfile -notmatch '(?m)^ARG BOOKBOX_VERSION=1\.0\.0$' -or
+    $apiDockerfile -notmatch [regex]::Escape('-X main.version=${BOOKBOX_VERSION}')) {
+    throw 'Release blocker: the API must keep a dev source default and stamp BOOKBOX_VERSION=1.0.0 through Docker ldflags.'
 }
 Initialize-JavaAndGradle
 $sdk = Get-AndroidSdk
 $env:ANDROID_HOME = $sdk
 $env:ANDROID_SDK_ROOT = $sdk
 
-$goContainer = "netstorage-release-go-$PID"
+$goContainer = "bookbox-release-go-$PID"
 if ((@(& docker ps -a --filter "name=^/$goContainer$" -q) -join '').Trim()) {
     throw "Owned Go test container name already exists: $goContainer"
 }
@@ -298,11 +298,11 @@ if (-not (Test-Path -LiteralPath $debugSource -PathType Leaf)) {
 Copy-Item -LiteralPath $debugSource -Destination $debugArtifact
 Write-Host "Created $debugArtifact"
 
-$keystore = Join-Path $script:repo 'local-secrets\netstorage-release.jks'
+$keystore = Join-Path $script:repo 'local-secrets\bookbox-release.jks'
 $signingVariables = @(
-    'NETSTORAGE_KEY_ALIAS',
-    'NETSTORAGE_KEYSTORE_PASSWORD',
-    'NETSTORAGE_KEY_PASSWORD'
+    'BOOKBOX_KEY_ALIAS',
+    'BOOKBOX_KEYSTORE_PASSWORD',
+    'BOOKBOX_KEY_PASSWORD'
 )
 $availableSigningValues = @($signingVariables | Where-Object {
     -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_))
@@ -322,7 +322,7 @@ if ((Test-Path -LiteralPath $keystore -PathType Leaf) -and
     $sdk = Get-AndroidSdk
     $zipalign = Get-LatestBuildTool $sdk 'zipalign.exe'
     $apksigner = Get-LatestBuildTool $sdk 'apksigner.bat'
-    $aligned = Join-Path $artifacts ".netStorage-v$Version-aligned.apk"
+    $aligned = Join-Path $artifacts ".BookBox-v$Version-aligned.apk"
     try {
         Invoke-Checked 'Align release APK' {
             & $zipalign -f -p 4 $unsigned $aligned
@@ -330,9 +330,9 @@ if ((Test-Path -LiteralPath $keystore -PathType Leaf) -and
         Invoke-Checked 'Sign release APK' {
             & $apksigner sign `
                 --ks $keystore `
-                --ks-key-alias $env:NETSTORAGE_KEY_ALIAS `
-                --ks-pass 'env:NETSTORAGE_KEYSTORE_PASSWORD' `
-                --key-pass 'env:NETSTORAGE_KEY_PASSWORD' `
+                --ks-key-alias $env:BOOKBOX_KEY_ALIAS `
+                --ks-pass 'env:BOOKBOX_KEYSTORE_PASSWORD' `
+                --key-pass 'env:BOOKBOX_KEY_PASSWORD' `
                 --out $releaseArtifact `
                 $aligned
         }
@@ -351,4 +351,4 @@ Invoke-Checked 'APK metadata, permissions, signatures, and checksums' {
         -File (Join-Path $script:repo 'deploy\scripts\verify-release.ps1') `
         -Version $Version
 }
-Write-Host "PASS: netStorage v$Version release artifacts passed every automated gate."
+Write-Host "PASS: BookBox v$Version release artifacts passed every automated gate."

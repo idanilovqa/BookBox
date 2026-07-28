@@ -13,9 +13,9 @@ $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $baseCompose = Join-Path $repo 'deploy\compose.yml'
 $testCompose = Join-Path $repo 'deploy\compose.recovery.test.yml'
 $runID = [Guid]::NewGuid().ToString('N')
-$project = "netstorage-recovery-$runID"
+$project = "bookbox-recovery-$runID"
 $parent = [IO.Path]::GetFullPath(
-    (Join-Path ([IO.Path]::GetTempPath()) 'netstorage-recovery')
+    (Join-Path ([IO.Path]::GetTempPath()) 'bookbox-recovery')
 )
 $root = [IO.Path]::GetFullPath((Join-Path $parent $runID))
 $library = Join-Path $root 'library'
@@ -26,8 +26,8 @@ $config = Join-Path $root 'config.yml'
 $environment = Join-Path $root 'compose.env'
 $currentPasswordFile = Join-Path $root 'current-password.txt'
 $newPasswordFile = Join-Path $root 'new-password.txt'
-$currentPassword = 'netstorage-recovery-current'
-$newPassword = 'netstorage-recovery-rotated'
+$currentPassword = 'bookbox-recovery-current'
+$newPassword = 'bookbox-recovery-rotated'
 $primaryFailure = $null
 $ownedProcesses = [Collections.Generic.List[int]]::new()
 $compose = @(
@@ -260,11 +260,11 @@ function Get-Container {
 
 function Get-Fingerprint {
     $text = @(Invoke-Docker ($compose + @(
-        'logs', '--no-color', 'netstorage-api'
+        'logs', '--no-color', 'bookbox-api'
     ))) -join [Environment]::NewLine
     $match = [regex]::Match(
         $text,
-        'netStorage certificate SHA-256:\s*((?:[0-9A-F]{2}:){31}[0-9A-F]{2})'
+        'BookBox certificate SHA-256:\s*((?:[0-9A-F]{2}:){31}[0-9A-F]{2})'
     )
     if (-not $match.Success) { throw 'API TLS fingerprint was not logged.' }
     $match.Groups[1].Value
@@ -318,19 +318,19 @@ try {
         [IO.Path]::GetFullPath($Value).Replace('\', '/')
     }
     Write-Utf8 $environment (@(
-        "NETSTORAGE_LIBRARY_PATH=$(& $path $library)"
-        "NETSTORAGE_RECOVERY_LIBRARY_PATH=$(& $path $library)"
-        "NETSTORAGE_CONFIG_HOST_FILE=$(& $path $config)"
-        "NETSTORAGE_RECOVERY_CONFIG_HOST_FILE=$(& $path $config)"
-        "NETSTORAGE_POSTGRES_PASSWORD_HOST_FILE=$(& $path (Join-Path $secrets 'postgres_password.txt'))"
-        "NETSTORAGE_RECOVERY_POSTGRES_PASSWORD_HOST_FILE=$(& $path (Join-Path $secrets 'postgres_password.txt'))"
-        "NETSTORAGE_PASSWORD_HASH_HOST_FILE=$(& $path (Join-Path $secrets 'app_password_hash.txt'))"
-        "NETSTORAGE_RECOVERY_PASSWORD_HASH_HOST_FILE=$(& $path (Join-Path $secrets 'app_password_hash.txt'))"
-        "NETSTORAGE_SESSION_KEY_HOST_FILE=$(& $path (Join-Path $secrets 'session_key.bin'))"
-        "NETSTORAGE_RECOVERY_SESSION_KEY_HOST_FILE=$(& $path (Join-Path $secrets 'session_key.bin'))"
-        "NETSTORAGE_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $path (Join-Path $secrets 'google_books_key.txt'))"
-        "NETSTORAGE_RECOVERY_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $path (Join-Path $secrets 'google_books_key.txt'))"
-        'NETSTORAGE_BIND_ADDRESS=127.0.0.1'
+        "BOOKBOX_LIBRARY_PATH=$(& $path $library)"
+        "BOOKBOX_RECOVERY_LIBRARY_PATH=$(& $path $library)"
+        "BOOKBOX_CONFIG_HOST_FILE=$(& $path $config)"
+        "BOOKBOX_RECOVERY_CONFIG_HOST_FILE=$(& $path $config)"
+        "BOOKBOX_POSTGRES_PASSWORD_HOST_FILE=$(& $path (Join-Path $secrets 'postgres_password.txt'))"
+        "BOOKBOX_RECOVERY_POSTGRES_PASSWORD_HOST_FILE=$(& $path (Join-Path $secrets 'postgres_password.txt'))"
+        "BOOKBOX_PASSWORD_HASH_HOST_FILE=$(& $path (Join-Path $secrets 'app_password_hash.txt'))"
+        "BOOKBOX_RECOVERY_PASSWORD_HASH_HOST_FILE=$(& $path (Join-Path $secrets 'app_password_hash.txt'))"
+        "BOOKBOX_SESSION_KEY_HOST_FILE=$(& $path (Join-Path $secrets 'session_key.bin'))"
+        "BOOKBOX_RECOVERY_SESSION_KEY_HOST_FILE=$(& $path (Join-Path $secrets 'session_key.bin'))"
+        "BOOKBOX_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $path (Join-Path $secrets 'google_books_key.txt'))"
+        "BOOKBOX_RECOVERY_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $path (Join-Path $secrets 'google_books_key.txt'))"
+        'BOOKBOX_BIND_ADDRESS=127.0.0.1'
         'HOST_PORT=18443'
     ) -join [Environment]::NewLine)
     Write-Utf8 $config @'
@@ -340,19 +340,19 @@ roots:
     name: Audiobooks
     container_path: /library/audiobooks
 tls:
-  cert_path: /var/lib/netstorage/tls/server.crt
-  key_path: /var/lib/netstorage/tls/server.key
+  cert_path: /var/lib/bookbox/tls/server.crt
+  key_path: /var/lib/bookbox/tls/server.key
   hosts: [localhost, 127.0.0.1]
 auth:
   username: owner
-  password_hash_file: /run/netstorage-secrets/app_password_hash
-  session_key_file: /run/netstorage-secrets/session_key
+  password_hash_file: /run/bookbox-secrets/app_password_hash
+  session_key_file: /run/bookbox-secrets/session_key
 database:
   host: postgres
   port: 5432
-  name: netstorage
-  username: netstorage
-  password_file: /run/netstorage-secrets/postgres_password
+  name: bookbox
+  username: bookbox
+  password_file: /run/bookbox-secrets/postgres_password
   ssl_mode: disable
 '@
     Write-Utf8 (Join-Path $secrets 'postgres_password.txt') 'recovery-postgres'
@@ -367,11 +367,11 @@ database:
 
     $docker = (Get-Command docker -ErrorAction Stop).Source
     Invoke-Monitored 'build' $docker ($compose + @('build'))
-    $image = "${project}-netstorage-api:latest"
+    $image = "${project}-bookbox-api:latest"
     $hashOutput = @(
         "$currentPassword`n$currentPassword`n" |
             & docker run --rm -i --network none --read-only `
-                --entrypoint /usr/local/bin/netstorage-admin `
+                --entrypoint /usr/local/bin/bookbox-admin `
                 $image hash-password --stdin 2>&1
     )
     if ($LASTEXITCODE -ne 0) { throw 'Password hashing failed.' }
@@ -386,7 +386,7 @@ database:
     )) 300
     $postgres = Get-Container 'postgres'
     Invoke-Docker @(
-        'exec', $postgres, 'psql', '-U', 'netstorage', '-d', 'netstorage',
+        'exec', $postgres, 'psql', '-U', 'bookbox', '-d', 'bookbox',
         '-v', 'ON_ERROR_STOP=1', '-c',
         "create table recovery_probe(value text primary key); insert into recovery_probe values ('database-restored');"
     ) | Out-Null
@@ -451,7 +451,7 @@ database:
     }
     $postgres = Get-Container 'postgres'
     $probe = @(Invoke-Docker @(
-        'exec', $postgres, 'psql', '-U', 'netstorage', '-d', 'netstorage',
+        'exec', $postgres, 'psql', '-U', 'bookbox', '-d', 'bookbox',
         '-tA', '-c', 'select value from recovery_probe'
     )) -join ''
     if ($probe.Trim() -cne 'database-restored') {
@@ -479,7 +479,7 @@ database:
 } catch {
     $primaryFailure = $_
     $failureRoot = Join-Path (
-        Join-Path ([IO.Path]::GetTempPath()) 'netstorage-recovery-failures'
+        Join-Path ([IO.Path]::GetTempPath()) 'bookbox-recovery-failures'
     ) $runID
     [IO.Directory]::CreateDirectory($failureRoot) | Out-Null
     Write-Utf8 (Join-Path $failureRoot 'failure.txt') $_.Exception.ToString()

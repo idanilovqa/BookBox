@@ -1,12 +1,12 @@
-name: netstorage-prod
+name: bookbox-prod
 
 services:
   postgres:
     image: postgres:18-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: netstorage
-      POSTGRES_USER: netstorage
+      POSTGRES_DB: bookbox
+      POSTGRES_USER: bookbox
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     secrets:
       - postgres_password
@@ -17,7 +17,7 @@ services:
     networks:
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U netstorage -d netstorage"]
+      test: ["CMD-SHELL", "pg_isready -U bookbox -d bookbox"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -36,7 +36,7 @@ services:
           cpus: "0.25"
           memory: 256M
 
-  netstorage-api:
+  bookbox-api:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.api
@@ -47,20 +47,20 @@ services:
       - name: https
         target: 8443
         published: "${HOST_PORT:-8443}"
-        host_ip: "${NETSTORAGE_BIND_ADDRESS:-127.0.0.1}"
+        host_ip: "${BOOKBOX_BIND_ADDRESS:-127.0.0.1}"
         protocol: tcp
     volumes:
       - type: bind
-        source: "${NETSTORAGE_LIBRARY_PATH:?Set NETSTORAGE_LIBRARY_PATH in deploy/.env}"
+        source: "${BOOKBOX_LIBRARY_PATH:?Set BOOKBOX_LIBRARY_PATH in deploy/.env}"
         target: /library/audiobooks
         read_only: true
       - type: bind
-        source: "${NETSTORAGE_CONFIG_HOST_FILE:?Set NETSTORAGE_CONFIG_HOST_FILE in deploy/.env}"
-        target: /etc/netstorage/config.yml
+        source: "${BOOKBOX_CONFIG_HOST_FILE:?Set BOOKBOX_CONFIG_HOST_FILE in deploy/.env}"
+        target: /etc/bookbox/config.yml
         read_only: true
       - type: volume
         source: tls_data
-        target: /var/lib/netstorage
+        target: /var/lib/bookbox
     secrets:
       - postgres_password
       - source: app_password_hash
@@ -73,7 +73,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,mode=1777
-      - /run/netstorage-secrets:rw,nosuid,nodev,noexec,mode=0700,uid=10001,gid=10001
+      - /run/bookbox-secrets:rw,nosuid,nodev,noexec,mode=0700,uid=10001,gid=10001
     cap_drop:
       - ALL
     security_opt:
@@ -101,7 +101,7 @@ services:
           cpus: "0.20"
           memory: 192M
 
-  netstorage-catalog-worker:
+  bookbox-catalog-worker:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.worker
@@ -114,32 +114,32 @@ services:
       # cover.jpg/folder.jpg/front.jpg variants, but the mount itself cannot
       # enforce filename-only permissions.
       - type: bind
-        source: "${NETSTORAGE_LIBRARY_PATH:?Set NETSTORAGE_LIBRARY_PATH in deploy/.env}"
+        source: "${BOOKBOX_LIBRARY_PATH:?Set BOOKBOX_LIBRARY_PATH in deploy/.env}"
         target: /library/audiobooks
       - type: bind
-        source: "${NETSTORAGE_CONFIG_HOST_FILE:?Set NETSTORAGE_CONFIG_HOST_FILE in deploy/.env}"
-        target: /etc/netstorage/config.yml
+        source: "${BOOKBOX_CONFIG_HOST_FILE:?Set BOOKBOX_CONFIG_HOST_FILE in deploy/.env}"
+        target: /etc/bookbox/config.yml
         read_only: true
       - type: volume
         source: cover_cache
-        target: /var/lib/netstorage/covers
+        target: /var/lib/bookbox/covers
       - type: volume
         source: cover_backups
-        target: /var/lib/netstorage/backups
+        target: /var/lib/bookbox/backups
     secrets:
       - postgres_password
       - source: google_books_key
         target: google_books_key
     environment:
-      NETSTORAGE_COVER_BACKUP_ROOT: /var/lib/netstorage/backups
-      NETSTORAGE_GOOGLE_BOOKS_API_KEY_FILE: /run/secrets/google_books_key
+      BOOKBOX_COVER_BACKUP_ROOT: /var/lib/bookbox/backups
+      BOOKBOX_GOOGLE_BOOKS_API_KEY_FILE: /run/secrets/google_books_key
     networks:
       - backend
       - outbound
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,mode=1777
-      - /run/netstorage-secrets:rw,nosuid,nodev,noexec,mode=0700,uid=10001,gid=10001
+      - /run/bookbox-secrets:rw,nosuid,nodev,noexec,mode=0700,uid=10001,gid=10001
     cap_drop:
       - ALL
     security_opt:
@@ -148,7 +148,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "sh", "-c", "for process in /proc/[0-9]*; do [ \"$(readlink \"$$process/exe\")\" = /usr/local/bin/netstorage-catalog-worker ] && exit 0; done; exit 1"]
+      test: ["CMD", "sh", "-c", "for process in /proc/[0-9]*; do [ \"$(readlink \"$$process/exe\")\" = /usr/local/bin/bookbox-catalog-worker ] && exit 0; done; exit 1"]
       interval: 10s
       timeout: 3s
       retries: 12
@@ -169,13 +169,13 @@ services:
 
 secrets:
   postgres_password:
-    file: "${NETSTORAGE_POSTGRES_PASSWORD_HOST_FILE:?Set NETSTORAGE_POSTGRES_PASSWORD_HOST_FILE in deploy/.env}"
+    file: "${BOOKBOX_POSTGRES_PASSWORD_HOST_FILE:?Set BOOKBOX_POSTGRES_PASSWORD_HOST_FILE in deploy/.env}"
   app_password_hash:
-    file: "${NETSTORAGE_PASSWORD_HASH_HOST_FILE:?Set NETSTORAGE_PASSWORD_HASH_HOST_FILE in deploy/.env}"
+    file: "${BOOKBOX_PASSWORD_HASH_HOST_FILE:?Set BOOKBOX_PASSWORD_HASH_HOST_FILE in deploy/.env}"
   session_key:
-    file: "${NETSTORAGE_SESSION_KEY_HOST_FILE:?Set NETSTORAGE_SESSION_KEY_HOST_FILE in deploy/.env}"
+    file: "${BOOKBOX_SESSION_KEY_HOST_FILE:?Set BOOKBOX_SESSION_KEY_HOST_FILE in deploy/.env}"
   google_books_key:
-    file: "${NETSTORAGE_GOOGLE_BOOKS_KEY_HOST_FILE:-./secrets/google_books_key.txt}"
+    file: "${BOOKBOX_GOOGLE_BOOKS_KEY_HOST_FILE:-./secrets/google_books_key.txt}"
 
 volumes:
   postgres_data:

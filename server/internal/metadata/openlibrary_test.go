@@ -41,7 +41,7 @@ func TestOpenLibrarySearchEncodesRequestAndMapsCandidate(t *testing.T) {
 				t.Errorf("fields %q does not contain %q", query.Get("fields"), field)
 			}
 		}
-		if userAgent := request.Header.Get("User-Agent"); !strings.Contains(userAgent, "netStorage") {
+		if userAgent := request.Header.Get("User-Agent"); !strings.Contains(userAgent, "BookBox") {
 			t.Errorf("User-Agent = %q", userAgent)
 		}
 		writer.Header().Set("Content-Type", "application/json")

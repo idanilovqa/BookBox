@@ -81,11 +81,11 @@ function Invoke-SessionRequest {
     }
 }
 
-if ($ProjectName -notlike 'netstorage-recovery-*') {
-    throw 'This build permits rotation only for a netstorage-recovery-* synthetic project.'
+if ($ProjectName -notlike 'bookbox-recovery-*') {
+    throw 'This build permits rotation only for a bookbox-recovery-* synthetic project.'
 }
 $script:recoveryRoot = [IO.Path]::GetFullPath(
-    (Join-Path ([IO.Path]::GetTempPath()) 'netstorage-recovery')
+    (Join-Path ([IO.Path]::GetTempPath()) 'bookbox-recovery')
 ).TrimEnd('\') + '\'
 [IO.Directory]::CreateDirectory($script:recoveryRoot) | Out-Null
 $environment = [IO.Path]::GetFullPath($EnvironmentFile)
@@ -142,7 +142,7 @@ try {
     $hashOutput = @(
         Invoke-Docker (@($composeArgs) + @(
             'run', '--rm', '--no-deps', '--entrypoint',
-            '/usr/local/bin/netstorage-admin', 'netstorage-api',
+            '/usr/local/bin/bookbox-admin', 'bookbox-api',
             'hash-password', '--stdin'
         )) $hashInput
     )
@@ -180,7 +180,7 @@ try {
     }
 
     Invoke-Docker (@($composeArgs) + @(
-        'up', '-d', '--no-deps', '--force-recreate', 'netstorage-api'
+        'up', '-d', '--no-deps', '--force-recreate', 'bookbox-api'
     )) | Out-Null
     & (Join-Path $PSScriptRoot 'wait-healthy.ps1') `
         -BaseUrl $BaseUrl `
@@ -206,7 +206,7 @@ try {
         [IO.File]::WriteAllBytes($hashPath, $oldHash)
         [IO.File]::WriteAllBytes($sessionPath, $oldSession)
         Invoke-Docker (@($composeArgs) + @(
-            'up', '-d', '--no-deps', '--force-recreate', 'netstorage-api'
+            'up', '-d', '--no-deps', '--force-recreate', 'bookbox-api'
         )) | Out-Null
     }
     throw

@@ -488,7 +488,7 @@ func writeCreationMarkerForTest(
 		certDigest = certSHA256[0]
 	}
 	raw, err := json.Marshal(map[string]any{
-		"magic":      "netstorage-tls-creation-v1",
+		"magic":      "bookbox-tls-creation-v1",
 		"certPath":   certPath,
 		"keyPath":    keyPath,
 		"startedAt":  startedAt.UTC(),

@@ -21,8 +21,8 @@ const (
 )
 
 var (
-	fileSignerKeyDomain = []byte("netstorage:file-id:v1:key")
-	fileSignerMACDomain = []byte("netstorage:file-id:v1:mac\x00")
+	fileSignerKeyDomain = []byte("bookbox:file-id:v1:key")
+	fileSignerMACDomain = []byte("bookbox:file-id:v1:mac\x00")
 	fileIdentityRootID  = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 )
 

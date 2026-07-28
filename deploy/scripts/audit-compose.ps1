@@ -1,7 +1,7 @@
 param(
     [string] $ComposeFile = (Join-Path $PSScriptRoot '..\compose.yml'),
     [string] $EnvironmentFile,
-    [string] $ProjectName = 'netstorage-e2e-audit'
+    [string] $ProjectName = 'bookbox-e2e-audit'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,8 +29,8 @@ if ($LASTEXITCODE -ne 0) {
     throw "Compose resolution failed:`n$($raw -join [Environment]::NewLine)"
 }
 $resolved = ($raw -join [Environment]::NewLine) | ConvertFrom-Json
-$api = $resolved.services.'netstorage-api'
-$worker = $resolved.services.'netstorage-catalog-worker'
+$api = $resolved.services.'bookbox-api'
+$worker = $resolved.services.'bookbox-catalog-worker'
 $postgres = $resolved.services.postgres
 if (-not $api -or -not $worker -or -not $postgres) {
     throw 'Production Compose must define API, catalog worker, and PostgreSQL.'
@@ -71,7 +71,7 @@ if (
 ) {
     throw 'Worker and PostgreSQL must have no inbound published or exposed port.'
 }
-foreach ($serviceName in @('netstorage-api', 'netstorage-catalog-worker')) {
+foreach ($serviceName in @('bookbox-api', 'bookbox-catalog-worker')) {
     $service = $resolved.services.$serviceName
     if (@($service.cap_drop) -notcontains 'ALL') {
         throw "$serviceName does not drop all capabilities."
@@ -97,7 +97,7 @@ foreach ($secret in @('postgres_password', 'app_password_hash', 'session_key', '
         throw "Secret $secret is not file-backed."
     }
 }
-foreach ($serviceName in @('postgres', 'netstorage-api', 'netstorage-catalog-worker')) {
+foreach ($serviceName in @('postgres', 'bookbox-api', 'bookbox-catalog-worker')) {
     if (-not $resolved.services.$serviceName.healthcheck) {
         throw "$serviceName lacks a health gate."
     }
@@ -109,16 +109,16 @@ if (-not (Test-Path -LiteralPath $testCompose -PathType Leaf)) {
 }
 $safePlaceholder = [IO.Path]::Combine(
     [IO.Path]::GetTempPath(),
-    'netstorage-e2e-audit',
+    'bookbox-e2e-audit',
     'library'
 ).Replace('\', '/')
 $testVariables = @{
-    NETSTORAGE_TEST_LIBRARY_PATH = $safePlaceholder
-    NETSTORAGE_TEST_CONFIG_HOST_FILE = "$safePlaceholder/config.yml"
-    NETSTORAGE_TEST_POSTGRES_PASSWORD_HOST_FILE = "$safePlaceholder/postgres.txt"
-    NETSTORAGE_TEST_PASSWORD_HASH_HOST_FILE = "$safePlaceholder/password.txt"
-    NETSTORAGE_TEST_SESSION_KEY_HOST_FILE = "$safePlaceholder/session.bin"
-    NETSTORAGE_TEST_GOOGLE_BOOKS_KEY_HOST_FILE = "$safePlaceholder/google.txt"
+    BOOKBOX_TEST_LIBRARY_PATH = $safePlaceholder
+    BOOKBOX_TEST_CONFIG_HOST_FILE = "$safePlaceholder/config.yml"
+    BOOKBOX_TEST_POSTGRES_PASSWORD_HOST_FILE = "$safePlaceholder/postgres.txt"
+    BOOKBOX_TEST_PASSWORD_HASH_HOST_FILE = "$safePlaceholder/password.txt"
+    BOOKBOX_TEST_SESSION_KEY_HOST_FILE = "$safePlaceholder/session.bin"
+    BOOKBOX_TEST_GOOGLE_BOOKS_KEY_HOST_FILE = "$safePlaceholder/google.txt"
 }
 foreach ($entry in $testVariables.GetEnumerator()) {
     [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
@@ -155,10 +155,10 @@ foreach ($service in $testResolved.services.PSObject.Properties.Value) {
     }
 }
 $expectedConfig = "$safePlaceholder/config.yml"
-foreach ($serviceName in @('netstorage-api', 'netstorage-catalog-worker')) {
+foreach ($serviceName in @('bookbox-api', 'bookbox-catalog-worker')) {
     $service = $testResolved.services.$serviceName
     $libraryMounts = @($service.volumes | Where-Object target -eq '/library/audiobooks')
-    $configMounts = @($service.volumes | Where-Object target -eq '/etc/netstorage/config.yml')
+    $configMounts = @($service.volumes | Where-Object target -eq '/etc/bookbox/config.yml')
     if ($libraryMounts.Count -ne 1 -or $libraryMounts[0].source -ne $safePlaceholder) {
         throw "$serviceName silently inherited the production library mount."
     }

@@ -1,6 +1,6 @@
 # Backup and recovery
 
-netStorage's recovery test uses a unique synthetic Docker project and a temporary
+BookBox's recovery test uses a unique synthetic Docker project and a temporary
 library. It verifies a PostgreSQL dump, the TLS identity volume, non-secret
 configuration, the cover cache, original-cover backups, and password/session
 rotation:
@@ -11,7 +11,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 ```
 
 The test never reads `H:\Audiobooks`. It removes only its matching
-`netstorage-recovery-<run-id>` containers, networks, volumes, local images, and
+`bookbox-recovery-<run-id>` containers, networks, volumes, local images, and
 temporary directory. Failure diagnostics exclude secret files and backup
 payloads.
 

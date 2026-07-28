@@ -5,19 +5,19 @@ COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
-    -o /out/netstorage-catalog-worker ./cmd/catalog-worker
+    -o /out/bookbox-catalog-worker ./cmd/catalog-worker
 
 FROM alpine:3.22
 
 RUN apk add --no-cache ca-certificates ffmpeg \
-    && addgroup -S -g 10001 netstorage \
-    && adduser -S -D -H -u 10001 -G netstorage netstorage \
-    && mkdir -p /var/lib/netstorage/covers /var/lib/netstorage/backups \
-    && chown -R 10001:10001 /var/lib/netstorage \
-    && chmod 0700 /var/lib/netstorage \
-        /var/lib/netstorage/covers /var/lib/netstorage/backups
+    && addgroup -S -g 10001 bookbox \
+    && adduser -S -D -H -u 10001 -G bookbox bookbox \
+    && mkdir -p /var/lib/bookbox/covers /var/lib/bookbox/backups \
+    && chown -R 10001:10001 /var/lib/bookbox \
+    && chmod 0700 /var/lib/bookbox \
+        /var/lib/bookbox/covers /var/lib/bookbox/backups
 
-COPY --from=build /out/netstorage-catalog-worker /usr/local/bin/netstorage-catalog-worker
+COPY --from=build /out/bookbox-catalog-worker /usr/local/bin/bookbox-catalog-worker
 COPY --chmod=0555 deploy/entrypoint-worker.sh /usr/local/bin/entrypoint-worker.sh
 
 USER 10001:10001

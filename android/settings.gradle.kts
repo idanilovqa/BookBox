@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "netStorage"
+rootProject.name = "BookBox"
 include(":app")

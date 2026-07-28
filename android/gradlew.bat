@@ -1,5 +1,5 @@
 @rem
-@rem netStorage Gradle wrapper startup script for Windows
+@rem BookBox Gradle wrapper startup script for Windows
 @rem
 @if "%DEBUG%"=="" @echo off
 @setlocal

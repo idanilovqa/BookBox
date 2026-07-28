@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"netstorage.local/server/internal/auth"
-	"netstorage.local/server/internal/config"
+	"bookbox.local/server/internal/auth"
+	"bookbox.local/server/internal/config"
 )
 
 func TestSessionLoginRefreshAndProtectedAccess(t *testing.T) {

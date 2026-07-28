@@ -8,7 +8,7 @@ param(
     [string[]] $ComposeFile,
     [Parameter(Mandatory)]
     [string] $EnvironmentFile,
-    [string] $DatabaseName = 'netstorage',
+    [string] $DatabaseName = 'bookbox',
     [string] $BaseUrl = 'https://127.0.0.1:18443',
     [ValidateRange(30, 1800)]
     [int] $TimeoutSeconds = 300
@@ -105,11 +105,11 @@ function Get-CertificateFingerprint {
     }
 }
 
-if ($ProjectName -notlike 'netstorage-recovery-*') {
-    throw 'This build permits restore only for a netstorage-recovery-* synthetic project.'
+if ($ProjectName -notlike 'bookbox-recovery-*') {
+    throw 'This build permits restore only for a bookbox-recovery-* synthetic project.'
 }
 $recoveryRoot = [IO.Path]::GetFullPath(
-    (Join-Path ([IO.Path]::GetTempPath()) 'netstorage-recovery')
+    (Join-Path ([IO.Path]::GetTempPath()) 'bookbox-recovery')
 ).TrimEnd('\') + '\'
 $script:backup = [IO.Path]::GetFullPath($BackupDirectory)
 if (-not $script:backup.StartsWith(
@@ -187,8 +187,8 @@ if ($running.Count -ne 0) {
     throw "All recovery-project services must be stopped: $($running -join ', ')"
 }
 
-$configMount = @($resolved.services.'netstorage-api'.volumes | Where-Object {
-    $_.type -eq 'bind' -and $_.target -eq '/etc/netstorage/config.yml'
+$configMount = @($resolved.services.'bookbox-api'.volumes | Where-Object {
+    $_.type -eq 'bind' -and $_.target -eq '/etc/bookbox/config.yml'
 })
 if ($configMount.Count -ne 1) {
     throw 'Could not resolve the recovery configuration mount.'
@@ -201,9 +201,9 @@ if (-not (Test-Path -LiteralPath $activeConfig -PathType Leaf) -or
 }
 
 $postgresVolume = Get-ServiceVolume $resolved 'postgres' '/var/lib/postgresql'
-$tlsVolume = Get-ServiceVolume $resolved 'netstorage-api' '/var/lib/netstorage'
-$cacheVolume = Get-ServiceVolume $resolved 'netstorage-catalog-worker' '/var/lib/netstorage/covers'
-$coverBackupVolume = Get-ServiceVolume $resolved 'netstorage-catalog-worker' '/var/lib/netstorage/backups'
+$tlsVolume = Get-ServiceVolume $resolved 'bookbox-api' '/var/lib/bookbox'
+$cacheVolume = Get-ServiceVolume $resolved 'bookbox-catalog-worker' '/var/lib/bookbox/covers'
+$coverBackupVolume = Get-ServiceVolume $resolved 'bookbox-catalog-worker' '/var/lib/bookbox/backups'
 foreach ($volume in @($postgresVolume, $tlsVolume, $cacheVolume, $coverBackupVolume)) {
     Assert-EmptyVolume $volume
 }
@@ -236,14 +236,14 @@ do {
     Start-Sleep -Seconds 2
 } while ($true)
 
-$dumpName = "/tmp/netstorage-restore-$([Guid]::NewGuid().ToString('N')).dump"
+$dumpName = "/tmp/bookbox-restore-$([Guid]::NewGuid().ToString('N')).dump"
 try {
     Invoke-Docker @(
         'cp', (Join-Path $script:backup 'database.dump'),
         "${postgresID}:$dumpName"
     ) | Out-Null
     Invoke-Docker @(
-        'exec', $postgresID, 'pg_restore', '--username', 'netstorage',
+        'exec', $postgresID, 'pg_restore', '--username', 'bookbox',
         '--dbname', $DatabaseName, '--clean', '--if-exists',
         '--exit-on-error', '--no-owner', '--no-privileges', $dumpName
     ) | Out-Null
@@ -251,7 +251,7 @@ try {
     @(& docker exec $postgresID rm -f $dumpName 2>&1) | Out-Null
 }
 Invoke-Docker (@($composeArgs) + @(
-    'up', '-d', 'netstorage-api', 'netstorage-catalog-worker'
+    'up', '-d', 'bookbox-api', 'bookbox-catalog-worker'
 )) | Out-Null
 & (Join-Path $PSScriptRoot 'wait-healthy.ps1') `
     -BaseUrl $BaseUrl `

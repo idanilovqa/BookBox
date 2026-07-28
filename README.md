@@ -1,6 +1,6 @@
-# netStorage
+# BookBox
 
-netStorage copies selected audiobooks from a Windows library to Android over a private home network. The Android app offers audiobook cards, search, filters, and raw-folder navigation. The server streams source files through an authenticated HTTPS API.
+BookBox copies selected audiobooks from a Windows library to Android over a private home network. The Android app offers audiobook cards, search, filters, and raw-folder navigation. The server streams source files through an authenticated HTTPS API.
 
 The Android-facing API mounts the Windows library read-only. It has no upload, rename, move, tag-edit, or delete route. A separate catalog worker can write validated cover files after it backs up the prior cover and records an audit event. PostgreSQL stores the catalog and review history. The project uses no SQLite or Room database.
 
@@ -17,11 +17,11 @@ Version 1 targets Android 16, API 36, and the Galaxy S23 Ultra. It uses a manual
 
 ## Design and implementation records
 
-- [Version-one design](docs/superpowers/specs/2026-07-26-netstorage-design.md)
-- [Server transfer plan](docs/superpowers/plans/2026-07-26-netstorage-server-transfer.md)
-- [Catalog plan](docs/superpowers/plans/2026-07-26-netstorage-catalog.md)
-- [Android plan](docs/superpowers/plans/2026-07-26-netstorage-android.md)
-- [Integration and release plan](docs/superpowers/plans/2026-07-26-netstorage-integration-release.md)
+- [Version-one design](docs/superpowers/specs/2026-07-26-bookbox-design.md)
+- [Server transfer plan](docs/superpowers/plans/2026-07-26-bookbox-server-transfer.md)
+- [Catalog plan](docs/superpowers/plans/2026-07-26-bookbox-catalog.md)
+- [Android plan](docs/superpowers/plans/2026-07-26-bookbox-android.md)
+- [Integration and release plan](docs/superpowers/plans/2026-07-26-bookbox-integration-release.md)
 
 The approved [Goodreads list-matching design](docs/superpowers/specs/2026-07-26-goodreads-list-matching-design.md) targets version two. Version one does not import Goodreads CSV files, scrape pages, or store Goodreads credentials.
 

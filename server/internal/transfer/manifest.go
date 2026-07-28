@@ -15,7 +15,7 @@ import (
 	"sort"
 	"strings"
 
-	"netstorage.local/server/internal/library"
+	"bookbox.local/server/internal/library"
 )
 
 const (

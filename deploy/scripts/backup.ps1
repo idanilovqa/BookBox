@@ -8,7 +8,7 @@ param(
     [string[]] $ComposeFile,
     [Parameter(Mandatory)]
     [string] $EnvironmentFile,
-    [string] $DatabaseName = 'netstorage',
+    [string] $DatabaseName = 'bookbox',
     [Parameter(Mandatory)]
     [string] $ConfigFile,
     [string] $AppVersion = 'development'
@@ -63,11 +63,11 @@ function Export-Volume {
     ) | Out-Null
 }
 
-if ($ProjectName -notlike 'netstorage-recovery-*') {
-    throw 'This build permits backup only for a netstorage-recovery-* synthetic project.'
+if ($ProjectName -notlike 'bookbox-recovery-*') {
+    throw 'This build permits backup only for a bookbox-recovery-* synthetic project.'
 }
 $recoveryRoot = [IO.Path]::GetFullPath(
-    (Join-Path ([IO.Path]::GetTempPath()) 'netstorage-recovery')
+    (Join-Path ([IO.Path]::GetTempPath()) 'bookbox-recovery')
 ).TrimEnd('\') + '\'
 $script:destination = [IO.Path]::GetFullPath($Destination)
 if (-not $script:destination.StartsWith(
@@ -107,7 +107,7 @@ if ([string] $resolved.name -cne $ProjectName -or
 $running = @(Invoke-Docker (@($composeArgs) + @(
     'ps', '--status', 'running', '--services'
 )))
-foreach ($service in @('postgres', 'netstorage-api', 'netstorage-catalog-worker')) {
+foreach ($service in @('postgres', 'bookbox-api', 'bookbox-catalog-worker')) {
     if ($running -notcontains $service) {
         throw "Service must be running before backup: $service"
     }
@@ -116,10 +116,10 @@ foreach ($service in @('postgres', 'netstorage-api', 'netstorage-catalog-worker'
 $postgresID = @(
     Invoke-Docker (@($composeArgs) + @('ps', '-q', 'postgres'))
 )[0].ToString().Trim()
-$dumpName = "/tmp/netstorage-backup-$([Guid]::NewGuid().ToString('N')).dump"
+$dumpName = "/tmp/bookbox-backup-$([Guid]::NewGuid().ToString('N')).dump"
 try {
     Invoke-Docker @(
-        'exec', $postgresID, 'pg_dump', '--username', 'netstorage',
+        'exec', $postgresID, 'pg_dump', '--username', 'bookbox',
         '--dbname', $DatabaseName, '--format=custom', '--file', $dumpName
     ) | Out-Null
     Invoke-Docker @(
@@ -131,15 +131,15 @@ try {
 }
 $schemaVersion = [int64] (@(
     Invoke-Docker @(
-        'exec', $postgresID, 'psql', '--username', 'netstorage',
+        'exec', $postgresID, 'psql', '--username', 'bookbox',
         '--dbname', $DatabaseName, '--tuples-only', '--no-align',
         '--command', 'select coalesce(max(version),0) from schema_migrations'
     )
 )[0].ToString().Trim())
 
-$tlsVolume = Get-ServiceVolume $resolved 'netstorage-api' '/var/lib/netstorage'
-$cacheVolume = Get-ServiceVolume $resolved 'netstorage-catalog-worker' '/var/lib/netstorage/covers'
-$coverBackupVolume = Get-ServiceVolume $resolved 'netstorage-catalog-worker' '/var/lib/netstorage/backups'
+$tlsVolume = Get-ServiceVolume $resolved 'bookbox-api' '/var/lib/bookbox'
+$cacheVolume = Get-ServiceVolume $resolved 'bookbox-catalog-worker' '/var/lib/bookbox/covers'
+$coverBackupVolume = Get-ServiceVolume $resolved 'bookbox-catalog-worker' '/var/lib/bookbox/backups'
 Export-Volume $tlsVolume 'tls_data.tar.gz'
 Export-Volume $cacheVolume 'cover_cache.tar.gz'
 Export-Volume $coverBackupVolume 'cover_backups.tar.gz'

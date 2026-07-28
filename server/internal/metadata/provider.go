@@ -21,7 +21,7 @@ const (
 	maxRetries         = 2
 	defaultRetryDelay  = 100 * time.Millisecond
 	maxRetryDelay      = 2 * time.Second
-	userAgent          = "netStorage/1.0 audiobook metadata catalog"
+	userAgent          = "BookBox/1.0 audiobook metadata catalog"
 )
 
 var ErrResponseTooLarge = errors.New("metadata provider response exceeds 2 MiB")

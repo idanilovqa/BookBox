@@ -10,8 +10,8 @@ import (
 	"slices"
 	"testing"
 
-	"netstorage.local/server/internal/config"
-	"netstorage.local/server/internal/library"
+	"bookbox.local/server/internal/config"
+	"bookbox.local/server/internal/library"
 )
 
 func TestManifestPreservesSelectedFolderAndHashesFiles(t *testing.T) {

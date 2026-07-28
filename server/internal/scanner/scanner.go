@@ -15,9 +15,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"netstorage.local/server/internal/config"
-	"netstorage.local/server/internal/library"
-	"netstorage.local/server/internal/media"
+	"bookbox.local/server/internal/config"
+	"bookbox.local/server/internal/library"
+	"bookbox.local/server/internal/media"
 )
 
 type FileKind string
@@ -271,7 +271,7 @@ func isHidden(relative string) bool {
 func stableFileID(rootID, relative string) uuid.UUID {
 	return uuid.NewSHA1(
 		uuid.NameSpaceURL,
-		[]byte("netstorage-source:"+rootID+"\x00"+relative),
+		[]byte("bookbox-source:"+rootID+"\x00"+relative),
 	)
 }
 

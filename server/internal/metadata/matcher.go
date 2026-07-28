@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode"
 
-	"netstorage.local/server/internal/catalog"
+	"bookbox.local/server/internal/catalog"
 )
 
 const (

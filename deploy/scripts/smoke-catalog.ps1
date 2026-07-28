@@ -14,7 +14,7 @@ foreach ($required in @($compose, $dockerfile, $serverSmoke)) {
 $composeText = Get-Content -LiteralPath $compose -Raw
 $workerMatch = [regex]::Match(
     $composeText,
-    '(?ms)^  netstorage-catalog-worker:\r?\n(?<body>.*?)(?=^secrets:)'
+    '(?ms)^  bookbox-catalog-worker:\r?\n(?<body>.*?)(?=^secrets:)'
 )
 if (-not $workerMatch.Success) {
     throw 'The catalog worker Compose service is missing.'

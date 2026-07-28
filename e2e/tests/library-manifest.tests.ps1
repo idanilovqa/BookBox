@@ -4,7 +4,7 @@ param()
 $ErrorActionPreference = 'Stop'
 $scriptPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'library-manifest.ps1'
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
-    'netstorage-manifest-test-' + [Guid]::NewGuid().ToString('N')
+    'bookbox-manifest-test-' + [Guid]::NewGuid().ToString('N')
 )
 
 function Assert-True {
@@ -148,7 +148,7 @@ try {
                 $tempRoot,
                 [System.StringComparison]::OrdinalIgnoreCase
             ) -or
-            $deleteName -notmatch '^netstorage-manifest-test-[0-9a-f]{32}$'
+            $deleteName -notmatch '^bookbox-manifest-test-[0-9a-f]{32}$'
         ) {
             throw "Refusing unsafe test cleanup target: $deleteTarget"
         }

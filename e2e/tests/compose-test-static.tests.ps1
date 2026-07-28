@@ -21,7 +21,7 @@ foreach ($entry in $requirements.GetEnumerator()) {
     }
 }
 
-if ($compose -match '(?m)^\s+name:\s+netstorage-') {
+if ($compose -match '(?m)^\s+name:\s+bookbox-') {
     throw 'Test Compose must not declare fixed resource names.'
 }
 

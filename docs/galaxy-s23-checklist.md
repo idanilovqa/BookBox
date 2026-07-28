@@ -21,8 +21,8 @@ Record evidence for each item. Leave failed or untested items unchecked. Add the
 - [ ] The APK signature verifies before sideload.
 - [ ] Android installs and launches the selected v1.0.0 APK.
 - [ ] The app reaches the reserved Windows address on trusted home Wi-Fi.
-- [ ] The app cannot reach netStorage from mobile data or an untrusted external network.
-- [ ] The router has no netStorage port-forwarding rule.
+- [ ] The app cannot reach BookBox from mobile data or an untrusted external network.
+- [ ] The router has no BookBox port-forwarding rule.
 
 Evidence:
 

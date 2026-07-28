@@ -3,7 +3,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $scriptPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'stop.ps1'
-$e2eRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'netstorage-e2e'
+$e2eRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'bookbox-e2e'
 $runID = [Guid]::NewGuid().ToString('N')
 $taskRoot = Join-Path $e2eRoot $runID
 $stopText = Get-Content -Raw -LiteralPath $scriptPath
@@ -42,26 +42,26 @@ function Assert-ThrowsLike {
 $null = New-Item -ItemType Directory -Path $taskRoot -Force
 try {
     & $scriptPath `
-        -ProjectName "netstorage-e2e-$runID" `
+        -ProjectName "bookbox-e2e-$runID" `
         -TaskRoot $taskRoot `
         -ValidateOnly
 
     Assert-ThrowsLike -Pattern 'project name' -Action {
         & $scriptPath `
-            -ProjectName 'netstorage-prod' `
+            -ProjectName 'bookbox-prod' `
             -TaskRoot $taskRoot `
             -ValidateOnly
     }
     Assert-ThrowsLike -Pattern 'task root' -Action {
         & $scriptPath `
-            -ProjectName "netstorage-e2e-$runID" `
+            -ProjectName "bookbox-e2e-$runID" `
             -TaskRoot 'H:\Audiobooks' `
             -ValidateOnly
     }
     Assert-ThrowsLike -Pattern 'same run identifier' -Action {
         $otherRun = [Guid]::NewGuid().ToString('N')
         & $scriptPath `
-            -ProjectName "netstorage-e2e-$otherRun" `
+            -ProjectName "bookbox-e2e-$otherRun" `
             -TaskRoot $taskRoot `
             -ValidateOnly
     }
@@ -91,7 +91,7 @@ try {
     }
     if (
         $stopText -notmatch
-            '(?s)function Stop-ExactEmulatorSerial.*?Invoke-NetStorageCapturedProcess.*?TimeoutMilliseconds 10000'
+            '(?s)function Stop-ExactEmulatorSerial.*?Invoke-BookBoxCapturedProcess.*?TimeoutMilliseconds 10000'
     ) {
         throw 'Exact emulator shutdown must use the shared bounded process runner.'
     }

@@ -14,8 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"netstorage.local/server/internal/database"
-	"netstorage.local/server/internal/testpostgres"
+	"bookbox.local/server/internal/database"
+	"bookbox.local/server/internal/testpostgres"
 )
 
 func TestValidateRelativePathRejectsUnsafePaths(t *testing.T) {

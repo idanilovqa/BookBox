@@ -2,8 +2,8 @@
 
 **Status:** Approved design draft for user review
 **Date:** 2026-07-26
-**Target release:** netStorage version two
-**Depends on:** netStorage version-one catalog, PostgreSQL, Android app, and transfer workflow
+**Target release:** BookBox version two
+**Depends on:** BookBox version-one catalog, PostgreSQL, Android app, and transfer workflow
 
 ## Purpose
 
@@ -35,7 +35,7 @@ The first Goodreads phase excludes:
 - Goodreads credentials, cookies, or authenticated sessions.
 - HTML page parsing or web scraping.
 - Direct Goodreads API integration.
-- Editing Goodreads shelves from netStorage.
+- Editing Goodreads shelves from BookBox.
 - Writing imported metadata into audio tags.
 - More than one primary local audiobook match per Goodreads entry.
 - Replacing the existing Audiobooks or Folders navigation modes.
@@ -47,13 +47,13 @@ Authenticated page parsing may receive a separate design if CSV export stops mee
 Docker Compose adds a read-only import mount:
 
 ```text
-C:\netStorage-imports → /imports
+C:\BookBox-imports → /imports
 ```
 
 The configured file is:
 
 ```text
-C:\netStorage-imports\goodreads_library_export.csv
+C:\BookBox-imports\goodreads_library_export.csv
 ```
 
 The catalog worker checks the path at startup and on a configurable interval. Before reading, it verifies that size and modification time remain unchanged across two checks. It computes SHA-256 and ignores a file hash already recorded in PostgreSQL.

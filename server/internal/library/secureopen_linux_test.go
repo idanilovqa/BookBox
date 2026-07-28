@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"netstorage.local/server/internal/config"
+	"bookbox.local/server/internal/config"
 
 	"golang.org/x/sys/unix"
 )

@@ -11,9 +11,9 @@ if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
 . $helper
 
 $runID = '0123456789abcdef0123456789abcdef'
-$project = "netstorage-recovery-$runID"
+$project = "bookbox-recovery-$runID"
 $runRoot = [IO.Path]::GetFullPath(
-    (Join-Path (Join-Path ([IO.Path]::GetTempPath()) 'netstorage-recovery') $runID)
+    (Join-Path (Join-Path ([IO.Path]::GetTempPath()) 'bookbox-recovery') $runID)
 )
 $library = Join-Path $runRoot 'library'
 $config = Join-Path $runRoot 'config.yml'
@@ -40,7 +40,7 @@ function New-ResolvedScope {
                     }
                 )
             }
-            'netstorage-api' = [pscustomobject]@{
+            'bookbox-api' = [pscustomobject]@{
                 ports = @(
                     [pscustomobject]@{
                         target = 8443
@@ -59,17 +59,17 @@ function New-ResolvedScope {
                     [pscustomobject]@{
                         type = 'bind'
                         source = $config
-                        target = '/etc/netstorage/config.yml'
+                        target = '/etc/bookbox/config.yml'
                         read_only = $true
                     },
                     [pscustomobject]@{
                         type = 'volume'
                         source = 'recovery_tls_data'
-                        target = '/var/lib/netstorage'
+                        target = '/var/lib/bookbox'
                     }
                 )
             }
-            'netstorage-catalog-worker' = [pscustomobject]@{
+            'bookbox-catalog-worker' = [pscustomobject]@{
                 volumes = @(
                     [pscustomobject]@{
                         type = 'bind'
@@ -80,18 +80,18 @@ function New-ResolvedScope {
                     [pscustomobject]@{
                         type = 'bind'
                         source = $config
-                        target = '/etc/netstorage/config.yml'
+                        target = '/etc/bookbox/config.yml'
                         read_only = $true
                     },
                     [pscustomobject]@{
                         type = 'volume'
                         source = 'recovery_cover_cache'
-                        target = '/var/lib/netstorage/covers'
+                        target = '/var/lib/bookbox/covers'
                     },
                     [pscustomobject]@{
                         type = 'volume'
                         source = 'recovery_cover_backups'
-                        target = '/var/lib/netstorage/backups'
+                        target = '/var/lib/bookbox/backups'
                     }
                 )
             }

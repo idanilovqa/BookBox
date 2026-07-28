@@ -14,9 +14,9 @@ $baseCompose = Join-Path $repoRoot 'deploy\compose.yml'
 $testCompose = Join-Path $repoRoot 'deploy\compose.test.yml'
 $manifestScript = Join-Path $PSScriptRoot 'library-manifest.ps1'
 $runID = [Guid]::NewGuid().ToString('N')
-$project = "netstorage-e2e-$runID"
+$project = "bookbox-e2e-$runID"
 $e2eParent = [IO.Path]::GetFullPath(
-    (Join-Path ([IO.Path]::GetTempPath()) 'netstorage-e2e')
+    (Join-Path ([IO.Path]::GetTempPath()) 'bookbox-e2e')
 )
 $taskRoot = [IO.Path]::GetFullPath((Join-Path $e2eParent $runID))
 $library = Join-Path $taskRoot 'library'
@@ -41,7 +41,7 @@ $composeArgs = @(
     '-f', $testCompose
 )
 $username = 'owner'
-$password = 'netstorage-e2e-password'
+$password = 'bookbox-e2e-password'
 $primaryFailure = $null
 $adbInvocationID = 0
 
@@ -135,7 +135,7 @@ function Invoke-MonitoredProcess {
     )
     $stdout = Join-Path $logs "$Name.stdout.log"
     $stderr = Join-Path $logs "$Name.stderr.log"
-    $result = Invoke-NetStorageCapturedProcess `
+    $result = Invoke-BookBoxCapturedProcess `
         -FilePath $FilePath `
         -Arguments $Arguments `
         -WorkingDirectory $WorkingDirectory `
@@ -175,7 +175,7 @@ function Invoke-BoundedAdb {
     $logName = "adb-$($script:adbInvocationID)-$Name"
     $stdout = Join-Path $logs "$logName.stdout.log"
     $stderr = Join-Path $logs "$logName.stderr.log"
-    $result = Invoke-NetStorageCapturedProcess `
+    $result = Invoke-BookBoxCapturedProcess `
         -FilePath $AdbPath `
         -Arguments $Arguments `
         -WorkingDirectory $taskRoot `
@@ -321,11 +321,11 @@ function Wait-Toxiproxy {
 
 function Get-ApiFingerprint {
     $apiLogs = Invoke-DockerChecked ($composeArgs + @(
-        'logs', '--no-color', 'netstorage-api'
+        'logs', '--no-color', 'bookbox-api'
     ))
     $match = [regex]::Match(
         ($apiLogs -join [Environment]::NewLine),
-        'netStorage certificate SHA-256:\s*((?:[0-9A-F]{2}:){31}[0-9A-F]{2})'
+        'BookBox certificate SHA-256:\s*((?:[0-9A-F]{2}:){31}[0-9A-F]{2})'
     )
     if (-not $match.Success) {
         throw 'The API did not print its TLS fingerprint.'
@@ -441,7 +441,7 @@ function Wait-TaskEmulatorBoot {
 
 function Save-FailureDiagnostics {
     param([Parameter(Mandatory)][Exception] $Failure)
-    $failureParent = Join-Path ([IO.Path]::GetTempPath()) 'netstorage-e2e-failures'
+    $failureParent = Join-Path ([IO.Path]::GetTempPath()) 'bookbox-e2e-failures'
     $failureRoot = Join-Path $failureParent $runID
     $null = New-Item -ItemType Directory -Path $failureRoot -Force
     Write-Utf8 `
@@ -497,19 +497,19 @@ try {
         [IO.Path]::GetFullPath($Path).Replace('\', '/')
     }
     $environment = @(
-        "NETSTORAGE_LIBRARY_PATH=$(& $composePath $library)"
-        "NETSTORAGE_TEST_LIBRARY_PATH=$(& $composePath $library)"
-        "NETSTORAGE_CONFIG_HOST_FILE=$(& $composePath $config)"
-        "NETSTORAGE_TEST_CONFIG_HOST_FILE=$(& $composePath $config)"
-        "NETSTORAGE_POSTGRES_PASSWORD_HOST_FILE=$(& $composePath (Join-Path $secrets 'postgres_password.txt'))"
-        "NETSTORAGE_TEST_POSTGRES_PASSWORD_HOST_FILE=$(& $composePath (Join-Path $secrets 'postgres_password.txt'))"
-        "NETSTORAGE_PASSWORD_HASH_HOST_FILE=$(& $composePath (Join-Path $secrets 'app_password_hash.txt'))"
-        "NETSTORAGE_TEST_PASSWORD_HASH_HOST_FILE=$(& $composePath (Join-Path $secrets 'app_password_hash.txt'))"
-        "NETSTORAGE_SESSION_KEY_HOST_FILE=$(& $composePath (Join-Path $secrets 'session_key.bin'))"
-        "NETSTORAGE_TEST_SESSION_KEY_HOST_FILE=$(& $composePath (Join-Path $secrets 'session_key.bin'))"
-        "NETSTORAGE_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $composePath (Join-Path $secrets 'google_books_key.txt'))"
-        "NETSTORAGE_TEST_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $composePath (Join-Path $secrets 'google_books_key.txt'))"
-        'NETSTORAGE_BIND_ADDRESS=127.0.0.1'
+        "BOOKBOX_LIBRARY_PATH=$(& $composePath $library)"
+        "BOOKBOX_TEST_LIBRARY_PATH=$(& $composePath $library)"
+        "BOOKBOX_CONFIG_HOST_FILE=$(& $composePath $config)"
+        "BOOKBOX_TEST_CONFIG_HOST_FILE=$(& $composePath $config)"
+        "BOOKBOX_POSTGRES_PASSWORD_HOST_FILE=$(& $composePath (Join-Path $secrets 'postgres_password.txt'))"
+        "BOOKBOX_TEST_POSTGRES_PASSWORD_HOST_FILE=$(& $composePath (Join-Path $secrets 'postgres_password.txt'))"
+        "BOOKBOX_PASSWORD_HASH_HOST_FILE=$(& $composePath (Join-Path $secrets 'app_password_hash.txt'))"
+        "BOOKBOX_TEST_PASSWORD_HASH_HOST_FILE=$(& $composePath (Join-Path $secrets 'app_password_hash.txt'))"
+        "BOOKBOX_SESSION_KEY_HOST_FILE=$(& $composePath (Join-Path $secrets 'session_key.bin'))"
+        "BOOKBOX_TEST_SESSION_KEY_HOST_FILE=$(& $composePath (Join-Path $secrets 'session_key.bin'))"
+        "BOOKBOX_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $composePath (Join-Path $secrets 'google_books_key.txt'))"
+        "BOOKBOX_TEST_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $composePath (Join-Path $secrets 'google_books_key.txt'))"
+        'BOOKBOX_BIND_ADDRESS=127.0.0.1'
         'HOST_PORT=18443'
     ) -join [Environment]::NewLine
     # Create this before any fallible fixture setup so finally cleanup can
@@ -523,22 +523,22 @@ roots:
     name: Audiobooks
     container_path: /library/audiobooks
 tls:
-  cert_path: /var/lib/netstorage/tls/server.crt
-  key_path: /var/lib/netstorage/tls/server.key
+  cert_path: /var/lib/bookbox/tls/server.crt
+  key_path: /var/lib/bookbox/tls/server.key
   hosts:
     - localhost
     - 127.0.0.1
     - 10.0.2.2
 auth:
   username: owner
-  password_hash_file: /run/netstorage-secrets/app_password_hash
-  session_key_file: /run/netstorage-secrets/session_key
+  password_hash_file: /run/bookbox-secrets/app_password_hash
+  session_key_file: /run/bookbox-secrets/session_key
 database:
   host: postgres
   port: 5432
-  name: netstorage
-  username: netstorage
-  password_file: /run/netstorage-secrets/postgres_password
+  name: bookbox
+  username: bookbox
+  password_file: /run/bookbox-secrets/postgres_password
   ssl_mode: disable
 '@
     Write-Utf8 `
@@ -546,7 +546,7 @@ database:
         -Value 'pending-build-generated-hash'
     Write-Utf8 `
         -Path (Join-Path $secrets 'postgres_password.txt') `
-        -Value 'netstorage-e2e-postgres-password'
+        -Value 'bookbox-e2e-postgres-password'
     [IO.File]::WriteAllBytes(
         (Join-Path $secrets 'session_key.bin'),
         [Text.Encoding]::ASCII.GetBytes(
@@ -564,12 +564,12 @@ database:
         -Name 'compose-build' `
         -WorkingDirectory $repoRoot
 
-    $apiImage = "${project}-netstorage-api:latest"
+    $apiImage = "${project}-bookbox-api:latest"
     $adminInput = "$password`n$password`n"
     $hashOutput = @(
         $adminInput |
             & docker run --rm -i --network none --read-only `
-                --entrypoint /usr/local/bin/netstorage-admin `
+                --entrypoint /usr/local/bin/bookbox-admin `
                 $apiImage hash-password --stdin 2>&1
     )
     if ($LASTEXITCODE -ne 0) {
@@ -587,7 +587,7 @@ database:
 
     $ffmpegBase = $composeArgs + @(
         'run', '--rm', '--no-deps', '--entrypoint', 'ffmpeg',
-        'netstorage-catalog-worker',
+        'bookbox-catalog-worker',
         '-hide_banner', '-loglevel', 'error',
         '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100',
         '-t', '12', '-b:a', '96k', '-y'
@@ -616,7 +616,7 @@ database:
     )) | Out-Null
     $imageBase = $composeArgs + @(
         'run', '--rm', '--no-deps', '--entrypoint', 'ffmpeg',
-        'netstorage-catalog-worker',
+        'bookbox-catalog-worker',
         '-hide_banner', '-loglevel', 'error'
     )
     Invoke-DockerChecked ($imageBase + @(
@@ -654,7 +654,7 @@ database:
         -WorkingDirectory $repoRoot
 
     Wait-Toxiproxy
-    $proxyBody = '{"name":"netstorage","listen":"0.0.0.0:18443","upstream":"netstorage-api:8443"}'
+    $proxyBody = '{"name":"bookbox","listen":"0.0.0.0:18443","upstream":"bookbox-api:8443"}'
     $proxyConfig = Join-Path $taskRoot 'toxiproxy-proxy.json'
     Write-Utf8 -Path $proxyConfig -Value $proxyBody
     $null = & curl.exe --fail --silent --show-error `
@@ -718,7 +718,7 @@ database:
     $env:ANDROID_AVD_HOME = Join-Path $taskRoot 'avd'
     $null = New-Item -ItemType Directory -Path `
         $env:ANDROID_USER_HOME, $env:ANDROID_AVD_HOME -Force
-    $avdName = "netstorage_api36_$runID"
+    $avdName = "bookbox_api36_$runID"
 
     Start-OwnedAdbServer -AdbPath $adb
     $existingDevices = @(Get-AdbDeviceEntries -AdbPath $adb)
@@ -823,7 +823,7 @@ database:
             '--no-daemon',
             '--console=plain',
             ':app:connectedDebugAndroidTest',
-            '-Pandroid.testInstrumentationRunnerArguments.notClass=com.rendref.netstorage.e2e.RealServerJourneyTest'
+            '-Pandroid.testInstrumentationRunnerArguments.notClass=com.rendref.bookbox.e2e.RealServerJourneyTest'
         )) `
         -Name 'android-api36-instrumentation' `
         -WorkingDirectory (Join-Path $repoRoot 'android')
@@ -833,7 +833,7 @@ database:
             '--no-daemon',
             '--console=plain',
             ':app:connectedDebugAndroidTest',
-            '-Pandroid.testInstrumentationRunnerArguments.class=com.rendref.netstorage.e2e.RealServerJourneyTest',
+            '-Pandroid.testInstrumentationRunnerArguments.class=com.rendref.bookbox.e2e.RealServerJourneyTest',
             '-Pandroid.testInstrumentationRunnerArguments.e2eBaseUrl=https://10.0.2.2:18443/',
             "-Pandroid.testInstrumentationRunnerArguments.e2eFingerprint=$fingerprint",
             "-Pandroid.testInstrumentationRunnerArguments.e2eUsername=$username",
@@ -875,4 +875,4 @@ database:
 if ($null -ne $primaryFailure) {
     throw $primaryFailure
 }
-Write-Output 'netStorage E2E passed; owned processes and ports are clean'
+Write-Output 'BookBox E2E passed; owned processes and ports are clean'

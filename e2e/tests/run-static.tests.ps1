@@ -14,8 +14,8 @@ if (-not (Test-Path -LiteralPath $runnerPath -PathType Leaf)) {
 $runnerText = Get-Content -Raw -LiteralPath $runnerPath
 
 $requirements = [ordered]@{
-    'unique project' = 'netstorage-e2e-\$runID'
-    'task-scoped temp root' = "Join-Path .*'netstorage-e2e'"
+    'unique project' = 'bookbox-e2e-\$runID'
+    'task-scoped temp root' = "Join-Path .*'bookbox-e2e'"
     'thirty-second progress' = '30'
     'API 36 check' = 'ro\.build\.version\.sdk'
     'Toxiproxy readiness' = '18474'
@@ -31,7 +31,7 @@ $requirements = [ordered]@{
     'project-local JDK' = "jdk17\\jdk-17\.0\.19\+10"
     'project-local Gradle home' = "localGradleHome"
     'task-scoped AVD home' = 'ANDROID_AVD_HOME\s*=\s*Join-Path\s+\$taskRoot\s+''avd'''
-    'unique AVD name' = 'netstorage_api36_\$runID'
+    'unique AVD name' = 'bookbox_api36_\$runID'
     'installed API 36 image' = 'system-images;android-36;google_apis;x86_64'
     'create AVD without download' = '(?s)avdmanager\.bat.*?''create'', ''avd''.*?''--package'', \$systemImagePackage'
     'headless owned emulator' = '(?s)Start-Process.*?-FilePath \$emulator.*?''-no-window'''
@@ -44,8 +44,8 @@ $requirements = [ordered]@{
     'shared process runner import' = '\.\s+\$processRunner'
     'bounded adb helper' = 'function Invoke-BoundedAdb'
     'captured adb output split into lines' = '(?s)function Invoke-BoundedAdb.*?-split ''\\r\?\\n'''
-    'captured monitored process' = '(?s)function Invoke-MonitoredProcess.*?Invoke-NetStorageCapturedProcess'
-    'captured bounded adb' = '(?s)function Invoke-BoundedAdb.*?Invoke-NetStorageCapturedProcess'
+    'captured monitored process' = '(?s)function Invoke-MonitoredProcess.*?Invoke-BookBoxCapturedProcess'
+    'captured bounded adb' = '(?s)function Invoke-BoundedAdb.*?Invoke-BookBoxCapturedProcess'
     'explicit owned adb server' = '(?s)function Start-OwnedAdbServer.*?''nodaemon'', ''server''.*?RedirectStandardOutput.*?RedirectStandardError.*?ownedLongLivedProcessIds\.Add'
     'owned adb exit refresh' = '(?s)function Start-OwnedAdbServer(?:(?!\r?\nfunction ).)*?WaitForExit\(\)(?:(?!\r?\nfunction ).)*?Refresh\(\)(?:(?!\r?\nfunction ).)*?ExitCode'
     'bounded adb server readiness' = '(?s)function Start-OwnedAdbServer.*?AddSeconds\(10\).*?LocalPort 5037'
@@ -57,14 +57,14 @@ $requirements = [ordered]@{
     'owned qemu registration' = '(?s)function Register-OwnedAndroidProcesses.*?qemu-system-x86_64\.exe.*?ownedLongLivedProcessIds\.Add'
     'empty Android baseline accepted' = '(?s)function Register-OwnedAndroidProcesses.*?\[AllowEmptyCollection\(\)\].*?\[int\[\]\] \$BeforeProcessIds'
     'empty boot baseline accepted' = '(?s)function Wait-TaskEmulatorBoot.*?\[AllowEmptyCollection\(\)\].*?\[int\[\]\] \$AndroidProcessIdsBefore'
-    'non-E2E instrumentation pass' = 'notClass=com\.rendref\.netstorage\.e2e\.RealServerJourneyTest'
-    'parameterized real-server pass' = 'class=com\.rendref\.netstorage\.e2e\.RealServerJourneyTest'
+    'non-E2E instrumentation pass' = 'notClass=com\.rendref\.bookbox\.e2e\.RealServerJourneyTest'
+    'parameterized real-server pass' = 'class=com\.rendref\.bookbox\.e2e\.RealServerJourneyTest'
     'cover publication disabled' = 'must not offer a replacement cover'
     'owned process tree' = 'Stop-OwnedProcessTree'
-    'failure diagnostics' = 'netstorage-e2e-failures'
+    'failure diagnostics' = 'bookbox-e2e-failures'
     'finally cleanup' = '(?s)finally\s*\{.*stop\.ps1'
     'final success line' =
-        'netStorage E2E passed; owned processes and ports are clean'
+        'BookBox E2E passed; owned processes and ports are clean'
 }
 foreach ($entry in $requirements.GetEnumerator()) {
     if ($runText -notmatch $entry.Value) {
@@ -75,7 +75,7 @@ foreach ($entry in $requirements.GetEnumerator()) {
 if ($runText -match '(?i)Remove-Item[^\r\n]*H:\\') {
     throw 'E2E run script must never remove anything on H:.'
 }
-if ($runText -match '(?i)NETSTORAGE_TEST_LIBRARY_PATH=H:') {
+if ($runText -match '(?i)BOOKBOX_TEST_LIBRARY_PATH=H:') {
     throw 'E2E run script must never mount H: as its synthetic library.'
 }
 if ($runText -match '(?i)\bsdkmanager(?:\.bat)?\b') {

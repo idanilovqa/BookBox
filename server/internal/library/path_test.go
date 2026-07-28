@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"netstorage.local/server/internal/config"
+	"bookbox.local/server/internal/config"
 )
 
 func TestResolveAcceptsPathsInsideRoot(t *testing.T) {

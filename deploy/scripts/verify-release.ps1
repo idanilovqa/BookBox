@@ -81,11 +81,11 @@ $checksumsPath = Join-Path $artifacts 'SHA256SUMS.txt'
 Remove-Item -LiteralPath $metadataPath, $checksumsPath `
     -Force -ErrorAction SilentlyContinue
 $apks = @(@(
-    Join-Path $artifacts "netStorage-v$Version-debug.apk"
-    Join-Path $artifacts "netStorage-v$Version-release.apk"
+    Join-Path $artifacts "BookBox-v$Version-debug.apk"
+    Join-Path $artifacts "BookBox-v$Version-release.apk"
 ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
 if ($apks.Count -eq 0) {
-    throw "No netStorage v$Version APK exists in $artifacts."
+    throw "No BookBox v$Version APK exists in $artifacts."
 }
 Initialize-Java
 $sdk = Get-AndroidSdk
@@ -104,7 +104,7 @@ $approvedPermissions = @(
     'android.permission.POST_NOTIFICATIONS',
     'android.permission.RECEIVE_BOOT_COMPLETED',
     'android.permission.RUN_USER_INITIATED_JOBS',
-    'com.rendref.netstorage.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'
+    'com.rendref.bookbox.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'
 ) | Sort-Object
 $metadata = [Collections.Generic.List[object]]::new()
 foreach ($apk in $apks) {
@@ -129,7 +129,7 @@ foreach ($apk in $apks) {
         ForEach-Object { $_.Trim() } |
         Where-Object {
             $_ -match '^android\.permission\.[A-Z0-9_]+$' -or
-            $_ -ceq 'com.rendref.netstorage.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'
+            $_ -ceq 'com.rendref.bookbox.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'
         }
     ) | Sort-Object -Unique
     $unparsedPermissions = @($permissionRaw -split '\r?\n' | ForEach-Object {
@@ -137,12 +137,12 @@ foreach ($apk in $apks) {
     } | Where-Object {
         $_ -and
         $_ -notmatch '^android\.permission\.[A-Z0-9_]+$' -and
-        $_ -cne 'com.rendref.netstorage.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'
+        $_ -cne 'com.rendref.bookbox.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'
     })
     if ($unparsedPermissions.Count -gt 0) {
         throw "Could not parse permissions for $([IO.Path]::GetFileName($apk)): $($unparsedPermissions -join ', ')"
     }
-    if ($applicationID -cne 'com.rendref.netstorage') {
+    if ($applicationID -cne 'com.rendref.bookbox') {
         throw "$([IO.Path]::GetFileName($apk)) application ID is $applicationID."
     }
     if ($versionName -cne $Version -or $versionCode -ne '1') {

@@ -14,8 +14,8 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
-	"netstorage.local/server/internal/catalog"
-	"netstorage.local/server/internal/library"
+	"bookbox.local/server/internal/catalog"
+	"bookbox.local/server/internal/library"
 )
 
 type BookRepository interface {

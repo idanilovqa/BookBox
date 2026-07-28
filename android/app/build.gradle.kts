@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.rendref.netstorage"
+    namespace = "com.rendref.bookbox"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.rendref.netstorage"
+        applicationId = "com.rendref.bookbox"
         minSdk = 36
         targetSdk = 36
         versionCode = 1

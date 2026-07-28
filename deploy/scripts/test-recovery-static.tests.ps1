@@ -48,9 +48,9 @@ if (
 }
 
 $requirements = [ordered]@{
-    'unique recovery project' = 'netstorage-recovery-\$runID'
-    'task-scoped temporary root' = "Join-Path .*'netstorage-recovery'"
-    'synthetic library' = 'NETSTORAGE_RECOVERY_LIBRARY_PATH'
+    'unique recovery project' = 'bookbox-recovery-\$runID'
+    'task-scoped temporary root' = "Join-Path .*'bookbox-recovery'"
+    'synthetic library' = 'BOOKBOX_RECOVERY_LIBRARY_PATH'
     'no cover restore dependency' = 'restore-cover\.ps1'
     'backup invocation' = 'backup\.ps1'
     'PowerShell 5 array wrapper' = 'invoke-synthetic-recovery\.ps1'
@@ -88,7 +88,7 @@ foreach ($entry in $requirements.GetEnumerator()) {
 if ($text -match '(?i)H:\\') {
     throw 'Synthetic recovery must never access H:.'
 }
-if ($text -match '(?i)-Production|C:\\Repositories\\netStorage\\backups') {
+if ($text -match '(?i)-Production|C:\\Repositories\\BookBox\\backups') {
     throw 'Synthetic recovery must not enable or target production recovery.'
 }
 if ($text -match '(?i)(taskkill|Stop-Process\s+-Name|docker\s+system\s+prune)') {

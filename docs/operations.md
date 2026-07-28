@@ -1,4 +1,4 @@
-# Operate netStorage
+# Operate BookBox
 
 Run commands from the repository root. Production commands use the fixed Compose project in `deploy\compose.yml` and the ignored `deploy\.env`.
 
@@ -7,11 +7,11 @@ Run commands from the repository root. Production commands use the fixed Compose
 ```powershell
 docker compose --env-file deploy\.env -f deploy\compose.yml start
 docker compose --env-file deploy\.env -f deploy\compose.yml stop
-docker compose --env-file deploy\.env -f deploy\compose.yml restart netstorage-api
+docker compose --env-file deploy\.env -f deploy\compose.yml restart bookbox-api
 docker compose --env-file deploy\.env -f deploy\compose.yml ps
 ```
 
-`stop` preserves PostgreSQL, TLS identity, cover cache, and original-cover backups. Do not run `down --volumes` against `netstorage-prod`.
+`stop` preserves PostgreSQL, TLS identity, cover cache, and original-cover backups. Do not run `down --volumes` against `bookbox-prod`.
 
 Check readiness:
 
@@ -23,8 +23,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\wait-heal
 ## Logs
 
 ```powershell
-docker compose --env-file deploy\.env -f deploy\compose.yml logs --tail 200 netstorage-api
-docker compose --env-file deploy\.env -f deploy\compose.yml logs --tail 200 netstorage-catalog-worker
+docker compose --env-file deploy\.env -f deploy\compose.yml logs --tail 200 bookbox-api
+docker compose --env-file deploy\.env -f deploy\compose.yml logs --tail 200 bookbox-catalog-worker
 docker compose --env-file deploy\.env -f deploy\compose.yml logs --tail 100 postgres
 ```
 
@@ -72,7 +72,7 @@ Restore into stopped, empty destination volumes. Verify every manifest digest be
 
 Do not reuse a root ID for a different host folder. Android and PostgreSQL use the ID as persistent catalog identity.
 
-## Update netStorage
+## Update BookBox
 
 ```powershell
 git status --short

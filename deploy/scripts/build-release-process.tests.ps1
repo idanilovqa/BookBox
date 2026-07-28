@@ -20,7 +20,7 @@ $monitor = [regex]::Match(
 if (-not $monitor.Success) {
     throw 'Release monitored-process function is missing.'
 }
-if ($monitor.Value -notmatch 'Invoke-NetStorageCapturedProcess') {
+if ($monitor.Value -notmatch 'Invoke-BookBoxCapturedProcess') {
     throw 'Release monitor does not use the verified captured-process runner.'
 }
 if ($monitor.Value -match '\bStart-Process\b') {

@@ -1,4 +1,4 @@
-# netStorage v1.0.0
+# BookBox v1.0.0
 
 Release status: implementation candidate. The API source keeps a `dev` default for local Go runs, while the release Docker build stamps `1.0.0` through linker flags. Automated gates and the Galaxy S23 Ultra checklist determine release readiness.
 
@@ -23,13 +23,13 @@ The Android app and API cannot write to the Windows audiobook library. Android c
 
 ## Sideload packages
 
-`build-release.ps1` creates `artifacts\netStorage-v1.0.0-debug.apk`. You can sideload this debug-signed APK.
+`build-release.ps1` creates `artifacts\BookBox-v1.0.0-debug.apk`. You can sideload this debug-signed APK.
 
-If `local-secrets\netstorage-release.jks` and all three signing environment variables exist, the script creates `artifacts\netStorage-v1.0.0-release.apk`:
+If `local-secrets\bookbox-release.jks` and all three signing environment variables exist, the script creates `artifacts\BookBox-v1.0.0-release.apk`:
 
-- `NETSTORAGE_KEY_ALIAS`
-- `NETSTORAGE_KEYSTORE_PASSWORD`
-- `NETSTORAGE_KEY_PASSWORD`
+- `BOOKBOX_KEY_ALIAS`
+- `BOOKBOX_KEYSTORE_PASSWORD`
+- `BOOKBOX_KEY_PASSWORD`
 
 `verify-release.ps1` checks the application ID, API 36 minimum and target, approved permissions, signature, and release debuggable flag. It writes `SHA256SUMS.txt` and `APK_METADATA.json`.
 
