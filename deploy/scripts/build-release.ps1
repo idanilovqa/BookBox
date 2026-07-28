@@ -219,7 +219,7 @@ $apiDockerfile = Get-Content -LiteralPath (
     Join-Path $script:repo 'deploy\Dockerfile.api'
 ) -Raw
 if ($serverMain -notmatch 'var\s+version\s*=\s*"dev"' -or
-    $apiDockerfile -notmatch '(?m)^ARG BOOKBOX_VERSION=1\.0\.0$' -or
+    $apiDockerfile -notmatch '(?m)^ARG BOOKBOX_VERSION=1\.0\.0\r?$' -or
     $apiDockerfile -notmatch [regex]::Escape('-X main.version=${BOOKBOX_VERSION}')) {
     throw 'Release blocker: the API must keep a dev source default and stamp BOOKBOX_VERSION=1.0.0 through Docker ldflags.'
 }

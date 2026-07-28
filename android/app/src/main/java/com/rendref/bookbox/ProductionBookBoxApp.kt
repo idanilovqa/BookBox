@@ -240,11 +240,6 @@ internal fun ConnectedApp(
         permissionDecision = granted
     }
 
-    LaunchedEffect(settingsState.signedOut, settingsState.serverChanged) {
-        if (settingsState.signedOut || settingsState.serverChanged) {
-            onConnectionReset()
-        }
-    }
     LaunchedEffect(route) {
         if (route == AppRoute.Transfers) transfers.refresh()
     }
@@ -424,13 +419,13 @@ internal fun ConnectedApp(
                         SettingsAction.Rescan -> settings.rescan()
                         SettingsAction.ChooseDestination ->
                             destinationLauncher.launch(null)
-                        SettingsAction.SignOut -> settings.signOut()
+                        SettingsAction.SignOut -> settings.signOut(onConnectionReset)
                         SettingsAction.RequestServerChange ->
                             settings.requestServerChange()
                         SettingsAction.ResetSavedConnection ->
                             settings.requestServerChange()
                         SettingsAction.ConfirmServerChange ->
-                            settings.confirmServerChange()
+                            settings.confirmServerChange(onConnectionReset)
                         SettingsAction.CancelServerChange ->
                             settings.cancelServerChange()
                     }

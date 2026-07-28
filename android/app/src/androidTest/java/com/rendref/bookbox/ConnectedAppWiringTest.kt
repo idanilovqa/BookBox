@@ -6,11 +6,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.StateRestorationTester
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -56,15 +59,17 @@ import org.junit.Test
 @OptIn(ExperimentalTestApi::class)
 class ConnectedAppWiringTest {
     @Test
-    fun connectionScopeKeyIsStableForSameServerAndDifferentForAnotherServer() {
+    fun connectionScopeKeySeparatesServersAndUsernames() {
         val serverA = SavedConnection(
             baseUrl = "http://192.168.1.25:8787/",
             username = "listener",
         )
-        val sameServer = serverA.copy(username = "another-user")
+        val sameConnection = serverA.copy()
+        val anotherUser = serverA.copy(username = "another-user")
         val serverB = serverA.copy(baseUrl = "http://192.168.1.26:8787/")
 
-        assertEquals(connectionInstanceKey(serverA), connectionInstanceKey(sameServer))
+        assertEquals(connectionInstanceKey(serverA), connectionInstanceKey(sameConnection))
+        assertNotEquals(connectionInstanceKey(serverA), connectionInstanceKey(anotherUser))
         assertNotEquals(connectionInstanceKey(serverA), connectionInstanceKey(serverB))
         assertEquals(64, connectionInstanceKey(serverA).length)
     }
@@ -155,9 +160,19 @@ class ConnectedAppWiringTest {
         }
         onNode(hasScrollToIndexAction())
             .performScrollToNode(hasText("Sign in again"))
-        onNodeWithText("Sign in again").performClick()
-        waitUntil(timeoutMillis = 5_000) { signedOut.get() && reset.get() }
+        val signInAgain = onNode(
+            hasText("Sign in again").and(hasClickAction()),
+        )
+        signInAgain.assertIsDisplayed()
+        signInAgain.performSemanticsAction(SemanticsActions.OnClick) { click ->
+            click()
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 10_000) {
+            signedOut.get() && reset.get()
+        }
         assertTrue(signedOut.get())
+        assertTrue(reset.get())
     }
 
     @Test

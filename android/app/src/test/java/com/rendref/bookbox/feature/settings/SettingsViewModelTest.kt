@@ -78,6 +78,7 @@ class SettingsViewModelTest {
         runTest(dispatcher) {
             val source = FakeSettingsSource()
             val viewModel = SettingsViewModel(source)
+            var connectionResets = 0
             advanceUntilIdle()
 
             viewModel.rescan()
@@ -85,15 +86,16 @@ class SettingsViewModelTest {
             assertEquals(listOf("rescan"), source.operations)
             assertEquals(ScanStatus.Queued, viewModel.state.value.scanStatus)
 
-            viewModel.signOut()
+            viewModel.signOut { connectionResets += 1 }
             advanceUntilIdle()
             assertEquals(listOf("rescan", "sign-out"), source.operations)
             assertTrue(viewModel.state.value.signedOut)
+            assertEquals(1, connectionResets)
 
             viewModel.requestServerChange()
             assertTrue(viewModel.state.value.confirmServerChange)
             assertEquals(2, source.operations.size)
-            viewModel.confirmServerChange()
+            viewModel.confirmServerChange { connectionResets += 1 }
             advanceUntilIdle()
 
             assertEquals(
@@ -101,6 +103,7 @@ class SettingsViewModelTest {
                 source.operations,
             )
             assertTrue(viewModel.state.value.serverChanged)
+            assertEquals(2, connectionResets)
             assertEquals(
                 "Tokens and the saved server were cleared. " +
                     "Android downloads and transfer history were kept.",
@@ -120,11 +123,27 @@ class SettingsViewModelTest {
         assertEquals(UserError.ServerUnavailable, viewModel.state.value.error)
         assertFalse(viewModel.state.value.isBusy)
     }
+
+    @Test
+    fun `failed credential reset does not reconnect`() = runTest(dispatcher) {
+        val source = FakeSettingsSource(failSignOut = true)
+        val viewModel = SettingsViewModel(source)
+        var connectionResets = 0
+        advanceUntilIdle()
+
+        viewModel.signOut { connectionResets += 1 }
+        advanceUntilIdle()
+
+        assertEquals(0, connectionResets)
+        assertFalse(viewModel.state.value.signedOut)
+        assertEquals(UserError.ServerUnavailable, viewModel.state.value.error)
+    }
 }
 
 private class FakeSettingsSource(
     private val snapshot: SettingsSnapshot = snapshot(),
     private val failRescan: Boolean = false,
+    private val failSignOut: Boolean = false,
 ) : SettingsSource {
     val operations = mutableListOf<String>()
 
@@ -138,6 +157,7 @@ private class FakeSettingsSource(
 
     override suspend fun signOut() {
         operations += "sign-out"
+        if (failSignOut) error("offline")
     }
 
     override suspend fun clearServerCredentials() {

@@ -42,6 +42,13 @@ if (
     throw 'Release builds must export the resolved Android SDK to every Gradle lane.'
 }
 if (
+    $text -notmatch [regex]::Escape(
+        "'(?m)^ARG BOOKBOX_VERSION=1\.0\.0\r?$'"
+    )
+) {
+    throw 'Release version-stamp validation must accept Windows CRLF checkouts.'
+}
+if (
     [regex]::Matches(
         $text,
         [regex]::Escape('-Pkotlin.compiler.execution.strategy=in-process')

@@ -86,7 +86,7 @@ class SettingsViewModel(
         }
     }
 
-    fun signOut() {
+    fun signOut(onConnectionReset: () -> Unit = {}) {
         if (!beginOperation()) return
         viewModelScope.launch {
             try {
@@ -95,6 +95,7 @@ class SettingsViewModel(
                     isBusy = false,
                     signedOut = true,
                 )
+                onConnectionReset()
             } catch (_: Exception) {
                 failOperation(UserError.ServerUnavailable)
             }
@@ -110,7 +111,7 @@ class SettingsViewModel(
         mutableState.value = mutableState.value.copy(confirmServerChange = false)
     }
 
-    fun confirmServerChange() {
+    fun confirmServerChange(onConnectionReset: () -> Unit = {}) {
         if (!mutableState.value.confirmServerChange || !beginOperation()) return
         mutableState.value = mutableState.value.copy(confirmServerChange = false)
         viewModelScope.launch {
@@ -121,6 +122,7 @@ class SettingsViewModel(
                     serverChanged = true,
                     message = SERVER_CHANGED_MESSAGE,
                 )
+                onConnectionReset()
             } catch (_: Exception) {
                 failOperation(UserError.ServerUnavailable)
             }

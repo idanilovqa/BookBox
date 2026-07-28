@@ -6,8 +6,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -89,7 +91,9 @@ class SettingsScreenTest {
             "This clears tokens and the saved server. Android downloads and " +
                 "transfer history stay on this device.",
         ).assertIsDisplayed()
-        composeRule.onNodeWithText("Reset saved connection").performClick()
+        composeRule.onNode(
+            hasText("Reset saved connection").and(hasAnyAncestor(isDialog())),
+        ).performClick()
         assertEquals(SettingsAction.ConfirmServerChange, actions.last())
     }
 }
