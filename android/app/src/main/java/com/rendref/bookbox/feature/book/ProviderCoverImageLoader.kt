@@ -11,7 +11,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Response
 
 /**
- * Provider artwork never uses the authenticated, certificate-pinned server client.
+ * Provider artwork never uses the authenticated BookBox server client.
  *
  * Candidate cover URLs can point to Open Library or Google Books. This isolated
  * loader has no app credentials and refuses cleartext, URL userinfo, and redirects.

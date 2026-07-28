@@ -22,7 +22,7 @@ class BrowseApi(
     private val baseUrl: HttpUrl,
 ) {
     init {
-        require(baseUrl.isHttps)
+        require(baseUrl.scheme == "http")
         require(baseUrl.encodedUsername.isEmpty() && baseUrl.encodedPassword.isEmpty())
         require(baseUrl.query == null && baseUrl.fragment == null && baseUrl.encodedPath == "/")
     }

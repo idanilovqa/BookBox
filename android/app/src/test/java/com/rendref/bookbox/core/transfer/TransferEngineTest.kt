@@ -18,8 +18,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Response
 import okhttp3.ResponseBody
-import okhttp3.tls.HandshakeCertificates
-import okhttp3.tls.HeldCertificate
 import okio.BufferedSource
 import okio.Source
 import okio.Timeout
@@ -40,7 +38,7 @@ class TransferEngineTest {
     @Test
     fun `resumes with a byte range and verifies the complete digest before rename`() = runTest {
         val server = MockWebServer()
-        val client = server.enableTls()
+        val client = server.enableHttp()
         server.enqueue(
             MockResponse(
                 code = 206,
@@ -93,7 +91,7 @@ class TransferEngineTest {
     @Test
     fun `digest mismatch removes the partial and never creates a final document`() = runTest {
         val server = MockWebServer()
-        val client = server.enableTls()
+        val client = server.enableHttp()
         server.enqueue(MockResponse(body = "0123456789"))
         server.start()
         try {
@@ -117,7 +115,7 @@ class TransferEngineTest {
     @Test
     fun `non seekable provider discards only its partial and restarts that file`() = runTest {
         val server = MockWebServer()
-        val client = server.enableTls()
+        val client = server.enableHttp()
         server.enqueue(
             MockResponse(
                 code = 206,
@@ -163,7 +161,7 @@ class TransferEngineTest {
     @Test
     fun `complete verified partial finalizes locally without an invalid range request`() = runTest {
         val server = MockWebServer()
-        val client = server.enableTls()
+        val client = server.enableHttp()
         server.start()
         try {
             val expected = "abcdefghij".toByteArray()
@@ -196,7 +194,7 @@ class TransferEngineTest {
     @Test
     fun `ordinary network failure preserves resumable partial and checkpoint`() = runTest {
         val server = MockWebServer()
-        server.enableTls()
+        server.enableHttp()
         server.start()
         try {
             val destination = FakeTransferDestination().apply {
@@ -241,7 +239,7 @@ class TransferEngineTest {
     @Test
     fun `mid body network failure checkpoints partial after closing output`() = runTest {
         val server = MockWebServer()
-        server.enableTls()
+        server.enableHttp()
         server.start()
         try {
             val destination = FakeTransferDestination()
@@ -275,7 +273,7 @@ class TransferEngineTest {
     @Test
     fun `oversized response is bounded before writing beyond expected size`() = runTest {
         val server = MockWebServer()
-        val client = server.enableTls()
+        val client = server.enableHttp()
         server.enqueue(MockResponse(body = "x".repeat(64 * 1024)))
         server.start()
         try {
@@ -298,26 +296,26 @@ class TransferEngineTest {
     }
 
     @Test
-    fun `engine rejects insecure origin and inconsistent manifest before destination mutation`() =
+    fun `engine rejects non-HTTP BookBox origin and inconsistent manifest before mutation`() =
         runTest {
             val destination = FakeTransferDestination()
-            val insecure = MockWebServer()
-            insecure.start()
+            val httpServer = MockWebServer()
+            httpServer.start()
             try {
                 org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
                     TransferEngine(
-                        insecure.url("/"),
+                        httpServer.url("/").newBuilder().scheme("https").build(),
                         { OkHttpClient() },
                         journalWith(recordFor("abcdefghij".toByteArray())),
                         { destination },
                     )
                 }
             } finally {
-                insecure.close()
+                httpServer.close()
             }
 
             val secure = MockWebServer()
-            val client = secure.enableTls()
+            val client = secure.enableHttp()
             secure.start()
             try {
                 val valid = recordFor("abcdefghij".toByteArray())
@@ -346,7 +344,7 @@ class TransferEngineTest {
     @Test
     fun `matching existing destination is hashed and completed without a request`() = runTest {
         val server = MockWebServer()
-        val client = server.enableTls()
+        val client = server.enableHttp()
         server.start()
         try {
             val expected = "abcdefghij".toByteArray()
@@ -373,7 +371,7 @@ class TransferEngineTest {
     @Test
     fun `replace waits for explicit choice then deletes only the Android destination`() = runTest {
         val server = MockWebServer()
-        val client = server.enableTls()
+        val client = server.enableHttp()
         server.enqueue(MockResponse(body = "abcdefghij"))
         server.start()
         try {
@@ -412,7 +410,7 @@ class TransferEngineTest {
     fun `keep both increments the Android filename and skip leaves the original unchanged`() =
         runTest {
             val server = MockWebServer()
-            val client = server.enableTls()
+            val client = server.enableHttp()
             server.enqueue(MockResponse(body = "abcdefghij"))
             server.start()
             try {
@@ -645,21 +643,4 @@ private fun interruptedBodyClient(prefix: ByteArray): OkHttpClient =
         }
         .build()
 
-private fun MockWebServer.enableTls(): OkHttpClient {
-    val certificate = HeldCertificate.Builder()
-        .addSubjectAlternativeName("localhost")
-        .build()
-    val serverCertificates = HandshakeCertificates.Builder()
-        .heldCertificate(certificate)
-        .build()
-    val clientCertificates = HandshakeCertificates.Builder()
-        .addTrustedCertificate(certificate.certificate)
-        .build()
-    useHttps(serverCertificates.sslSocketFactory())
-    return OkHttpClient.Builder()
-        .sslSocketFactory(
-            clientCertificates.sslSocketFactory(),
-            clientCertificates.trustManager,
-        )
-        .build()
-}
+private fun MockWebServer.enableHttp(): OkHttpClient = OkHttpClient()

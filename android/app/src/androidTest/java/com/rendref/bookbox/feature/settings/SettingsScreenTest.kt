@@ -44,37 +44,34 @@ class SettingsScreenTest {
         listOf(
             "Settings",
             "nas.home:9443",
-            "AB:AB:AB:AB:\u2026:AB:AB",
             "owner",
             "Audiobooks",
             "App version 0.1.0",
             "Server version 1.0.0",
             "Scan complete",
-            "Copy full fingerprint",
             "Rescan",
             "Choose destination",
-            "Sign out",
+            "Sign in again",
             "Change server",
+            "Reset saved connection",
         ).forEach {
             scrollToDisplayed(it)
         }
-        listOf(FINGERPRINT, "content://", "H:/", "password", "token").forEach {
+        listOf("content://", "H:/", "password", "token").forEach {
             composeRule.onAllNodesWithText(it, substring = true)
                 .assertCountEquals(0)
         }
 
         listOf(
-            "Copy full fingerprint",
             "Rescan",
             "Choose destination",
-            "Sign out",
+            "Sign in again",
         ).forEach { label ->
             scrollToDisplayed(label)
             composeRule.onNodeWithText(label).performClick()
         }
         assertEquals(
             listOf(
-                SettingsAction.CopyFingerprint,
                 SettingsAction.Rescan,
                 SettingsAction.ChooseDestination,
                 SettingsAction.SignOut,
@@ -89,25 +86,19 @@ class SettingsScreenTest {
             state = state.copy(confirmServerChange = true)
         }
         composeRule.onNodeWithText(
-            "This clears the saved server, certificate pin, and session. " +
-                "Android downloads and transfer history stay on this device.",
+            "This clears tokens and the saved server. Android downloads and " +
+                "transfer history stay on this device.",
         ).assertIsDisplayed()
-        composeRule.onNodeWithText("Clear server and session").performClick()
+        composeRule.onNodeWithText("Reset saved connection").performClick()
         assertEquals(SettingsAction.ConfirmServerChange, actions.last())
     }
 }
 
 private val settingsState = SettingsUiState(
     host = "nas.home:9443",
-    fingerprintAbbreviation = "AB:AB:AB:AB:\u2026:AB:AB",
-    fingerprintForCopy = FINGERPRINT,
     username = "owner",
     destinationLabel = "Audiobooks",
     appVersion = "0.1.0",
     serverVersion = "1.0.0",
     scanStatus = ScanStatus.Complete,
 )
-
-private const val FINGERPRINT =
-    "AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:" +
-        "AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB"

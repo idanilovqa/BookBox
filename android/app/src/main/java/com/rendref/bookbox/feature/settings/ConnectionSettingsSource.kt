@@ -17,7 +17,6 @@ class ConnectionSettingsSource(
             ?: throw IllegalStateException("No saved server")
         return SettingsSnapshot(
             baseUrl = saved.baseUrl,
-            certificateSha256 = saved.certificateSha256,
             username = saved.username,
             destinationLabel = destinationName(saved.destinationUri),
             appVersion = appVersion,

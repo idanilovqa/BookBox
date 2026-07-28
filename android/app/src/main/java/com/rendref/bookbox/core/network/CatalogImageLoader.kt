@@ -9,7 +9,7 @@ import okhttp3.Call
  * Installs the app-wide cover loader before the library UI is composed.
  *
  * The supplied factory must be the same [AuthenticatedCall] used by [CatalogApi],
- * so covers retain the approved certificate pin, exact-origin checks, and
+ * so covers retain exact-origin checks and
  * serialized single refresh behavior.
  */
 fun installCatalogImageLoader(calls: Call.Factory) {

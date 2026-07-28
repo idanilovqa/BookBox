@@ -58,12 +58,11 @@ class ConnectedAppWiringTest {
     @Test
     fun connectionScopeKeyIsStableForSameServerAndDifferentForAnotherServer() {
         val serverA = SavedConnection(
-            baseUrl = "https://192.168.1.25:8443/",
-            certificateSha256 = TEST_FINGERPRINT,
+            baseUrl = "http://192.168.1.25:8787/",
             username = "listener",
         )
         val sameServer = serverA.copy(username = "another-user")
-        val serverB = serverA.copy(baseUrl = "https://192.168.1.26:8443/")
+        val serverB = serverA.copy(baseUrl = "http://192.168.1.26:8787/")
 
         assertEquals(connectionInstanceKey(serverA), connectionInstanceKey(sameServer))
         assertNotEquals(connectionInstanceKey(serverA), connectionInstanceKey(serverB))
@@ -155,8 +154,8 @@ class ConnectedAppWiringTest {
             ).fetchSemanticsNodes().isNotEmpty()
         }
         onNode(hasScrollToIndexAction())
-            .performScrollToNode(hasText("Sign out"))
-        onNodeWithText("Sign out").performClick()
+            .performScrollToNode(hasText("Sign in again"))
+        onNodeWithText("Sign in again").performClick()
         waitUntil(timeoutMillis = 5_000) { signedOut.get() && reset.get() }
         assertTrue(signedOut.get())
     }
@@ -293,8 +292,7 @@ private fun fakeRuntime(
         },
         settings = object : SettingsSource {
             override suspend fun load() = SettingsSnapshot(
-                baseUrl = "https://192.168.1.25:8443/",
-                certificateSha256 = TEST_FINGERPRINT,
+                baseUrl = "http://192.168.1.25:8787/",
                 username = "listener",
                 destinationLabel = "Audiobooks",
                 appVersion = "1.0.0",
@@ -327,7 +325,3 @@ private val TEST_FILES = BookFilesDto(
     sourceFolder = "Test book",
     files = emptyList(),
 )
-
-private const val TEST_FINGERPRINT =
-    "AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:" +
-        "AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA"

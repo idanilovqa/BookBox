@@ -1,11 +1,10 @@
 package com.rendref.bookbox.core.repository
 
 import com.rendref.bookbox.core.network.AuthenticatedCall
-import com.rendref.bookbox.core.network.PinnedClientFactory
+import com.rendref.bookbox.core.network.BookBoxClientFactory
 import com.rendref.bookbox.core.network.ReviewApi
 import com.rendref.bookbox.core.network.SessionTokens
 import com.rendref.bookbox.core.network.TokenSession
-import com.rendref.bookbox.core.network.sha256Fingerprint
 import com.rendref.bookbox.core.storage.SavedConnection
 import java.io.IOException
 import kotlinx.coroutines.test.runTest
@@ -13,8 +12,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
-import okhttp3.tls.HandshakeCertificates
-import okhttp3.tls.HeldCertificate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -227,23 +224,15 @@ class ReviewRepositoryTest {
     private suspend fun withRepository(
         block: suspend (MockWebServer, ReviewRepository) -> Unit,
     ) {
-        val certificate = HeldCertificate.Builder()
-            .addSubjectAlternativeName("localhost")
-            .build()
-        val certificates = HandshakeCertificates.Builder()
-            .heldCertificate(certificate)
-            .build()
         val server = MockWebServer()
-        server.useHttps(certificates.sslSocketFactory())
         server.start()
         val saved = SavedConnection(
             baseUrl = server.url("/").toString(),
-            certificateSha256 = sha256Fingerprint(certificate.certificate.encoded),
             username = "owner",
         )
         try {
             val calls = AuthenticatedCall(
-                PinnedClientFactory().create(saved),
+                BookBoxClientFactory().create(saved),
                 ReviewTokenSession,
             )
             block(server, ReviewRepository(ReviewApi(calls, server.url("/"))))

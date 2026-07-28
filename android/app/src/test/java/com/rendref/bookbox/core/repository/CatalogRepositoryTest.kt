@@ -4,8 +4,7 @@ import com.rendref.bookbox.core.network.AuthenticatedCall
 import com.rendref.bookbox.core.network.CatalogApi
 import com.rendref.bookbox.core.network.SessionTokens
 import com.rendref.bookbox.core.network.TokenSession
-import com.rendref.bookbox.core.network.sha256Fingerprint
-import com.rendref.bookbox.core.network.PinnedClientFactory
+import com.rendref.bookbox.core.network.BookBoxClientFactory
 import com.rendref.bookbox.core.storage.SavedConnection
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -29,8 +28,6 @@ import okhttp3.Callback
 import okhttp3.MediaType
 import okhttp3.RequestBody
 import okhttp3.Response
-import okhttp3.tls.HandshakeCertificates
-import okhttp3.tls.HeldCertificate
 import okio.BufferedSink
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -42,7 +39,7 @@ import org.junit.Test
 class CatalogRepositoryTest {
     @Test
     fun `concurrent 401 responses perform one serialized refresh and retry once`() = runTest {
-        withPinnedServer { server, client ->
+        withBookBoxServer { server, client ->
             val oldRequests = CountDownLatch(2)
             server.dispatcher = object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse {
@@ -78,7 +75,7 @@ class CatalogRepositoryTest {
 
     @Test
     fun `a second 401 is returned without another refresh loop`() = runTest {
-        withPinnedServer { server, client ->
+        withBookBoxServer { server, client ->
             server.enqueue(MockResponse(code = 401))
             server.enqueue(MockResponse(code = 401))
             val session = FakeTokenSession("access-old")
@@ -95,7 +92,7 @@ class CatalogRepositoryTest {
 
     @Test
     fun `asynchronous concurrent 401 responses share one refresh for Coil calls`() = runTest {
-        withPinnedServer { server, client ->
+        withBookBoxServer { server, client ->
             val oldRequests = CountDownLatch(2)
             server.dispatcher = object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse =
@@ -138,7 +135,7 @@ class CatalogRepositoryTest {
 
     @Test
     fun `null token refreshes before request and caller authorization is replaced`() = runTest {
-        withPinnedServer { server, client ->
+        withBookBoxServer { server, client ->
             server.enqueue(MockResponse(code = 200))
             val session = FakeTokenSession(null)
             val calls = AuthenticatedCall(client, session)
@@ -156,7 +153,7 @@ class CatalogRepositoryTest {
 
     @Test
     fun `refresh failure is redacted and sends no retry`() = runTest {
-        withPinnedServer { server, client ->
+        withBookBoxServer { server, client ->
             server.enqueue(MockResponse(code = 401))
             val session = FakeTokenSession(
                 initialAccessToken = "access-old",
@@ -177,7 +174,7 @@ class CatalogRepositoryTest {
 
     @Test
     fun `refresh cancellation is preserved and sends no retry`() = runTest {
-        withPinnedServer { server, client ->
+        withBookBoxServer { server, client ->
             server.enqueue(MockResponse(code = 401))
             val calls = AuthenticatedCall(
                 client,
@@ -198,7 +195,7 @@ class CatalogRepositoryTest {
 
     @Test
     fun `one shot request body is never retried`() = runTest {
-        withPinnedServer { server, client ->
+        withBookBoxServer { server, client ->
             server.enqueue(MockResponse(code = 401))
             val session = FakeTokenSession("access-old")
             val calls = AuthenticatedCall(client, session)
@@ -226,7 +223,7 @@ class CatalogRepositoryTest {
 
     @Test
     fun `repository sends local search filters sort and cursor`() = runTest {
-        withPinnedServer { server, client ->
+        withBookBoxServer { server, client ->
             server.enqueue(
                 MockResponse(
                     body = """{"items":[],"nextCursor":null,"filters":{"genres":["Science Fiction"],"years":[1965]}}""",
@@ -258,7 +255,7 @@ class CatalogRepositoryTest {
 
     @Test
     fun `repository decodes audiobook cards and next cursor`() = runTest {
-        withPinnedServer { server, client ->
+        withBookBoxServer { server, client ->
             server.enqueue(
                 MockResponse(
                     body = """
@@ -297,7 +294,7 @@ class CatalogRepositoryTest {
 
     @Test
     fun `repository rejects cover URL outside saved exact origin`() = runTest {
-        withPinnedServer { server, client ->
+        withBookBoxServer { server, client ->
             server.enqueue(
                 MockResponse(
                     body = """
@@ -327,7 +324,7 @@ class CatalogRepositoryTest {
 
     @Test
     fun `repository rejects credentials and non-cover routes in cover URLs`() = runTest {
-        withPinnedServer { server, client ->
+        withBookBoxServer { server, client ->
             val invalidCoverUrls = listOf(
                 server.url("/v1/books/b1/cover").newBuilder()
                     .username("injected-user")
@@ -368,26 +365,17 @@ class CatalogRepositoryTest {
         }
     }
 
-    private suspend fun withPinnedServer(
+    private suspend fun withBookBoxServer(
         block: suspend (MockWebServer, okhttp3.OkHttpClient) -> Unit,
     ) {
-        val certificate = HeldCertificate.Builder()
-            .addSubjectAlternativeName("localhost")
-            .build()
-        val serverCertificates = HandshakeCertificates.Builder()
-            .heldCertificate(certificate)
-            .build()
         val server = MockWebServer()
-        server.useHttps(serverCertificates.sslSocketFactory())
         server.start()
         val connection = SavedConnection(
             baseUrl = server.url("/").toString(),
-            certificateSha256 = certificate.certificate.encoded
-                .let(::sha256Fingerprint),
             username = "owner",
         )
         try {
-            block(server, PinnedClientFactory().create(connection))
+            block(server, BookBoxClientFactory().create(connection))
         } finally {
             server.close()
         }

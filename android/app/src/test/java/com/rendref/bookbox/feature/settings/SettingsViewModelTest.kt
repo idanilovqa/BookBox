@@ -38,8 +38,6 @@ class SettingsViewModelTest {
             val state = viewModel.state.value
             assertFalse(state.isLoading)
             assertEquals("nas.home:9443", state.host)
-            assertEquals("AB:AB:AB:AB:\u2026:AB:AB", state.fingerprintAbbreviation)
-            assertEquals(FINGERPRINT, state.fingerprintForCopy)
             assertEquals("owner", state.username)
             assertEquals("Audiobooks", state.destinationLabel)
             assertEquals("0.1.0", state.appVersion)
@@ -76,7 +74,7 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `rescan sign out and confirmed server change use only narrow settings operations`() =
+    fun `rescan sign in again and confirmed server change use narrow operations`() =
         runTest(dispatcher) {
             val source = FakeSettingsSource()
             val viewModel = SettingsViewModel(source)
@@ -104,7 +102,7 @@ class SettingsViewModelTest {
             )
             assertTrue(viewModel.state.value.serverChanged)
             assertEquals(
-                "Saved server and session cleared. " +
+                "Tokens and the saved server were cleared. " +
                     "Android downloads and transfer history were kept.",
                 viewModel.state.value.message,
             )
@@ -148,15 +146,10 @@ private class FakeSettingsSource(
 }
 
 private fun snapshot() = SettingsSnapshot(
-    baseUrl = "https://nas.home:9443/",
-    certificateSha256 = FINGERPRINT,
+    baseUrl = "http://nas.home:9443/",
     username = "owner",
     destinationLabel = "Audiobooks",
     appVersion = "0.1.0",
     serverVersion = "1.0.0",
     scanStatus = ScanStatus.Complete,
 )
-
-private const val FINGERPRINT =
-    "AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:" +
-        "AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB"

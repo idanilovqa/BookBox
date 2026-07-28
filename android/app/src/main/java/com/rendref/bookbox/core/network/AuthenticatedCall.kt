@@ -12,11 +12,11 @@ import okhttp3.Request
 import okhttp3.Response
 
 class AuthenticatedCall(
-    pinnedClient: OkHttpClient,
+    client: OkHttpClient,
     private val session: TokenSession,
 ) : Call.Factory {
     private val refreshMutex = Mutex()
-    private val client = pinnedClient.newBuilder()
+    private val client = client.newBuilder()
         .addInterceptor(AuthenticationInterceptor())
         .build()
 

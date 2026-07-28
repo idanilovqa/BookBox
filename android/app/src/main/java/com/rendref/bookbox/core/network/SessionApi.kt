@@ -44,7 +44,7 @@ class SessionApi(
         private set
 
     init {
-        require(baseUrl.isHttps) { "Session API requires HTTPS" }
+        require(baseUrl.scheme == "http") { "Session API requires BookBox HTTP" }
         require(baseUrl.encodedUsername.isEmpty() && baseUrl.encodedPassword.isEmpty()) {
             "Session API URL must not contain credentials"
         }
@@ -81,8 +81,8 @@ class SessionApi(
                 .build()
             val response = try {
                 client.newCall(request).execute()
-            } catch (_: IOException) {
-                throw SessionException("Unable to contact the saved server")
+            } catch (failure: IOException) {
+                throw SessionException("Unable to contact the saved server", cause = failure)
             }
             response.use {
                 if (it.code == 401) {
@@ -135,7 +135,8 @@ class SessionApi(
 class SessionException(
     message: String,
     val statusCode: Int? = null,
-) : IOException(message) {
+    cause: Throwable? = null,
+) : IOException(message, cause) {
     override fun toString(): String = "${this::class.java.name}: $message"
 }
 

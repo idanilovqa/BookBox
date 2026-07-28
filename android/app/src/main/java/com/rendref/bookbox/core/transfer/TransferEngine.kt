@@ -79,13 +79,13 @@ class TransferEngine(
 ) {
     init {
         require(
-            baseUrl.isHttps &&
+            baseUrl.scheme == "http" &&
                 baseUrl.encodedUsername.isEmpty() &&
                 baseUrl.encodedPassword.isEmpty() &&
                 baseUrl.encodedPath == "/" &&
                 baseUrl.query == null &&
                 baseUrl.fragment == null,
-        ) { "Transfer origin must be a clean HTTPS origin" }
+        ) { "Transfer origin must be a clean BookBox HTTP origin" }
     }
 
     suspend fun run(

@@ -2,7 +2,6 @@ package com.rendref.bookbox.core.error
 
 enum class UserRecoveryAction {
     Retry,
-    ReviewCertificate,
     SignIn,
     RetryLater,
     Rescan,
@@ -21,11 +20,6 @@ sealed class UserError(
     data object ServerUnavailable : UserError(
         message = "The saved server is unavailable.",
         recovery = UserRecoveryAction.Retry,
-    )
-
-    data object PinMismatch : UserError(
-        message = "The server certificate no longer matches the saved fingerprint.",
-        recovery = UserRecoveryAction.ReviewCertificate,
     )
 
     data object SessionExpired : UserError(

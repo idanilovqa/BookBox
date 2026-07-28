@@ -5,9 +5,7 @@ import android.provider.DocumentsContract
 import com.rendref.bookbox.core.network.AuthenticatedCall
 import com.rendref.bookbox.core.network.BrowseApi
 import com.rendref.bookbox.core.network.CatalogApi
-import com.rendref.bookbox.core.network.CertificateInspector
-import com.rendref.bookbox.core.network.CertificateProbe
-import com.rendref.bookbox.core.network.PinnedClientFactory
+import com.rendref.bookbox.core.network.BookBoxClientFactory
 import com.rendref.bookbox.core.network.ReviewApi
 import com.rendref.bookbox.core.network.SessionApi
 import com.rendref.bookbox.core.network.SettingsApi
@@ -32,8 +30,6 @@ import com.rendref.bookbox.feature.connect.ConnectViewModel
 import com.rendref.bookbox.feature.settings.ConnectionSettingsSource
 import com.rendref.bookbox.feature.settings.ScanStatus
 import com.rendref.bookbox.feature.settings.SettingsSource
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import java.security.MessageDigest
 
@@ -45,22 +41,19 @@ internal class BookBoxRuntime private constructor(
         context.BookBoxConnectionDataStore,
         tokenStore,
     )
-    private val clients = PinnedClientFactory()
+    private val clients = BookBoxClientFactory()
     private val sessions = mutableMapOf<String, SessionApi>()
 
     fun connectViewModel(): ConnectViewModel = ConnectViewModel(
         connections = connections,
-        certificateInspector = CertificateInspector { url ->
-            withContext(Dispatchers.IO) { CertificateProbe().inspect(url) }
-        },
         sessionFactory = ::session,
     )
 
     fun connected(saved: SavedConnection): ConnectedRuntime {
         val baseUrl = saved.baseUrl.toHttpUrl()
-        val pinned = clients.create(saved)
+        val client = clients.create(saved)
         val session = session(saved)
-        val calls = AuthenticatedCall(pinned, session)
+        val calls = AuthenticatedCall(client, session)
         val browseApi = BrowseApi(calls, baseUrl)
         val settingsApi = SettingsApi(calls, baseUrl)
         val destination = DestinationStore(
@@ -105,7 +98,7 @@ internal class BookBoxRuntime private constructor(
 
     @Synchronized
     private fun session(saved: SavedConnection): SessionApi =
-        sessions.getOrPut(saved.baseUrl + "\u0000" + saved.certificateSha256) {
+        sessions.getOrPut(saved.baseUrl + "\u0000" + saved.username) {
             SessionApi(
                 client = clients.create(saved),
                 baseUrl = saved.baseUrl.toHttpUrl(),
@@ -151,7 +144,7 @@ internal class BookBoxRuntime private constructor(
 internal fun connectionInstanceKey(saved: SavedConnection): String =
     MessageDigest.getInstance("SHA-256")
         .digest(
-            (saved.baseUrl + "\u0000" + saved.certificateSha256)
+            (saved.baseUrl + "\u0000" + saved.username)
                 .toByteArray(Charsets.UTF_8),
         )
         .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }

@@ -14,7 +14,7 @@ class ApiModelsTest {
     }
 
     @Test
-    fun `book card decodes approved server contract and ignores unknown fields`() {
+    fun `book card decodes BookBox server contract and ignores unknown fields`() {
         val card = json.decodeFromString<BookCardDto>(
             """
             {

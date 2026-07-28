@@ -7,8 +7,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
-import okhttp3.tls.HandshakeCertificates
-import okhttp3.tls.HeldCertificate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -18,7 +16,7 @@ import org.junit.Test
 class SessionApiTest {
     @Test
     fun `login sends credentials once and stores decoded refresh token`() = runTest {
-        withPinnedServer(
+        withBookBoxServer(
             MockResponse(
                 body = """{"accessToken":"access-1","refreshToken":"refresh-1","accessExpiry":"2026-07-27T01:02:03Z"}""",
             ),
@@ -41,7 +39,7 @@ class SessionApiTest {
 
     @Test
     fun `refresh sends only refresh token and stores rotation`() = runTest {
-        withPinnedServer(
+        withBookBoxServer(
             MockResponse(
                 body = """{"accessToken":"access-2","refreshToken":"refresh-2","accessExpiry":"2026-07-27T01:02:03Z"}""",
             ),
@@ -63,7 +61,7 @@ class SessionApiTest {
 
     @Test
     fun `refresh 401 clears token and redacts secrets`() = runTest {
-        withPinnedServer(
+        withBookBoxServer(
             MockResponse(code = 401, body = """{"error":{"code":"unauthorized"}}"""),
         ) { server, client, tokenStore ->
             tokenStore.value = "refresh-token-sentinel"
@@ -81,7 +79,7 @@ class SessionApiTest {
 
     @Test
     fun `login errors redact password`() = runTest {
-        withPinnedServer(MockResponse(code = 500, body = "password-sentinel")) {
+        withBookBoxServer(MockResponse(code = 500, body = "password-sentinel")) {
                 server,
                 client,
                 tokenStore,
@@ -98,7 +96,7 @@ class SessionApiTest {
 
     @Test
     fun `oversized or invalid token responses are rejected before persistence`() = runTest {
-        withPinnedServer(MockResponse(body = "x".repeat(64 * 1024 + 1))) {
+        withBookBoxServer(MockResponse(body = "x".repeat(64 * 1024 + 1))) {
                 server,
                 client,
                 tokenStore,
@@ -124,7 +122,7 @@ class SessionApiTest {
 
     @Test
     fun `refresh 401 clears access token before redacted token cleanup failure`() = runTest {
-        withPinnedServer(
+        withBookBoxServer(
             MockResponse(
                 body = """{"accessToken":"access-live","refreshToken":"refresh-live","accessExpiry":"2026-07-27T01:02:03Z"}""",
             ),
@@ -143,27 +141,19 @@ class SessionApiTest {
         }
     }
 
-    private suspend fun withPinnedServer(
+    private suspend fun withBookBoxServer(
         response: MockResponse,
         block: suspend (MockWebServer, okhttp3.OkHttpClient, RecordingTokenStore) -> Unit,
     ) {
-        val certificate = HeldCertificate.Builder()
-            .addSubjectAlternativeName("localhost")
-            .build()
-        val serverCertificates = HandshakeCertificates.Builder()
-            .heldCertificate(certificate)
-            .build()
         val server = MockWebServer()
-        server.useHttps(serverCertificates.sslSocketFactory())
         server.enqueue(response)
         server.start()
         val connection = SavedConnection(
             baseUrl = server.url("/").toString(),
-            certificateSha256 = sha256Fingerprint(certificate.certificate.encoded),
             username = "owner",
         )
         try {
-            block(server, PinnedClientFactory().create(connection), RecordingTokenStore())
+            block(server, BookBoxClientFactory().create(connection), RecordingTokenStore())
         } finally {
             server.close()
         }

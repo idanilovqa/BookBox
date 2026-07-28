@@ -3,7 +3,6 @@ package com.rendref.bookbox.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rendref.bookbox.core.error.UserError
-import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,7 +19,6 @@ enum class ScanStatus {
 
 data class SettingsSnapshot(
     val baseUrl: String,
-    val certificateSha256: String,
     val username: String,
     val destinationLabel: String?,
     val appVersion: String,
@@ -42,8 +40,6 @@ data class SettingsUiState(
     val isLoading: Boolean = false,
     val isBusy: Boolean = false,
     val host: String? = null,
-    val fingerprintAbbreviation: String? = null,
-    val fingerprintForCopy: String? = null,
     val username: String? = null,
     val destinationLabel: String? = null,
     val appVersion: String? = null,
@@ -150,12 +146,9 @@ class SettingsViewModel(
 }
 
 private fun SettingsSnapshot.toSafeUiState(): SettingsUiState {
-    val fingerprint = certificateSha256.normalizedFingerprint()
     return SettingsUiState(
         isLoading = false,
         host = baseUrl.safeHost(),
-        fingerprintAbbreviation = fingerprint?.abbreviateFingerprint(),
-        fingerprintForCopy = fingerprint,
         username = username.safeLabel() ?: "Saved user",
         destinationLabel = destinationLabel?.safeLabel(),
         appVersion = appVersion.safeLabel(),
@@ -167,7 +160,7 @@ private fun SettingsSnapshot.toSafeUiState(): SettingsUiState {
 private fun String.safeHost(): String? {
     val url = toHttpUrlOrNull() ?: return null
     if (
-        !url.isHttps ||
+        url.scheme != "http" ||
         url.encodedUsername.isNotEmpty() ||
         url.encodedPassword.isNotEmpty() ||
         url.encodedPath != "/" ||
@@ -177,7 +170,7 @@ private fun String.safeHost(): String? {
         return null
     }
     val safeHost = if (':' in url.host) "[${url.host}]" else url.host
-    return if (url.port == 443) safeHost else "$safeHost:${url.port}"
+    return if (url.port == 8787) safeHost else "$safeHost:${url.port}"
 }
 
 private fun String.safeLabel(): String? {
@@ -197,22 +190,8 @@ private fun String.safeLabel(): String? {
     return clean
 }
 
-private fun String.normalizedFingerprint(): String? {
-    if (!CERTIFICATE_FINGERPRINT.matches(this)) return null
-    return uppercase(Locale.ROOT)
-}
-
-private fun String.abbreviateFingerprint(): String {
-    val bytes = split(':')
-    return bytes.take(4).joinToString(":") +
-        ":\u2026:" +
-        bytes.takeLast(2).joinToString(":")
-}
-
 private const val MAX_DIAGNOSTIC_LENGTH = 100
 private const val SERVER_CHANGED_MESSAGE =
-    "Saved server and session cleared. Android downloads and transfer history were kept."
-private val CERTIFICATE_FINGERPRINT =
-    Regex("(?i)^(?:[0-9a-f]{2}:){31}[0-9a-f]{2}$")
+    "Tokens and the saved server were cleared. Android downloads and transfer history were kept."
 private val WINDOWS_ABSOLUTE_PATH = Regex("(?i)^[a-z]:[\\\\/]")
 private val SENSITIVE_LABEL = Regex("(?i)(?:password|token)")

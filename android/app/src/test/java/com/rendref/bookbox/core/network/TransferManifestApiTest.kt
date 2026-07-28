@@ -10,8 +10,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
-import okhttp3.tls.HandshakeCertificates
-import okhttp3.tls.HeldCertificate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -171,24 +169,10 @@ class TransferManifestApiTest {
         response: MockResponse,
         block: suspend (MockWebServer, OkHttpClient) -> Unit,
     ) {
-        val certificate = HeldCertificate.Builder()
-            .addSubjectAlternativeName("localhost")
-            .build()
-        val serverCertificates = HandshakeCertificates.Builder()
-            .heldCertificate(certificate)
-            .build()
-        val clientCertificates = HandshakeCertificates.Builder()
-            .addTrustedCertificate(certificate.certificate)
-            .build()
         val server = MockWebServer()
-        server.useHttps(serverCertificates.sslSocketFactory())
         server.enqueue(response)
         server.start()
         val client = OkHttpClient.Builder()
-            .sslSocketFactory(
-                clientCertificates.sslSocketFactory(),
-                clientCertificates.trustManager,
-            )
             .addInterceptor { chain ->
                 chain.proceed(
                     chain.request().newBuilder()

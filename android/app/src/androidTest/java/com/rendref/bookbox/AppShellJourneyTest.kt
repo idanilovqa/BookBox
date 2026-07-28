@@ -21,6 +21,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import com.rendref.bookbox.core.model.BookCardDto
 import com.rendref.bookbox.core.model.BookDetailDto
 import com.rendref.bookbox.core.model.BookFileDto
@@ -34,7 +35,6 @@ import com.rendref.bookbox.feature.book.MatchPickerScreen
 import com.rendref.bookbox.feature.book.ReviewPane
 import com.rendref.bookbox.feature.connect.ConnectScreen
 import com.rendref.bookbox.feature.connect.ConnectState
-import com.rendref.bookbox.feature.connect.SignInTarget
 import com.rendref.bookbox.feature.folders.FolderAction
 import com.rendref.bookbox.feature.folders.FoldersScreen
 import com.rendref.bookbox.feature.folders.FoldersState
@@ -70,18 +70,13 @@ class AppShellJourneyTest {
             }
         }
 
-        compose.onNode(hasSetTextAction() and androidx.compose.ui.test.hasText("Server address"))
-            .performTextInput("https://192.168.1.25:8443")
-        compose.onNodeWithText("Inspect certificate").performClick()
-        compose.onNodeWithText(FINGERPRINT).assertIsDisplayed()
-        compose.onNode(hasSetTextAction() and androidx.compose.ui.test.hasText("Type the full fingerprint"))
-            .performTextInput(FINGERPRINT)
-        compose.onNodeWithText("Approve certificate").performClick()
+        compose.onNode(hasSetTextAction() and androidx.compose.ui.test.hasText("Server"))
+            .performTextReplacement("192.168.1.25")
         compose.onNode(hasSetTextAction() and androidx.compose.ui.test.hasText("Username"))
             .performTextInput("listener")
         compose.onNode(hasSetTextAction() and androidx.compose.ui.test.hasText("Password"))
             .performTextInput("correct horse battery staple")
-        compose.onNodeWithText("Sign in").performClick()
+        compose.onNodeWithText("Connect").performClick()
 
         compose.onNodeWithText("Audiobooks").assertIsDisplayed()
         compose.onNode(hasSetTextAction() and androidx.compose.ui.test.hasText("Search audiobooks"))
@@ -122,13 +117,12 @@ class AppShellJourneyTest {
         compose.onNodeWithText("Saved server").assertIsDisplayed()
         compose.onNodeWithText("Android destination").assertIsDisplayed()
         compose.onNode(hasScrollToIndexAction())
-            .performScrollToNode(hasText("Sign out"))
-        compose.onNodeWithText("Sign out").performClick()
-        compose.onNodeWithText("Approved server: https://192.168.1.25:8443/")
-            .assertIsDisplayed()
+            .performScrollToNode(hasText("Sign in again"))
+        compose.onNodeWithText("Sign in again").performClick()
+        compose.onNodeWithText("192.168.1.25").assertIsDisplayed()
         compose.onNode(hasSetTextAction() and androidx.compose.ui.test.hasText("Password"))
             .performTextInput("new session")
-        compose.onNodeWithText("Sign in").performClick()
+        compose.onNodeWithText("Connect").performClick()
         compose.onNodeWithText("Audiobooks").assertIsDisplayed()
     }
 }
@@ -143,7 +137,9 @@ private enum class JourneyStage {
 @Composable
 private fun JourneyHarness() {
     var stage by remember { mutableStateOf(JourneyStage.Connect) }
-    var connectState by remember { mutableStateOf<ConnectState>(ConnectState.EnterServer) }
+    var connectState by remember {
+        mutableStateOf<ConnectState>(ConnectState.EnterCredentials())
+    }
     var route by remember { mutableStateOf(AppRoute.Library) }
     var selected by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
@@ -154,18 +150,7 @@ private fun JourneyHarness() {
     when (stage) {
         JourneyStage.Connect -> ConnectScreen(
             state = connectState,
-            onInspectServer = {
-                connectState = ConnectState.ReviewCertificate(
-                    com.rendref.bookbox.core.network.ObservedCertificate(
-                        fingerprint = FINGERPRINT,
-                        der = byteArrayOf(1, 2, 3),
-                    ),
-                )
-            },
-            onApproveFingerprint = {
-                connectState = rememberedSignIn()
-            },
-            onSignIn = { _, _ ->
+            onConnect = { _, _, _ ->
                 stage = JourneyStage.Main
                 route = AppRoute.Library
             },
@@ -263,7 +248,10 @@ private fun JourneyHarness() {
                     onAction = {
                         if (it == SettingsAction.SignOut) {
                             stage = JourneyStage.Connect
-                            connectState = rememberedSignIn()
+                            connectState = ConnectState.EnterCredentials(
+                                server = "192.168.1.25",
+                                username = "listener",
+                            )
                         }
                     },
                     modifier = modifier,
@@ -274,19 +262,6 @@ private fun JourneyHarness() {
         }
     }
 }
-
-private fun rememberedSignIn(): ConnectState.SignIn = ConnectState.SignIn(
-    SignInTarget(
-        baseUrl = "https://192.168.1.25:8443/",
-        certificateSha256 = FINGERPRINT,
-        username = "listener",
-        destinationUri = "content://test/audiobooks",
-    ),
-)
-
-private const val FINGERPRINT =
-    "AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:" +
-        "AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA"
 
 private val BOOK = BookCardDto(
     id = "11111111-1111-4111-8111-111111111111",
@@ -359,9 +334,7 @@ private val TRANSFERS = TransfersState(
 )
 
 private val SETTINGS = SettingsUiState(
-    host = "192.168.1.25:8443",
-    fingerprintAbbreviation = "AA:AA:AA:AA:…:AA:AA",
-    fingerprintForCopy = FINGERPRINT,
+    host = "192.168.1.25",
     username = "listener",
     destinationLabel = "Audiobooks",
     appVersion = "1.0.0",

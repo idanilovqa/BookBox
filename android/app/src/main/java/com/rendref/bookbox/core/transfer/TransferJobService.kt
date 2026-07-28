@@ -5,7 +5,7 @@ import android.app.job.JobService
 import android.content.Context
 import android.net.Network
 import com.rendref.bookbox.core.network.AuthenticatedCall
-import com.rendref.bookbox.core.network.PinnedClientFactory
+import com.rendref.bookbox.core.network.BookBoxClientFactory
 import com.rendref.bookbox.core.network.SessionApi
 import com.rendref.bookbox.core.network.SessionException
 import com.rendref.bookbox.core.storage.ConnectionStore
@@ -232,8 +232,8 @@ private object DefaultTransferJobRuntimeFactory : TransferJobRuntimeFactory {
         val connection = connections.state.first()
             ?: throw SessionException("Sign-in has expired", statusCode = 401)
         val origin = connection.baseUrl.toHttpUrl()
-        val pinned = PinnedClientFactory().create(connection)
-        val sessionClient = pinned.boundTo(network)
+        val client = BookBoxClientFactory().create(connection)
+        val sessionClient = client.boundTo(network)
         val session = SessionApi(
             client = sessionClient,
             baseUrl = origin,
@@ -254,7 +254,7 @@ private object DefaultTransferJobRuntimeFactory : TransferJobRuntimeFactory {
             baseUrl = origin,
             callFactory = { selectedNetwork ->
                 AuthenticatedCall(
-                    pinned.boundTo(selectedNetwork),
+                    client.boundTo(selectedNetwork),
                     session,
                 )
             },

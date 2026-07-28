@@ -9,7 +9,6 @@ class UserErrorTest {
     fun `approved failures have specific recovery actions without sensitive details`() {
         val expected = mapOf(
             UserError.ServerUnavailable to UserRecoveryAction.Retry,
-            UserError.PinMismatch to UserRecoveryAction.ReviewCertificate,
             UserError.SessionExpired to UserRecoveryAction.SignIn,
             UserError.Throttled to UserRecoveryAction.RetryLater,
             UserError.SourceChanged to UserRecoveryAction.Rescan,

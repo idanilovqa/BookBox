@@ -9,10 +9,9 @@ import com.rendref.bookbox.core.model.RootDto
 import com.rendref.bookbox.core.model.RootsDto
 import com.rendref.bookbox.core.network.AuthenticatedCall
 import com.rendref.bookbox.core.network.BrowseApi
-import com.rendref.bookbox.core.network.PinnedClientFactory
+import com.rendref.bookbox.core.network.BookBoxClientFactory
 import com.rendref.bookbox.core.network.SessionTokens
 import com.rendref.bookbox.core.network.TokenSession
-import com.rendref.bookbox.core.network.sha256Fingerprint
 import com.rendref.bookbox.core.storage.SavedConnection
 import java.io.IOException
 import kotlinx.coroutines.flow.first
@@ -20,8 +19,6 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
-import okhttp3.tls.HandshakeCertificates
-import okhttp3.tls.HeldCertificate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -213,23 +210,15 @@ class BrowseRepositoryTest {
     private suspend fun withRepository(
         block: suspend (MockWebServer, BrowseRepository) -> Unit,
     ) {
-        val certificate = HeldCertificate.Builder()
-            .addSubjectAlternativeName("localhost")
-            .build()
-        val certificates = HandshakeCertificates.Builder()
-            .heldCertificate(certificate)
-            .build()
         val server = MockWebServer()
-        server.useHttps(certificates.sslSocketFactory())
         server.start()
         val connection = SavedConnection(
             baseUrl = server.url("/").toString(),
-            certificateSha256 = sha256Fingerprint(certificate.certificate.encoded),
             username = "owner",
         )
         try {
             val calls = AuthenticatedCall(
-                PinnedClientFactory().create(connection),
+                BookBoxClientFactory().create(connection),
                 StaticTokenSession,
             )
             block(server, BrowseRepository(BrowseApi(calls, server.url("/"))))

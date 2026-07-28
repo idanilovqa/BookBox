@@ -7,8 +7,7 @@ import com.rendref.bookbox.core.model.ManifestDto
 import com.rendref.bookbox.core.network.AuthenticatedCall
 import com.rendref.bookbox.core.network.BrowseApi
 import com.rendref.bookbox.core.network.CatalogApi
-import com.rendref.bookbox.core.network.CertificateProbe
-import com.rendref.bookbox.core.network.PinnedClientFactory
+import com.rendref.bookbox.core.network.BookBoxClientFactory
 import com.rendref.bookbox.core.network.SessionApi
 import com.rendref.bookbox.core.network.TransferManifestApi
 import com.rendref.bookbox.core.network.TransferSelection
@@ -42,7 +41,7 @@ import org.junit.Test
 
 class RealServerJourneyTest {
     @Test(timeout = 300_000)
-    fun completePinnedReadOnlyJourneyResumesAndKeepsBoth() = runBlocking {
+    fun completeAuthenticatedReadOnlyJourneyResumesAndKeepsBoth() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val arguments = InstrumentationRegistry.getArguments()
         val productionPackage = instrumentation.targetContext.packageManager
@@ -58,7 +57,6 @@ class RealServerJourneyTest {
             },
         )
         val baseUrl = requiredArgument(arguments.getString("e2eBaseUrl")).toHttpUrl()
-        val expectedFingerprint = requiredArgument(arguments.getString("e2eFingerprint"))
         val username = requiredArgument(arguments.getString("e2eUsername"))
         val password = requiredArgument(arguments.getString("e2ePassword"))
         val toxiproxyPort = arguments.getString("e2eToxiproxyPort")
@@ -66,17 +64,14 @@ class RealServerJourneyTest {
             ?.takeIf { it in 1..65535 }
             ?: 18474
 
-        val observed = CertificateProbe().inspect(baseUrl)
-        assertEquals(expectedFingerprint, observed.fingerprint)
         val approvedConnection = SavedConnection(
             baseUrl = baseUrl.toString(),
-            certificateSha256 = observed.fingerprint,
             username = username,
         )
 
         val tokenStore = MemoryRefreshTokenStore()
         val requests = CopyOnWriteArrayList<RecordedRequest>()
-        val pinned = PinnedClientFactory()
+        val client = BookBoxClientFactory()
             .create(approvedConnection)
             .newBuilder()
             .addInterceptor(Interceptor { chain ->
@@ -91,9 +86,9 @@ class RealServerJourneyTest {
                 chain.proceed(request)
             })
             .build()
-        val session = SessionApi(pinned, baseUrl, tokenStore)
+        val session = SessionApi(client, baseUrl, tokenStore)
         session.login(username, password)
-        val authenticated = AuthenticatedCall(pinned, session)
+        val authenticated = AuthenticatedCall(client, session)
         val catalog = CatalogApi(authenticated, baseUrl)
         val browse = BrowseApi(authenticated, baseUrl)
 

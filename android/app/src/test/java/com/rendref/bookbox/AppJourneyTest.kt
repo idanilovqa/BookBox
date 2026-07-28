@@ -3,22 +3,19 @@ package com.rendref.bookbox
 import com.rendref.bookbox.core.network.AuthenticatedCall
 import com.rendref.bookbox.core.network.BrowseApi
 import com.rendref.bookbox.core.network.CatalogApi
-import com.rendref.bookbox.core.network.PinnedClientFactory
+import com.rendref.bookbox.core.network.BookBoxClientFactory
 import com.rendref.bookbox.core.network.ReviewApi
 import com.rendref.bookbox.core.network.ReviewGroupingRequest
 import com.rendref.bookbox.core.network.SessionTokens
 import com.rendref.bookbox.core.network.TokenSession
 import com.rendref.bookbox.core.network.TransferManifestApi
 import com.rendref.bookbox.core.network.TransferSelection
-import com.rendref.bookbox.core.network.sha256Fingerprint
 import com.rendref.bookbox.core.repository.BookQuery
 import com.rendref.bookbox.core.storage.SavedConnection
 import java.util.UUID
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
-import okhttp3.tls.HandshakeCertificates
-import okhttp3.tls.HeldCertificate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
@@ -30,7 +27,7 @@ class AppJourneyTest {
             val bookId = UUID.randomUUID().toString()
             val matchId = UUID.randomUUID().toString()
             val jobId = UUID.randomUUID().toString()
-            withPinnedServer(
+            withBookBoxServer(
                 listOf(
                     MockResponse(
                         body = """
@@ -135,23 +132,15 @@ class AppJourneyTest {
             }
         }
 
-    private suspend fun withPinnedServer(
+    private suspend fun withBookBoxServer(
         responses: List<MockResponse>,
         block: suspend (MockWebServer, AuthenticatedCall) -> Unit,
     ) {
-        val certificate = HeldCertificate.Builder()
-            .addSubjectAlternativeName("localhost")
-            .build()
-        val serverCertificates = HandshakeCertificates.Builder()
-            .heldCertificate(certificate)
-            .build()
         val server = MockWebServer()
-        server.useHttps(serverCertificates.sslSocketFactory())
         responses.forEach(server::enqueue)
         server.start()
         val connection = SavedConnection(
             baseUrl = server.url("/").toString(),
-            certificateSha256 = sha256Fingerprint(certificate.certificate.encoded),
             username = "owner",
         )
         val session = object : TokenSession {
@@ -163,7 +152,7 @@ class AppJourneyTest {
         try {
             block(
                 server,
-                AuthenticatedCall(PinnedClientFactory().create(connection), session),
+                AuthenticatedCall(BookBoxClientFactory().create(connection), session),
             )
         } finally {
             server.close()

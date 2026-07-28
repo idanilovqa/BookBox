@@ -20,8 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 sealed interface SettingsAction {
-    data object CopyFingerprint : SettingsAction
-
     data object Rescan : SettingsAction
 
     data object ChooseDestination : SettingsAction
@@ -29,6 +27,8 @@ sealed interface SettingsAction {
     data object SignOut : SettingsAction
 
     data object RequestServerChange : SettingsAction
+
+    data object ResetSavedConnection : SettingsAction
 
     data object ConfirmServerChange : SettingsAction
 
@@ -63,20 +63,6 @@ fun SettingsScreen(
         } else {
             state.host?.let { host ->
                 item { Diagnostic("Saved server", host) }
-            }
-            state.fingerprintAbbreviation?.let { fingerprint ->
-                item { Diagnostic("Certificate fingerprint", fingerprint) }
-            }
-            if (state.fingerprintForCopy != null) {
-                item {
-                    OutlinedButton(
-                        onClick = { onAction(SettingsAction.CopyFingerprint) },
-                        enabled = !state.isBusy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Copy full fingerprint")
-                    }
-                }
             }
             state.username?.let { username ->
                 item { Diagnostic("Username", username) }
@@ -128,7 +114,7 @@ fun SettingsScreen(
                     enabled = !state.isBusy,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Sign out")
+                    Text("Sign in again")
                 }
             }
             item {
@@ -138,6 +124,15 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Change server")
+                }
+            }
+            item {
+                OutlinedButton(
+                    onClick = { onAction(SettingsAction.ResetSavedConnection) },
+                    enabled = !state.isBusy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Reset saved connection")
                 }
             }
         }
@@ -161,11 +156,11 @@ fun SettingsScreen(
             onDismissRequest = {
                 onAction(SettingsAction.CancelServerChange)
             },
-            title = { Text("Change server?") },
+            title = { Text("Reset saved connection?") },
             text = {
                 Text(
-                    "This clears the saved server, certificate pin, and session. " +
-                        "Android downloads and transfer history stay on this device.",
+                    "This clears tokens and the saved server. Android downloads and " +
+                        "transfer history stay on this device.",
                 )
             },
             confirmButton = {
@@ -174,7 +169,7 @@ fun SettingsScreen(
                         onAction(SettingsAction.ConfirmServerChange)
                     },
                 ) {
-                    Text("Clear server and session")
+                    Text("Reset saved connection")
                 }
             },
             dismissButton = {

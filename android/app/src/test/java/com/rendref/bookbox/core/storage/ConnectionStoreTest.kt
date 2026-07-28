@@ -20,8 +20,7 @@ class ConnectionStoreTest {
         val tokens = RecordingTokenStore()
         val firstStore = ConnectionStore(dataStore, tokens)
         val connection = SavedConnection(
-            baseUrl = "https://192.168.1.25:8443/",
-            certificateSha256 = "AB:".repeat(31) + "AB",
+            baseUrl = "http://192.168.1.25:8787/",
             username = "owner",
             destinationUri = "content://com.android.externalstorage.documents/tree/primary%3AAudiobooks",
         )
@@ -32,17 +31,20 @@ class ConnectionStoreTest {
         assertEquals(connection, secondStore.state.first())
         val storedKeyNames = dataStore.data.first().asMap().keys.map { it.name }
         assertFalse(storedKeyNames.any { it.contains("password", ignoreCase = true) })
+        assertEquals(
+            setOf("server_base_url", "server_username", "destination_uri"),
+            storedKeyNames.toSet(),
+        )
     }
 
     @Test
-    fun `clear server removes connection pin and encrypted token but retains destination`() = runTest {
+    fun `clear server removes connection and encrypted token but retains destination`() = runTest {
         val dataStore = InMemoryPreferencesDataStore()
         val tokens = RecordingTokenStore()
         val store = ConnectionStore(dataStore, tokens)
         store.save(
             SavedConnection(
-                baseUrl = "https://server.lan:8443/",
-                certificateSha256 = "CD:".repeat(31) + "CD",
+                baseUrl = "http://bookbox.local:8787/",
                 username = "owner",
                 destinationUri = "content://destination",
             ),
@@ -54,7 +56,7 @@ class ConnectionStoreTest {
         assertEquals("content://destination", store.destinationUri.first())
         assertEquals(1, tokens.clearCalls)
         val remaining = dataStore.data.first().asMap()
-        assertFalse(remaining.keys.any { it.name.contains("certificate", ignoreCase = true) })
+        assertEquals(setOf("destination_uri"), remaining.keys.map { it.name }.toSet())
     }
 
     private class RecordingTokenStore : RefreshTokenStore {

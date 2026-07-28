@@ -2,8 +2,6 @@ package com.rendref.bookbox
 
 import android.Manifest
 import android.app.job.JobScheduler
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -132,9 +130,7 @@ internal fun ProductionBookBoxApp() {
         } else {
             ConnectScreen(
                 state = connectState,
-                onInspectServer = connect::inspectServer,
-                onApproveFingerprint = connect::approveFingerprint,
-                onSignIn = connect::signIn,
+                onConnect = connect::connect,
                 onRetry = connect::retry,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -425,22 +421,13 @@ internal fun ConnectedApp(
                 state = settingsState,
                 onAction = { action ->
                     when (action) {
-                        SettingsAction.CopyFingerprint -> {
-                            settingsState.fingerprintForCopy?.let { fingerprint ->
-                                context.getSystemService(ClipboardManager::class.java)
-                                    .setPrimaryClip(
-                                        ClipData.newPlainText(
-                                            "BookBox certificate fingerprint",
-                                            fingerprint,
-                                        ),
-                                    )
-                            }
-                        }
                         SettingsAction.Rescan -> settings.rescan()
                         SettingsAction.ChooseDestination ->
                             destinationLauncher.launch(null)
                         SettingsAction.SignOut -> settings.signOut()
                         SettingsAction.RequestServerChange ->
+                            settings.requestServerChange()
+                        SettingsAction.ResetSavedConnection ->
                             settings.requestServerChange()
                         SettingsAction.ConfirmServerChange ->
                             settings.confirmServerChange()

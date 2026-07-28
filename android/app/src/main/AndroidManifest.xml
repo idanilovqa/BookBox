@@ -8,11 +8,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
+        android:usesCleartextTraffic="true"
         android:allowBackup="false"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.BookBox"
-        android:usesCleartextTraffic="false">
+        android:theme="@style/Theme.BookBox">
         <activity
             android:name=".MainActivity"
             android:exported="true"
