@@ -200,12 +200,16 @@ $artifacts = Join-Path $script:repo 'artifacts'
 $script:artifacts = $artifacts
 $debugArtifact = Join-Path $artifacts "BookBox-v$Version-debug.apk"
 $releaseArtifact = Join-Path $artifacts "BookBox-v$Version-release.apk"
+$discoveryArtifact = Join-Path $artifacts 'bookbox-discovery.exe'
 $metadataArtifact = Join-Path $artifacts 'APK_METADATA.json'
+$discoveryMetadataArtifact = Join-Path $artifacts 'DISCOVERY_METADATA.json'
 $checksumsArtifact = Join-Path $artifacts 'SHA256SUMS.txt'
 foreach ($path in @(
     $debugArtifact,
     $releaseArtifact,
+    $discoveryArtifact,
     $metadataArtifact,
+    $discoveryMetadataArtifact,
     $checksumsArtifact
 )) {
     Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
@@ -232,6 +236,11 @@ $goContainer = "bookbox-release-go-$PID"
 if ((@(& docker ps -a --filter "name=^/$goContainer$" -q) -join '').Trim()) {
     throw "Owned Go test container name already exists: $goContainer"
 }
+$goVerificationAndBuild = @(
+    'GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go test -mod=readonly -p=1 -race ./... &&'
+    'GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go vet -mod=readonly ./... &&'
+    'go build -mod=readonly -trimpath -o /artifacts/bookbox-discovery.exe ./cmd/bookbox-discovery'
+) -join ' '
 Invoke-MonitoredProcess `
     -Label 'Go tests and vet' `
     -FilePath 'docker.exe' `
@@ -240,15 +249,37 @@ Invoke-MonitoredProcess `
         '--tmpfs', '/tmp:rw,exec,nosuid,nodev',
         '-e', 'GOCACHE=/tmp/go-cache',
         '-e', 'GOMODCACHE=/tmp/go-mod',
+        '-e', 'GOOS=windows',
+        '-e', 'GOARCH=amd64',
+        '-e', 'CGO_ENABLED=0',
         '-v', "$($script:repo.Replace('\','/')):/workspace:ro",
+        '-v', "$($artifacts.Replace('\','/')):/artifacts:rw",
         '-w', '/workspace/server',
         'golang:1.26.5',
         'sh', '-c',
-        'go test -mod=readonly -p=1 -race ./... && go vet -mod=readonly ./...'
+        $goVerificationAndBuild
     ) `
     -WorkingDirectory $script:repo `
     -TimeoutSeconds 1800 `
     -OwnedDockerContainer $goContainer
+if (-not (Test-Path -LiteralPath $discoveryArtifact -PathType Leaf)) {
+    throw "Discovery executable was not produced: $discoveryArtifact"
+}
+Write-Host "Created $discoveryArtifact"
+foreach ($gate in @(
+    'discovery-process.tests.ps1',
+    'install-transaction.tests.ps1'
+)) {
+    Invoke-MonitoredProcess `
+        -Label "Windows deployment gate: $gate" `
+        -FilePath 'powershell.exe' `
+        -Arguments @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-File', (Join-Path $script:repo "deploy\scripts\$gate")
+        ) `
+        -WorkingDirectory $script:repo `
+        -TimeoutSeconds 300
+}
 Invoke-MonitoredProcess `
     -Label 'Compose safety audit' `
     -FilePath 'powershell.exe' `
@@ -351,7 +382,7 @@ if ((Test-Path -LiteralPath $keystore -PathType Leaf) -and
     Write-Host 'Signing material is absent; the debug APK is complete and sideloadable.'
 }
 
-Invoke-Checked 'APK metadata, permissions, signatures, and checksums' {
+Invoke-Checked 'APK and discovery metadata, signatures, and checksums' {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $script:repo 'deploy\scripts\verify-release.ps1') `
         -Version $Version

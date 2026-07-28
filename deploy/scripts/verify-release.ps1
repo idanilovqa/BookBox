@@ -77,9 +77,14 @@ function Get-LatestBuildTool {
 $script:repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $artifacts = Join-Path $script:repo 'artifacts'
 $metadataPath = Join-Path $artifacts 'APK_METADATA.json'
+$discoveryMetadataPath = Join-Path $artifacts 'DISCOVERY_METADATA.json'
 $checksumsPath = Join-Path $artifacts 'SHA256SUMS.txt'
-Remove-Item -LiteralPath $metadataPath, $checksumsPath `
+Remove-Item -LiteralPath $metadataPath, $discoveryMetadataPath, $checksumsPath `
     -Force -ErrorAction SilentlyContinue
+$discoveryPath = Join-Path $artifacts 'bookbox-discovery.exe'
+if (-not (Test-Path -LiteralPath $discoveryPath -PathType Leaf)) {
+    throw "BookBox discovery executable does not exist: $discoveryPath"
+}
 $apks = @(@(
     Join-Path $artifacts "BookBox-v$Version-debug.apk"
     Join-Path $artifacts "BookBox-v$Version-release.apk"
@@ -176,16 +181,66 @@ foreach ($apk in $apks) {
     })
 }
 $metadata = @($metadata | Sort-Object file)
+$discoveryItem = Get-Item -LiteralPath $discoveryPath
+$stream = [IO.File]::Open(
+    $discoveryPath,
+    [IO.FileMode]::Open,
+    [IO.FileAccess]::Read,
+    [IO.FileShare]::Read
+)
+$reader = $null
+try {
+    $reader = [IO.BinaryReader]::new($stream)
+    if ($reader.ReadUInt16() -ne 0x5A4D) {
+        throw 'bookbox-discovery.exe does not have a DOS executable header.'
+    }
+    $stream.Position = 0x3c
+    $peOffset = $reader.ReadInt32()
+    if ($peOffset -lt 0x40 -or $peOffset -gt ($stream.Length - 6)) {
+        throw 'bookbox-discovery.exe has an invalid PE header offset.'
+    }
+    $stream.Position = $peOffset
+    if ($reader.ReadUInt32() -ne 0x00004550) {
+        throw 'bookbox-discovery.exe does not have a PE signature.'
+    }
+    if ($reader.ReadUInt16() -ne 0x8664) {
+        throw 'bookbox-discovery.exe is not an AMD64 Windows executable.'
+    }
+} finally {
+    if ($null -ne $reader) {
+        $reader.Dispose()
+    } else {
+        $stream.Dispose()
+    }
+}
+$discoveryMetadata = [ordered]@{
+    file = $discoveryItem.Name
+    bytes = [int64] $discoveryItem.Length
+    sha256 = (
+        Get-FileHash -LiteralPath $discoveryPath -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+    operatingSystem = 'windows'
+    architecture = 'amd64'
+    format = 'PE'
+}
 $checksumLines = @($metadata | ForEach-Object {
     "$($_.sha256)  $($_.file)"
 })
+$checksumLines += "$($discoveryMetadata.sha256)  $($discoveryMetadata.file)"
+$checksumLines = @($checksumLines | Sort-Object)
 $publicationID = [Guid]::NewGuid().ToString('N')
 $metadataTemporary = "$metadataPath.tmp-$publicationID"
+$discoveryMetadataTemporary = "$discoveryMetadataPath.tmp-$publicationID"
 $checksumsTemporary = "$checksumsPath.tmp-$publicationID"
 try {
     [IO.File]::WriteAllText(
         $metadataTemporary,
         ($metadata | ConvertTo-Json -Depth 6),
+        [Text.UTF8Encoding]::new($false)
+    )
+    [IO.File]::WriteAllText(
+        $discoveryMetadataTemporary,
+        ($discoveryMetadata | ConvertTo-Json -Depth 3),
         [Text.UTF8Encoding]::new($false)
     )
     [IO.File]::WriteAllLines(
@@ -194,9 +249,15 @@ try {
         [Text.UTF8Encoding]::new($false)
     )
     Move-Item -LiteralPath $metadataTemporary -Destination $metadataPath -Force
+    Move-Item -LiteralPath $discoveryMetadataTemporary `
+        -Destination $discoveryMetadataPath -Force
     Move-Item -LiteralPath $checksumsTemporary -Destination $checksumsPath -Force
+} catch {
+    Remove-Item -LiteralPath $metadataPath, $discoveryMetadataPath, $checksumsPath `
+        -Force -ErrorAction SilentlyContinue
+    throw
 } finally {
-    Remove-Item -LiteralPath $metadataTemporary, $checksumsTemporary `
+    Remove-Item -LiteralPath $metadataTemporary, $discoveryMetadataTemporary, $checksumsTemporary `
         -Force -ErrorAction SilentlyContinue
 }
-Write-Host "PASS: verified $($metadata.Count) APK(s); wrote APK_METADATA.json and SHA256SUMS.txt."
+Write-Host "PASS: verified $($metadata.Count) APK(s) and bookbox-discovery.exe; wrote release metadata and SHA256SUMS.txt."

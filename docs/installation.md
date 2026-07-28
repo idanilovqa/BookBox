@@ -38,13 +38,11 @@ docker compose --env-file deploy\.env -f deploy\compose.yml build
 
 ## Build and install discovery
 
-Build the Windows discovery executable:
+Build the verified release artifacts. This produces both the Android package and
+`artifacts\bookbox-discovery.exe`:
 
 ```powershell
-New-Item -ItemType Directory -Force artifacts | Out-Null
-Set-Location server
-go build -o ..\artifacts\bookbox-discovery.exe .\cmd\bookbox-discovery
-Set-Location ..
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\build-release.ps1
 ```
 
 Open an elevated PowerShell window in the repository root. Set the same private address and port, then install the executable, scheduled task, and firewall rules:
@@ -108,15 +106,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File deploy\scripts\remove-bookbox-discovery.ps1
 ```
 
-## Build and install Android
+## Install Android
 
-Run the release build:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\build-release.ps1
-```
-
-The debug package is `artifacts\BookBox-v1.0.0-debug.apk`. Compare its digest with `artifacts\SHA256SUMS.txt`, copy it to the phone, and install it. If Android asks for permission to install unknown apps, grant permission to the file manager used for this installation and revoke it afterward.
+The release build above produces `artifacts\BookBox-v1.0.0-debug.apk`,
+`artifacts\bookbox-discovery.exe`, their metadata, and a shared
+`artifacts\SHA256SUMS.txt`. Compare both artifact digests with that file. Copy the
+APK to the phone and install it. If Android asks for permission to install unknown
+apps, grant permission to the file manager used for this installation and revoke
+it afterward.
 
 Open BookBox and enter `http://bookbox.local:8787`. Use the username from `deploy\config.yml` and the password entered during secret generation. Enter the private-IP URL if `.local` resolution fails.
 

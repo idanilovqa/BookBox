@@ -56,16 +56,35 @@ if (
 ) {
     throw 'Every no-daemon Gradle release lane must keep the Kotlin compiler in-process.'
 }
-foreach ($sidecar in @('APK_METADATA.json', 'SHA256SUMS.txt')) {
+foreach ($sidecar in @(
+    'APK_METADATA.json',
+    'DISCOVERY_METADATA.json',
+    'SHA256SUMS.txt'
+)) {
     if ($text -notmatch [regex]::Escape($sidecar)) {
         throw "Release startup must remove the prior $sidecar."
+    }
+}
+foreach ($required in @(
+    'bookbox-discovery.exe',
+    '$goVerificationAndBuild',
+    "-join ' '",
+    "'GOOS=windows'",
+    "'GOARCH=amd64'",
+    "'CGO_ENABLED=0'",
+    'discovery-process.tests.ps1',
+    'install-transaction.tests.ps1'
+)) {
+    if ($text -notmatch [regex]::Escape($required)) {
+        throw "Release build is missing the discovery release gate: $required"
     }
 }
 $buildArtifactRemoval = [regex]::Match(
     $text,
     '(?s)foreach\s*\(\$path\s+in\s+@\(\s*' +
-    '\$debugArtifact,\s*\$releaseArtifact,\s*' +
-    '\$metadataArtifact,\s*\$checksumsArtifact\s*' +
+    '\$debugArtifact,\s*\$releaseArtifact,\s*\$discoveryArtifact,\s*' +
+    '\$metadataArtifact,\s*\$discoveryMetadataArtifact,\s*' +
+    '\$checksumsArtifact\s*' +
     '\)\)\s*\{\s*Remove-Item\s+-LiteralPath\s+\$path'
 )
 $buildEnvironmentInitialization = $text.LastIndexOf('Initialize-JavaAndGradle')
@@ -82,8 +101,17 @@ if (
 ) {
     throw 'Verified release sidecars must be staged before publication.'
 }
+if (
+    $verifyText -notmatch (
+        '(?s)catch\s*\{\s*Remove-Item\s+-LiteralPath\s+' +
+        '\$metadataPath,\s*\$discoveryMetadataPath,\s*\$checksumsPath.*?' +
+        '\bthrow\b'
+    )
+) {
+    throw 'Failed sidecar publication must remove every partial final sidecar.'
+}
 $verifySidecarRemoval = $verifyText.IndexOf(
-    'Remove-Item -LiteralPath $metadataPath, $checksumsPath'
+    'Remove-Item -LiteralPath $metadataPath, $discoveryMetadataPath, $checksumsPath'
 )
 $verifyFirstValidation = $verifyText.IndexOf('if ($apks.Count -eq 0)')
 if (
@@ -98,6 +126,17 @@ if (
     '@\(Compare-Object\s+\$approvedPermissions\s+\$permissions\)\.Count'
 ) {
     throw 'Release permission verification must handle an empty comparison under StrictMode.'
+}
+foreach ($required in @(
+    'bookbox-discovery.exe',
+    'DISCOVERY_METADATA.json',
+    '0x5A4D',
+    '0x00004550',
+    '0x8664'
+)) {
+    if ($verifyText -notmatch [regex]::Escape($required)) {
+        throw "Release verification does not validate the discovery executable: $required"
+    }
 }
 
 & (Join-Path $PSScriptRoot '..\..\e2e\tests\process-runner.runtime.tests.ps1')

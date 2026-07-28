@@ -1,6 +1,14 @@
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-$runtimeRoots = @('android', 'server', 'deploy', 'e2e', 'README.md', 'RELEASE_NOTES.md')
+$runtimeRoots = @(
+    'android',
+    'server',
+    'deploy',
+    'e2e',
+    'testdata',
+    'README.md',
+    'RELEASE_NOTES.md'
+)
 Push-Location $repo
 try {
     $allMatches = @(

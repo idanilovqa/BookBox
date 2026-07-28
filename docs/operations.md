@@ -101,4 +101,8 @@ Preserve the Windows source library. An update must not replace the source path 
 
 ## Release artifacts
 
-`deploy\scripts\build-release.ps1` writes APKs under `artifacts\` with names such as `BookBox-v1.0.0-debug.apk`. `verify-release.ps1` checks the `com.rendref.bookbox` application ID, API 36 SDK levels, permissions, signature, and release debuggable state. Compare each APK digest with `artifacts\SHA256SUMS.txt` before sideloading.
+`deploy\scripts\build-release.ps1` writes APKs and
+`bookbox-discovery.exe` under `artifacts\`. `verify-release.ps1` checks the
+`com.rendref.bookbox` application ID, API 36 SDK levels, permissions, signatures,
+release debuggable state, and the discovery executable's Windows AMD64 PE identity.
+Compare every artifact digest with `artifacts\SHA256SUMS.txt` before installing it.

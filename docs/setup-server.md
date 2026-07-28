@@ -5,7 +5,6 @@ BookBox exposes configured audiobook files through an authenticated HTTP API. Do
 ## Prerequisites
 
 - Windows 11 with Docker Desktop using Linux containers
-- Go for building the Windows discovery executable
 - PowerShell 5.1 or newer
 - A trusted private home network
 - `H:\Audiobooks`, or another source folder
@@ -58,13 +57,10 @@ Compose should resolve the project as `bookbox-prod`, publish only the API port,
 
 ## Install the discovery process
 
-Build the executable:
+Build the verified APK and Windows discovery artifacts:
 
 ```powershell
-New-Item -ItemType Directory -Force artifacts | Out-Null
-Push-Location server
-go build -o ..\artifacts\bookbox-discovery.exe .\cmd\bookbox-discovery
-Pop-Location
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\build-release.ps1
 ```
 
 Open an elevated PowerShell window. Supply the selected address and port:
