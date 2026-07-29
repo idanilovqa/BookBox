@@ -26,6 +26,7 @@ import com.rendref.bookbox.core.model.BookCardDto
 import com.rendref.bookbox.core.model.BookDetailDto
 import com.rendref.bookbox.core.model.BookFilesDto
 import com.rendref.bookbox.core.model.BrowseDto
+import com.rendref.bookbox.core.model.FolderSearchDto
 import com.rendref.bookbox.core.model.GroupingContextDto
 import com.rendref.bookbox.core.model.MatchSearchDto
 import com.rendref.bookbox.core.model.RootDto
@@ -245,6 +246,9 @@ private fun fakeRuntime(
             override fun list(rootId: String, path: String) = flowOf(
                 BrowseDto(rootId, path, emptyList()),
             )
+
+            override fun searchFolders(rootId: String, query: String) =
+                flowOf(FolderSearchDto(rootId, query, emptyList()))
 
             override fun bookFiles(bookId: String) = flowOf(TEST_FILES.copy(bookId = bookId))
         },

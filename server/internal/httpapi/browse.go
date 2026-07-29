@@ -62,6 +62,30 @@ func browseHandler(browser *library.Browser) http.Handler {
 	})
 }
 
+func folderSearchHandler(browser *library.Browser) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if browser == nil {
+			writeError(w, errors.New("browser is not configured"))
+			return
+		}
+		query, err := url.ParseQuery(request.URL.RawQuery)
+		if err != nil {
+			writeError(w, library.ErrPathEscape)
+			return
+		}
+		result, err := browser.Search(
+			request.Context(),
+			query.Get("root"),
+			query.Get("q"),
+		)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
+}
+
 func writeError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	detail := errorDetail{Code: "internal_error", Message: "internal server error"}

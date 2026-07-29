@@ -1,6 +1,9 @@
 package com.rendref.bookbox.feature.folders
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -8,6 +11,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import com.rendref.bookbox.core.model.BrowseEntryDto
 import com.rendref.bookbox.core.model.RootDto
 import org.junit.Assert.assertEquals
@@ -81,6 +85,77 @@ class FoldersScreenTest {
             ),
             actions,
         )
+    }
+
+    @Test
+    fun folderSearchRoutesTypingAndOpensPathResult() {
+        val actions = mutableListOf<FolderAction>()
+        composeRule.setContent {
+            MaterialTheme {
+                FoldersScreen(
+                    state = folderState.copy(
+                        searchQuery = "black box",
+                        searchResults = listOf(
+                            BrowseEntryDto(
+                                name = "Black.Box",
+                                relativePath = "Author/Black.Box",
+                                kind = "folder",
+                                modifiedAt = "2026-07-29T00:00:00Z",
+                            ),
+                        ),
+                    ),
+                    onAction = actions::add,
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Search raw folders")
+            .performTextInput("!")
+        composeRule.onNodeWithText("Author/Black.Box")
+            .assertIsDisplayed()
+            .performClick()
+
+        assertEquals(
+            listOf(
+                FolderAction.UpdateSearchQuery("black box!"),
+                FolderAction.OpenSearchResult("Author/Black.Box"),
+            ),
+            actions,
+        )
+    }
+
+    @Test
+    fun folderSearchShowsProgressEmptyAndErrorStates() {
+        var state by mutableStateOf(
+            folderState.copy(
+                searchQuery = "\uD801\uDC00",
+                isSearching = true,
+            ),
+        )
+        composeRule.setContent {
+            MaterialTheme {
+                FoldersScreen(
+                    state = state,
+                    onAction = {},
+                )
+            }
+        }
+        composeRule.onNodeWithContentDescription("Searching folders")
+            .assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            state = folderState.copy(searchQuery = "missing")
+        }
+        composeRule.onNodeWithText("No matching folders.").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            state = folderState.copy(
+                searchQuery = "missing",
+                searchErrorMessage = "Unable to search library folders",
+            )
+        }
+        composeRule.onNodeWithText("Unable to search library folders")
+            .assertIsDisplayed()
     }
 }
 

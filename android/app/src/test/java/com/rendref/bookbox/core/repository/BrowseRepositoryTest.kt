@@ -5,6 +5,7 @@ import com.rendref.bookbox.core.model.BookFileDto
 import com.rendref.bookbox.core.model.BookFilesDto
 import com.rendref.bookbox.core.model.BrowseDto
 import com.rendref.bookbox.core.model.BrowseEntryDto
+import com.rendref.bookbox.core.model.FolderSearchDto
 import com.rendref.bookbox.core.model.RootDto
 import com.rendref.bookbox.core.model.RootsDto
 import com.rendref.bookbox.core.network.AuthenticatedCall
@@ -14,13 +15,20 @@ import com.rendref.bookbox.core.network.SessionTokens
 import com.rendref.bookbox.core.network.TokenSession
 import com.rendref.bookbox.core.storage.SavedConnection
 import java.io.IOException
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BrowseRepositoryTest {
@@ -41,6 +49,107 @@ class BrowseRepositoryTest {
                 "/v1/browse?root=audiobooks&path=Author%20One%2FBook%20%231",
                 server.takeRequest().target,
             )
+        }
+    }
+
+    @Test
+    fun `folder search encodes query and returns validated folder paths`() = runTest {
+        withRepository { server, repository ->
+            val result = FolderSearchDto(
+                rootId = "audiobooks",
+                query = "black box",
+                entries = listOf(
+                    BrowseEntryDto(
+                        name = "Black.Box",
+                        relativePath = "Author/Black.Box",
+                        kind = "folder",
+                        modifiedAt = "2026-07-29T00:00:00Z",
+                    ),
+                ),
+            )
+            server.enqueue(MockResponse(body = ApiJson.encodeToString(result)))
+
+            val actual = repository.searchFolders("audiobooks", "black box").first()
+
+            assertEquals(
+                "/v1/browse/search?root=audiobooks&q=black%20box",
+                server.takeRequest().target,
+            )
+            assertEquals("Author/Black.Box", actual.entries.single().relativePath)
+        }
+    }
+
+    @Test
+    fun `folder search rejects mismatched files duplicate paths and oversized results`() =
+        runTest {
+            withRepository { server, repository ->
+                val folder = BrowseEntryDto(
+                    name = "Book",
+                    relativePath = "Author/Book",
+                    kind = "folder",
+                    modifiedAt = "2026-07-29T00:00:00Z",
+                )
+                val invalid = listOf(
+                    FolderSearchDto("other", "book", listOf(folder)),
+                    FolderSearchDto("audiobooks", "other", listOf(folder)),
+                    FolderSearchDto(
+                        "audiobooks",
+                        "book",
+                        listOf(folder.copy(kind = "file", size = 1)),
+                    ),
+                    FolderSearchDto(
+                        "audiobooks",
+                        "book",
+                        listOf(folder.copy(relativePath = "../Book")),
+                    ),
+                    FolderSearchDto("audiobooks", "book", listOf(folder, folder)),
+                    FolderSearchDto(
+                        "audiobooks",
+                        "book",
+                        List(101) { index ->
+                            folder.copy(
+                                name = "Book $index",
+                                relativePath = "Author/Book $index",
+                            )
+                        },
+                    ),
+                )
+                invalid.forEach { response ->
+                    server.enqueue(MockResponse(body = ApiJson.encodeToString(response)))
+                    assertThrows(IOException::class.java) {
+                        kotlinx.coroutines.runBlocking {
+                            repository.searchFolders("audiobooks", "book").first()
+                        }
+                    }
+                }
+            }
+        }
+
+    @Test
+    fun `cancelling folder search cancels the in-flight HTTP call`() = runTest {
+        withRepository { server, repository ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .body(
+                        ApiJson.encodeToString(
+                            FolderSearchDto("audiobooks", "book", emptyList()),
+                        ),
+                    )
+                    .bodyDelay(10, TimeUnit.SECONDS)
+                    .build(),
+            )
+            val search = backgroundScope.launch(Dispatchers.IO) {
+                repository.searchFolders("audiobooks", "book").first()
+            }
+            server.takeRequest()
+
+            withContext(Dispatchers.Default.limitedParallelism(1)) {
+                withTimeout(2_000) {
+                    search.cancelAndJoin()
+                }
+            }
+
+            assertTrue(search.isCancelled)
         }
     }
 

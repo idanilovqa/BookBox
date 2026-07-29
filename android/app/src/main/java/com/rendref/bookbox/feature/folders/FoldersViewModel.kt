@@ -8,6 +8,8 @@ import com.rendref.bookbox.core.repository.BrowseSource
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +31,10 @@ data class FoldersState(
     val highlightedFileIds: Set<String> = emptySet(),
     val assignedRelativePaths: Set<String> = emptySet(),
     val originBookId: String? = null,
+    val searchQuery: String = "",
+    val searchResults: List<BrowseEntryDto> = emptyList(),
+    val isSearching: Boolean = false,
+    val searchErrorMessage: String? = null,
     val isLoading: Boolean = false,
     val isRefreshing: Boolean = false,
     val errorMessage: String? = null,
@@ -40,6 +46,7 @@ class FoldersViewModel(
     private val mutableState = MutableStateFlow(FoldersState(isLoading = true))
     val state: StateFlow<FoldersState> = mutableState.asStateFlow()
     private var navigationGeneration = 0L
+    private var searchJob: Job? = null
     private val rootsReady = CompletableDeferred<List<RootDto>>()
 
     init {
@@ -72,6 +79,7 @@ class FoldersViewModel(
 
     fun selectRoot(rootId: String) {
         if (mutableState.value.roots.none { it.id == rootId }) return
+        cancelSearch()
         mutableState.value = mutableState.value.copy(
             selectedRootId = rootId,
             path = "",
@@ -80,6 +88,10 @@ class FoldersViewModel(
             highlightedFileIds = emptySet(),
             assignedRelativePaths = emptySet(),
             originBookId = null,
+            searchQuery = "",
+            searchResults = emptyList(),
+            isSearching = false,
+            searchErrorMessage = null,
         )
         loadDirectory(rootId, "", refreshing = false)
     }
@@ -101,10 +113,15 @@ class FoldersViewModel(
     fun openBreadcrumb(path: String) {
         val rootId = mutableState.value.selectedRootId ?: return
         if (mutableState.value.breadcrumbs.none { it.path == path }) return
+        clearSearchState()
         loadDirectory(rootId, path, refreshing = false)
     }
 
     fun navigateBack(): Boolean {
+        if (hasSearchCharacters(mutableState.value.searchQuery)) {
+            clearSearchState()
+            return true
+        }
         val current = mutableState.value.path
         if (current.isEmpty()) return false
         val rootId = mutableState.value.selectedRootId ?: return false
@@ -131,7 +148,63 @@ class FoldersViewModel(
         loadDirectory(rootId, mutableState.value.path, refreshing = true)
     }
 
+    fun updateSearchQuery(query: String) {
+        cancelSearch()
+        val rootId = mutableState.value.selectedRootId
+        val active = hasSearchCharacters(query) && rootId != null
+        mutableState.value = mutableState.value.copy(
+            searchQuery = query,
+            searchResults = emptyList(),
+            isSearching = active,
+            searchErrorMessage = null,
+        )
+        if (!active) return
+
+        searchJob = viewModelScope.launch {
+            delay(SEARCH_DEBOUNCE_MILLIS)
+            try {
+                val result = browse.searchFolders(rootId, query).first()
+                val current = mutableState.value
+                if (current.selectedRootId != rootId || current.searchQuery != query) {
+                    return@launch
+                }
+                mutableState.value = current.copy(
+                    searchResults = result.entries,
+                    isSearching = false,
+                    searchErrorMessage = null,
+                )
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                val current = mutableState.value
+                if (current.selectedRootId != rootId || current.searchQuery != query) {
+                    return@launch
+                }
+                mutableState.value = current.copy(
+                    searchResults = emptyList(),
+                    isSearching = false,
+                    searchErrorMessage = "Unable to search library folders",
+                )
+            }
+        }
+    }
+
+    fun openSearchResult(relativePath: String) {
+        val current = mutableState.value
+        val rootId = current.selectedRootId ?: return
+        if (
+            current.searchResults.none {
+                it.kind == "folder" && it.relativePath == relativePath
+            }
+        ) {
+            return
+        }
+        clearSearchState()
+        loadDirectory(rootId, relativePath, refreshing = false)
+    }
+
     fun viewRawFiles(bookId: String) {
+        clearSearchState()
         val generation = ++navigationGeneration
         mutableState.value = mutableState.value.copy(
             isLoading = true,
@@ -217,6 +290,21 @@ class FoldersViewModel(
             ?: RootDto(rootId, rootId)
         return breadcrumbs(root, path)
     }
+
+    private fun clearSearchState() {
+        cancelSearch()
+        mutableState.value = mutableState.value.copy(
+            searchQuery = "",
+            searchResults = emptyList(),
+            isSearching = false,
+            searchErrorMessage = null,
+        )
+    }
+
+    private fun cancelSearch() {
+        searchJob?.cancel()
+        searchJob = null
+    }
 }
 
 private fun breadcrumbs(root: RootDto, path: String): List<Breadcrumb> {
@@ -241,3 +329,5 @@ private fun sortEntries(entries: List<BrowseEntryDto>): List<BrowseEntryDto> =
         .map(IndexedValue<BrowseEntryDto>::value)
 
 private fun parentPath(path: String): String = path.substringBeforeLast('/', "")
+
+private const val SEARCH_DEBOUNCE_MILLIS = 300L

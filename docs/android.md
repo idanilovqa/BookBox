@@ -32,6 +32,8 @@ BookBox stores access to that document tree. It does not request broad storage p
 
 **Audiobooks** shows catalog cards with available covers and metadata. **Raw folders** shows the configured Windows roots, folders, and files. Both views use the server's read-only API.
 
+Use **Search raw folders** to find nested folders by their full path. Search ignores case, spaces, punctuation, and other symbols, so `black box` also matches names such as `Black.Box` and `blackbox`.
+
 To copy:
 
 1. Select audiobook cards or folders.

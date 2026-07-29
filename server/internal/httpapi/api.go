@@ -99,6 +99,11 @@ func routes(deps Dependencies) []route {
 		},
 		{
 			method:  "GET",
+			path:    "/v1/browse/search",
+			handler: folderSearchHandler(deps.Browser),
+		},
+		{
+			method:  "GET",
 			path:    "/v1/books",
 			handler: booksHandler(deps.Catalog),
 		},

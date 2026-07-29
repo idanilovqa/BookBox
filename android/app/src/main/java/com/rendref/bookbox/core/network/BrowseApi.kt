@@ -4,18 +4,22 @@ import com.rendref.bookbox.core.model.ApiJson
 import com.rendref.bookbox.core.model.BookFilesDto
 import com.rendref.bookbox.core.model.BrowseDto
 import com.rendref.bookbox.core.model.BrowseEntryDto
+import com.rendref.bookbox.core.model.FolderSearchDto
 import com.rendref.bookbox.core.model.RootDto
 import com.rendref.bookbox.core.model.RootsDto
 import java.io.IOException
 import java.time.Instant
 import java.time.format.DateTimeParseException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
 import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl
 import okhttp3.Request
+import okhttp3.Response
 
 class BrowseApi(
     private val calls: Call.Factory,
@@ -62,6 +66,30 @@ class BrowseApi(
         }
     }
 
+    suspend fun searchFolders(rootId: String, query: String): FolderSearchDto {
+        require(validRootId(rootId)) { "Invalid root identifier" }
+        require(query.isNotBlank()) {
+            "Invalid folder search query"
+        }
+        val url = baseUrl.newBuilder()
+            .addPathSegments("v1/browse/search")
+            .addQueryParameter("root", rootId)
+            .addQueryParameter("q", query)
+            .build()
+        return execute<FolderSearchDto>(url).also { result ->
+            if (
+                result.rootId != rootId ||
+                result.query != query ||
+                result.entries.size > MAX_FOLDER_SEARCH_RESULTS ||
+                result.entries.distinctBy(BrowseEntryDto::relativePath).size !=
+                result.entries.size ||
+                result.entries.any { !validSearchFolder(it) }
+            ) {
+                throw IOException("Server returned invalid folder search results")
+            }
+        }
+    }
+
     suspend fun bookFiles(bookId: String): BookFilesDto {
         require(bookId.isNotBlank() && bookId.length <= MAX_IDENTIFIER_LENGTH)
         val url = baseUrl.newBuilder()
@@ -90,27 +118,56 @@ class BrowseApi(
         }
     }
 
-    private suspend inline fun <reified T> execute(url: HttpUrl): T =
-        withContext(Dispatchers.IO) {
-            val response = calls.newCall(Request.Builder().url(url).get().build()).execute()
-            response.use {
-                if (!it.isSuccessful) {
-                    throw IOException("Browse request failed with HTTP ${it.code}")
-                }
-                val source = it.body.source()
-                if (source.request(MAX_BROWSE_RESPONSE_BYTES + 1L)) {
-                    throw IOException("Browse response is too large")
-                }
-                try {
-                    ApiJson.decodeFromString<T>(
-                        source.readByteArray().toString(Charsets.UTF_8),
-                    )
-                } catch (_: SerializationException) {
-                    throw IOException("Browse response is invalid")
-                } catch (_: IllegalArgumentException) {
-                    throw IOException("Browse response is invalid")
-                }
+    private suspend inline fun <reified T> execute(url: HttpUrl): T {
+        val payload = executePayload(url)
+        return try {
+            ApiJson.decodeFromString<T>(payload.toString(Charsets.UTF_8))
+        } catch (_: SerializationException) {
+            throw IOException("Browse response is invalid")
+        } catch (_: IllegalArgumentException) {
+            throw IOException("Browse response is invalid")
+        }
+    }
+
+    private suspend fun executePayload(url: HttpUrl): ByteArray =
+        suspendCancellableCoroutine { continuation ->
+            val call = calls.newCall(Request.Builder().url(url).get().build())
+            continuation.invokeOnCancellation {
+                call.cancel()
             }
+            call.enqueue(
+                object : Callback {
+                    override fun onFailure(call: Call, e: IOException) {
+                        if (continuation.isActive) {
+                            continuation.resumeWithException(e)
+                        }
+                    }
+
+                    override fun onResponse(call: Call, response: Response) {
+                        try {
+                            response.use {
+                                if (!it.isSuccessful) {
+                                    throw IOException(
+                                        "Browse request failed with HTTP ${it.code}",
+                                    )
+                                }
+                                val source = it.body.source()
+                                if (source.request(MAX_BROWSE_RESPONSE_BYTES + 1L)) {
+                                    throw IOException("Browse response is too large")
+                                }
+                                val payload = source.readByteArray()
+                                if (continuation.isActive) {
+                                    continuation.resume(payload)
+                                }
+                            }
+                        } catch (failure: Exception) {
+                            if (continuation.isActive) {
+                                continuation.resumeWithException(failure)
+                            }
+                        }
+                    }
+                },
+            )
         }
 }
 
@@ -121,6 +178,14 @@ private fun validEntry(parent: String, entry: BrowseEntryDto): Boolean =
         validRelativePath(entry.relativePath, allowEmpty = false) &&
         entry.relativePath == childPath(parent, entry.name) &&
         (entry.size == null || entry.size >= 0)
+
+private fun validSearchFolder(entry: BrowseEntryDto): Boolean =
+    entry.kind == "folder" &&
+        entry.size == null &&
+        validDisplayName(entry.name) &&
+        validInstant(entry.modifiedAt) &&
+        validRelativePath(entry.relativePath, allowEmpty = false) &&
+        entry.relativePath.substringAfterLast('/') == entry.name
 
 private fun childPath(parent: String, name: String): String =
     if (parent.isEmpty()) name else "$parent/$name"
@@ -176,3 +241,4 @@ private const val MAX_NAME_LENGTH = 255
 private const val MAX_RELATIVE_PATH_LENGTH = 4096
 private const val MAX_INSTANT_LENGTH = 64
 private const val MAX_BROWSE_RESPONSE_BYTES = 2 * 1024 * 1024
+private const val MAX_FOLDER_SEARCH_RESULTS = 100

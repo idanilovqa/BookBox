@@ -112,6 +112,98 @@ func TestBrowseDecodesQueryPathExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestFolderSearchReturnsNormalizedPathMatches(t *testing.T) {
+	root := t.TempDir()
+	for _, relative := range []string{
+		"Author/Black.Box/chapter.mp3",
+		"Blacksmith/chapter.mp3",
+	} {
+		absolute := filepath.Join(root, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(absolute), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(absolute, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api := newBrowseAPI(t, []config.Root{
+		{ID: "audiobooks", Name: "Audiobooks", ContainerPath: root},
+	})
+
+	response := serveRequest(
+		api,
+		"/v1/browse/search?root=audiobooks&q=black%20box",
+	)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var result library.SearchResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.RootID != "audiobooks" ||
+		result.Query != "black box" ||
+		len(result.Entries) != 1 ||
+		result.Entries[0].RelativePath != "Author/Black.Box" {
+		t.Fatalf("search result = %#v", result)
+	}
+	if bytes.Contains(response.Body.Bytes(), []byte(root)) {
+		t.Fatalf("response leaked absolute root %q: %s", root, response.Body.String())
+	}
+}
+
+func TestFolderSearchMapsUnknownRootToSafeError(t *testing.T) {
+	api := newBrowseAPI(t, []config.Root{{
+		ID:            "audiobooks",
+		Name:          "Audiobooks",
+		ContainerPath: t.TempDir(),
+	}})
+
+	response := serveRequest(api, "/v1/browse/search?root=missing&q=book")
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"code":"root_not_found"`) {
+		t.Fatalf("body = %s", response.Body.String())
+	}
+}
+
+func TestFolderSearchMapsMalformedQueryAndFilesystemFailure(t *testing.T) {
+	root := t.TempDir()
+	api := newBrowseAPI(t, []config.Root{{
+		ID:            "audiobooks",
+		Name:          "Audiobooks",
+		ContainerPath: root,
+	}})
+
+	malformed := serveRequest(
+		api,
+		"/v1/browse/search?root=audiobooks&q=%zz",
+	)
+	if malformed.Code != http.StatusBadRequest ||
+		!strings.Contains(malformed.Body.String(), `"code":"invalid_path"`) {
+		t.Fatalf(
+			"malformed response = %d %s",
+			malformed.Code,
+			malformed.Body.String(),
+		)
+	}
+
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	missing := serveRequest(
+		api,
+		"/v1/browse/search?root=audiobooks&q=book",
+	)
+	if missing.Code != http.StatusNotFound ||
+		!strings.Contains(missing.Body.String(), `"code":"path_not_found"`) {
+		t.Fatalf("missing response = %d %s", missing.Code, missing.Body.String())
+	}
+}
+
 func TestBrowseMapsExpectedFailuresToSafeJSONErrors(t *testing.T) {
 	root := t.TempDir()
 	filePath := filepath.Join(root, "chapter.mp3")

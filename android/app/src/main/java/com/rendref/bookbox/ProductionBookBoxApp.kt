@@ -391,6 +391,10 @@ internal fun ConnectedApp(
                         is FolderAction.OpenFolder -> folders.openFolder(action.relativePath)
                         is FolderAction.ToggleFolder ->
                             folders.toggleFolderSelection(action.relativePath)
+                        is FolderAction.UpdateSearchQuery ->
+                            folders.updateSearchQuery(action.query)
+                        is FolderAction.OpenSearchResult ->
+                            folders.openSearchResult(action.relativePath)
                         FolderAction.NavigateBack -> folders.navigateBack()
                         FolderAction.Refresh -> folders.refresh()
                         is FolderAction.ReturnToBook -> {

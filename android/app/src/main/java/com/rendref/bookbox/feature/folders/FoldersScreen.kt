@@ -19,6 +19,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,6 +52,10 @@ sealed interface FolderAction {
 
     data class ToggleFolder(val relativePath: String) : FolderAction
 
+    data class UpdateSearchQuery(val query: String) : FolderAction
+
+    data class OpenSearchResult(val relativePath: String) : FolderAction
+
     data object NavigateBack : FolderAction
 
     data object Refresh : FolderAction
@@ -66,7 +71,8 @@ fun FoldersScreen(
     modifier: Modifier = Modifier,
 ) {
     var rootsExpanded by remember { mutableStateOf(false) }
-    BackHandler(enabled = state.path.isNotEmpty()) {
+    val searchActive = hasSearchCharacters(state.searchQuery)
+    BackHandler(enabled = searchActive || state.path.isNotEmpty()) {
         onAction(FolderAction.NavigateBack)
     }
 
@@ -145,6 +151,19 @@ fun FoldersScreen(
             }
         }
 
+        OutlinedTextField(
+            value = state.searchQuery,
+            onValueChange = { onAction(FolderAction.UpdateSearchQuery(it)) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp)
+                .semantics {
+                    contentDescription = "Search raw folders"
+                },
+            label = { Text("Search raw folders") },
+            singleLine = true,
+        )
+
         Breadcrumbs(
             breadcrumbs = state.breadcrumbs,
             onOpen = { onAction(FolderAction.OpenBreadcrumb(it)) },
@@ -157,50 +176,155 @@ fun FoldersScreen(
             )
         }
 
-        PullToRefreshBox(
-            isRefreshing = state.isRefreshing,
-            onRefresh = { onAction(FolderAction.Refresh) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-        ) {
-            when {
-                state.isLoading && state.entries.isEmpty() -> {
-                    CircularProgressIndicator(
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(32.dp),
-                    )
-                }
+        if (searchActive) {
+            FolderSearchResults(
+                state = state,
+                onAction = onAction,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            )
+        } else {
+            PullToRefreshBox(
+                isRefreshing = state.isRefreshing,
+                onRefresh = { onAction(FolderAction.Refresh) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) {
+                when {
+                    state.isLoading && state.entries.isEmpty() -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(32.dp),
+                        )
+                    }
 
-                state.entries.isEmpty() -> {
-                    Text(
-                        text = "This folder is empty.",
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(32.dp),
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
-                    )
-                }
+                    state.entries.isEmpty() -> {
+                        Text(
+                            text = "This folder is empty.",
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(32.dp),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
+                        )
+                    }
 
-                else -> {
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        items(
-                            items = state.entries,
-                            key = BrowseEntryDto::relativePath,
-                        ) { entry ->
-                            FolderEntryRow(
-                                entry = entry,
-                                selected = entry.relativePath in state.selectedFolderPaths,
-                                assigned = entry.relativePath in state.assignedRelativePaths,
-                                onAction = onAction,
-                            )
+                    else -> {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            items(
+                                items = state.entries,
+                                key = BrowseEntryDto::relativePath,
+                            ) { entry ->
+                                FolderEntryRow(
+                                    entry = entry,
+                                    selected = entry.relativePath in state.selectedFolderPaths,
+                                    assigned = entry.relativePath in state.assignedRelativePaths,
+                                    onAction = onAction,
+                                )
+                            }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun FolderSearchResults(
+    state: FoldersState,
+    onAction: (FolderAction) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        when {
+            state.isSearching -> {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .padding(24.dp)
+                        .semantics {
+                            contentDescription = "Searching folders"
+                        },
+                )
+            }
+
+            state.searchErrorMessage != null -> {
+                Text(
+                    text = state.searchErrorMessage,
+                    modifier = Modifier.padding(24.dp),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
+            state.searchResults.isEmpty() -> {
+                Text(
+                    text = "No matching folders.",
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .padding(24.dp),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
+                )
+            }
+
+            else -> {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(
+                        items = state.searchResults,
+                        key = BrowseEntryDto::relativePath,
+                    ) { entry ->
+                        FolderSearchResultRow(
+                            entry = entry,
+                            onOpen = {
+                                onAction(
+                                    FolderAction.OpenSearchResult(entry.relativePath),
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderSearchResultRow(
+    entry: BrowseEntryDto,
+    onOpen: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen),
+        shape = RoundedCornerShape(14.dp),
+        tonalElevation = 1.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(
+                text = entry.name,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                text = entry.relativePath,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
