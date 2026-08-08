@@ -3,13 +3,19 @@ package com.rendref.bookbox.feature.folders
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rendref.bookbox.core.model.BrowseEntryDto
+import com.rendref.bookbox.core.model.RawSearchEntryDto
+import com.rendref.bookbox.core.model.RawSearchPageDto
 import com.rendref.bookbox.core.model.RootDto
+import com.rendref.bookbox.core.model.SearchSnapshotDto
+import com.rendref.bookbox.core.network.SearchIndexBuilding
 import com.rendref.bookbox.core.repository.BrowseSource
+import com.rendref.bookbox.core.search.SearchUpdate
+import com.rendref.bookbox.core.search.debouncedSearchUpdates
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,8 +38,13 @@ data class FoldersState(
     val assignedRelativePaths: Set<String> = emptySet(),
     val originBookId: String? = null,
     val searchQuery: String = "",
-    val searchResults: List<BrowseEntryDto> = emptyList(),
+    val searchResults: List<RawSearchEntryDto> = emptyList(),
+    val searchSnapshot: SearchSnapshotDto? = null,
+    val searchNextCursor: String? = null,
+    val isSearchIndexBuilding: Boolean = false,
+    val searchHighlightedRelativePath: String? = null,
     val isSearching: Boolean = false,
+    val isSearchLoadingMore: Boolean = false,
     val searchErrorMessage: String? = null,
     val isLoading: Boolean = false,
     val isRefreshing: Boolean = false,
@@ -46,10 +57,21 @@ class FoldersViewModel(
     private val mutableState = MutableStateFlow(FoldersState(isLoading = true))
     val state: StateFlow<FoldersState> = mutableState.asStateFlow()
     private var navigationGeneration = 0L
-    private var searchJob: Job? = null
+    private val searchRequests = MutableStateFlow(RawSearchRequest(null, ""))
+    private var searchPaginationJob: Job? = null
     private val rootsReady = CompletableDeferred<List<RootDto>>()
 
     init {
+        viewModelScope.launch {
+            searchRequests.debouncedSearchUpdates(
+                debounceMillis = SEARCH_DEBOUNCE_MILLIS,
+                allowBlank = false,
+                text = RawSearchRequest::text,
+                eligible = { it.rootId != null && hasAtLeastTwoSearchCharacters(it.text) },
+                isIndexBuilding = { it is SearchIndexBuilding },
+                load = { browse.searchRaw(checkNotNull(it.rootId), it.text).first() },
+            ).collect(::acceptSearchUpdate)
+        }
         viewModelScope.launch {
             try {
                 val roots = browse.roots().first()
@@ -90,7 +112,12 @@ class FoldersViewModel(
             originBookId = null,
             searchQuery = "",
             searchResults = emptyList(),
+            searchSnapshot = null,
+            searchNextCursor = null,
             isSearching = false,
+            isSearchLoadingMore = false,
+            isSearchIndexBuilding = false,
+            searchHighlightedRelativePath = null,
             searchErrorMessage = null,
         )
         loadDirectory(rootId, "", refreshing = false)
@@ -149,58 +176,86 @@ class FoldersViewModel(
     }
 
     fun updateSearchQuery(query: String) {
-        cancelSearch()
         val rootId = mutableState.value.selectedRootId
-        val active = hasSearchCharacters(query) && rootId != null
+        val active = hasAtLeastTwoSearchCharacters(query) && rootId != null
+        cancelSearchPagination()
         mutableState.value = mutableState.value.copy(
             searchQuery = query,
-            searchResults = emptyList(),
             isSearching = active,
+            isSearchLoadingMore = false,
+            searchNextCursor = null,
+            isSearchIndexBuilding = false,
             searchErrorMessage = null,
         )
-        if (!active) return
-
-        searchJob = viewModelScope.launch {
-            delay(SEARCH_DEBOUNCE_MILLIS)
-            try {
-                val result = browse.searchFolders(rootId, query).first()
-                val current = mutableState.value
-                if (current.selectedRootId != rootId || current.searchQuery != query) {
-                    return@launch
-                }
-                mutableState.value = current.copy(
-                    searchResults = result.entries,
-                    isSearching = false,
-                    searchErrorMessage = null,
-                )
-            } catch (failure: CancellationException) {
-                throw failure
-            } catch (_: Exception) {
-                val current = mutableState.value
-                if (current.selectedRootId != rootId || current.searchQuery != query) {
-                    return@launch
-                }
-                mutableState.value = current.copy(
-                    searchResults = emptyList(),
-                    isSearching = false,
-                    searchErrorMessage = "Unable to search library folders",
-                )
-            }
+        if (!active) {
+            mutableState.value = mutableState.value.copy(
+                searchResults = emptyList(),
+                searchSnapshot = null,
+                searchHighlightedRelativePath = null,
+            )
         }
+        searchRequests.value = RawSearchRequest(rootId, query)
     }
 
     fun openSearchResult(relativePath: String) {
         val current = mutableState.value
         val rootId = current.selectedRootId ?: return
-        if (
-            current.searchResults.none {
-                it.kind == "folder" && it.relativePath == relativePath
-            }
-        ) {
-            return
-        }
+        val result = current.searchResults.firstOrNull { it.relativePath == relativePath } ?: return
         clearSearchState()
-        loadDirectory(rootId, relativePath, refreshing = false)
+        val targetPath = if (result.kind == "file") parentPath(relativePath) else relativePath
+        loadDirectory(
+            rootId,
+            targetPath,
+            refreshing = false,
+            searchHighlight = relativePath.takeIf { result.kind == "file" },
+        )
+    }
+
+    fun loadNextSearchPage() {
+        val current = mutableState.value
+        val rootId = current.selectedRootId ?: return
+        val cursor = current.searchNextCursor ?: return
+        val snapshot = current.searchSnapshot ?: return
+        if (searchPaginationJob?.isActive == true || current.isSearching || current.isSearchLoadingMore) return
+        mutableState.value = current.copy(isSearchLoadingMore = true, searchErrorMessage = null)
+        lateinit var launchedJob: Job
+        launchedJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val page = browse.searchRaw(rootId, current.searchQuery, cursor).first()
+                val latest = mutableState.value
+                if (latest.selectedRootId != rootId || latest.searchQuery != current.searchQuery) return@launch
+                require(page.snapshot == snapshot) { "Search snapshot changed during pagination" }
+                val knownIDs = latest.searchResults.mapTo(mutableSetOf(), RawSearchEntryDto::id)
+                val knownPaths = latest.searchResults.mapTo(mutableSetOf(), RawSearchEntryDto::relativePath)
+                require(page.entries.all { knownIDs.add(it.id) && knownPaths.add(it.relativePath) }) {
+                    "Search page repeats an entry"
+                }
+                mutableState.value = latest.copy(
+                    searchResults = latest.searchResults + page.entries,
+                    searchNextCursor = page.nextCursor,
+                    isSearchLoadingMore = false,
+                    isSearchIndexBuilding = false,
+                    searchErrorMessage = null,
+                )
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: SearchIndexBuilding) {
+                mutableState.value = mutableState.value.copy(
+                    isSearchLoadingMore = false,
+                    isSearchIndexBuilding = true,
+                    searchErrorMessage = null,
+                )
+            } catch (_: Exception) {
+                mutableState.value = mutableState.value.copy(
+                    isSearchLoadingMore = false,
+                    searchErrorMessage = "Unable to load more search results",
+                )
+            } finally {
+                if (searchPaginationJob === launchedJob) searchPaginationJob = null
+            }
+        }
+        searchPaginationJob = launchedJob
+        launchedJob.start()
     }
 
     fun viewRawFiles(bookId: String) {
@@ -252,6 +307,7 @@ class FoldersViewModel(
         rootId: String,
         path: String,
         refreshing: Boolean,
+        searchHighlight: String? = null,
     ) {
         val generation = ++navigationGeneration
         mutableState.value = mutableState.value.copy(
@@ -271,6 +327,11 @@ class FoldersViewModel(
                     isLoading = false,
                     isRefreshing = false,
                     errorMessage = null,
+                    searchHighlightedRelativePath = searchHighlight?.takeIf { highlighted ->
+                        directory.entries.any {
+                            it.kind == "file" && it.relativePath == highlighted
+                        }
+                    },
                 )
             } catch (failure: CancellationException) {
                 throw failure
@@ -292,19 +353,81 @@ class FoldersViewModel(
     }
 
     private fun clearSearchState() {
-        cancelSearch()
+        cancelSearchPagination()
+        searchRequests.value = RawSearchRequest(mutableState.value.selectedRootId, "")
         mutableState.value = mutableState.value.copy(
             searchQuery = "",
             searchResults = emptyList(),
             isSearching = false,
+            isSearchLoadingMore = false,
+            searchSnapshot = null,
+            searchNextCursor = null,
+            isSearchIndexBuilding = false,
+            searchHighlightedRelativePath = null,
             searchErrorMessage = null,
         )
     }
 
     private fun cancelSearch() {
-        searchJob?.cancel()
-        searchJob = null
+        cancelSearchPagination()
+        searchRequests.value = RawSearchRequest(mutableState.value.selectedRootId, "")
     }
+
+    private fun cancelSearchPagination() {
+        searchPaginationJob?.cancel()
+        searchPaginationJob = null
+    }
+
+    private fun acceptSearchUpdate(update: SearchUpdate<RawSearchRequest, RawSearchPageDto>) {
+        when (update) {
+            is SearchUpdate.Loading -> mutableState.value = mutableState.value.copy(
+                isSearching = true,
+                isSearchLoadingMore = false,
+                isSearchIndexBuilding = false,
+                searchErrorMessage = null,
+            )
+            is SearchUpdate.Loaded -> mutableState.value = mutableState.value.copy(
+                searchResults = update.page.entries,
+                searchSnapshot = update.page.snapshot,
+                searchNextCursor = update.page.nextCursor,
+                isSearching = false,
+                isSearchLoadingMore = false,
+                isSearchIndexBuilding = false,
+                searchErrorMessage = null,
+            )
+            is SearchUpdate.IndexBuilding -> mutableState.value = mutableState.value.copy(
+                isSearching = false,
+                isSearchLoadingMore = false,
+                isSearchIndexBuilding = true,
+                searchErrorMessage = null,
+            )
+            is SearchUpdate.Failed -> mutableState.value = mutableState.value.copy(
+                isSearching = false,
+                isSearchLoadingMore = false,
+                isSearchIndexBuilding = false,
+                searchErrorMessage = "Unable to search library folders",
+            )
+            is SearchUpdate.Inactive -> mutableState.value = mutableState.value.copy(
+                isSearching = false,
+                isSearchLoadingMore = false,
+                isSearchIndexBuilding = false,
+                searchErrorMessage = null,
+            )
+        }
+    }
+}
+
+private data class RawSearchRequest(val rootId: String?, val text: String)
+
+private fun hasAtLeastTwoSearchCharacters(query: CharSequence): Boolean {
+    var count = 0
+    var index = 0
+    while (index < query.length) {
+        val codePoint = Character.codePointAt(query, index)
+        if (Character.isLetterOrDigit(codePoint) && ++count >= 2) return true
+        index += Character.charCount(codePoint)
+    }
+    return false
 }
 
 private fun breadcrumbs(root: RootDto, path: String): List<Breadcrumb> {
@@ -330,4 +453,4 @@ private fun sortEntries(entries: List<BrowseEntryDto>): List<BrowseEntryDto> =
 
 private fun parentPath(path: String): String = path.substringBeforeLast('/', "")
 
-private const val SEARCH_DEBOUNCE_MILLIS = 300L
+private const val SEARCH_DEBOUNCE_MILLIS = 150L

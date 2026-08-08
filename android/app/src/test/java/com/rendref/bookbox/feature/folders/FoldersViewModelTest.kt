@@ -5,7 +5,11 @@ import com.rendref.bookbox.core.model.BookFilesDto
 import com.rendref.bookbox.core.model.BrowseDto
 import com.rendref.bookbox.core.model.BrowseEntryDto
 import com.rendref.bookbox.core.model.FolderSearchDto
+import com.rendref.bookbox.core.model.RawSearchEntryDto
+import com.rendref.bookbox.core.model.RawSearchPageDto
 import com.rendref.bookbox.core.model.RootDto
+import com.rendref.bookbox.core.model.SearchSnapshotDto
+import com.rendref.bookbox.core.network.SearchIndexBuilding
 import com.rendref.bookbox.core.repository.BrowseSource
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
@@ -154,14 +158,14 @@ class FoldersViewModelTest {
         }
 
     @Test
-    fun `folder search waits 300ms and matches full paths`() =
+    fun `folder search waits 150ms and matches full paths`() =
         runTest(dispatcher) {
             val source = FakeBrowseSource()
             val viewModel = FoldersViewModel(source)
             advanceUntilIdle()
 
             viewModel.updateSearchQuery("black box")
-            advanceTimeBy(299)
+            advanceTimeBy(149)
             runCurrent()
             assertTrue(source.searches.isEmpty())
             assertTrue(viewModel.state.value.isSearching)
@@ -172,7 +176,7 @@ class FoldersViewModelTest {
             assertEquals(listOf("black box"), source.searches)
             assertEquals(
                 listOf("Author/Black.Box"),
-                viewModel.state.value.searchResults.map(BrowseEntryDto::relativePath),
+                viewModel.state.value.searchResults.map(RawSearchEntryDto::relativePath),
             )
             assertFalse(viewModel.state.value.isSearching)
         }
@@ -185,9 +189,9 @@ class FoldersViewModelTest {
             advanceUntilIdle()
 
             viewModel.updateSearchQuery("old")
-            advanceTimeBy(299)
+            advanceTimeBy(149)
             viewModel.updateSearchQuery("black box")
-            advanceTimeBy(300)
+            advanceTimeBy(150)
             advanceUntilIdle()
 
             assertEquals(listOf("black box"), source.searches)
@@ -200,12 +204,12 @@ class FoldersViewModelTest {
         }
 
     @Test
-    fun `supplementary Unicode letter activates folder search`() =
+    fun `two supplementary Unicode letters activate folder search`() =
         runTest(dispatcher) {
             val source = FakeBrowseSource()
             val viewModel = FoldersViewModel(source)
             advanceUntilIdle()
-            val deseretLetter = "\uD801\uDC00"
+            val deseretLetter = "\uD801\uDC00\uD801\uDC01"
 
             viewModel.updateSearchQuery(deseretLetter)
             advanceUntilIdle()
@@ -258,7 +262,7 @@ class FoldersViewModelTest {
             advanceUntilIdle()
 
             viewModel.updateSearchQuery("black box")
-            advanceTimeBy(299)
+            advanceTimeBy(149)
             viewModel.selectRoot("archive")
             advanceUntilIdle()
 
@@ -292,8 +296,116 @@ class FoldersViewModelTest {
             assertFalse(viewModel.state.value.isSearching)
         }
 
+    @Test
+    fun `raw search is selected-root only and retains results while index builds`() =
+        runTest(dispatcher) {
+            val source = FakeBrowseSource()
+            val viewModel = FoldersViewModel(source)
+            advanceUntilIdle()
+            viewModel.selectRoot("archive")
+            advanceUntilIdle()
+
+            viewModel.updateSearchQuery("black box")
+            advanceTimeBy(150)
+            advanceUntilIdle()
+            val retained = viewModel.state.value.searchResults
+            source.buildingQueries += "building"
+
+            viewModel.updateSearchQuery("building")
+            runCurrent()
+            assertEquals(retained, viewModel.state.value.searchResults)
+            assertTrue(viewModel.state.value.isSearching)
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            assertEquals(listOf("archive" to "black box", "archive" to "building"), source.rawSearches)
+            assertEquals(retained, viewModel.state.value.searchResults)
+            assertTrue(viewModel.state.value.isSearchIndexBuilding)
+            assertEquals(null, viewModel.state.value.searchErrorMessage)
+        }
+
+    @Test
+    fun `raw pagination requires the same snapshot and rejects repeated entries`() =
+        runTest(dispatcher) {
+            val source = FakeBrowseSource().apply { rawNextCursor = "next" }
+            val viewModel = FoldersViewModel(source)
+            advanceUntilIdle()
+            viewModel.updateSearchQuery("black box")
+            advanceTimeBy(150)
+            advanceUntilIdle()
+            val retained = viewModel.state.value.searchResults
+
+            source.nextRawPage = rawPage(
+                rootId = "audiobooks",
+                query = "black box",
+                entries = listOf(rawEntry("other", "Other/Path", "folder")),
+                snapshot = rawSnapshot("audiobooks").copy(
+                    scanRunId = "00000000-0000-4000-8000-000000000002",
+                ),
+            )
+            viewModel.loadNextSearchPage()
+            assertFalse(viewModel.state.value.isSearching)
+            assertTrue(viewModel.state.value.isSearchLoadingMore)
+            advanceUntilIdle()
+            assertEquals(retained, viewModel.state.value.searchResults)
+            assertFalse(viewModel.state.value.isSearchLoadingMore)
+            assertEquals("Unable to load more search results", viewModel.state.value.searchErrorMessage)
+
+            source.nextRawPage = rawPage(
+                rootId = "audiobooks",
+                query = "black box",
+                entries = listOf(retained.first()),
+            )
+            viewModel.loadNextSearchPage()
+            advanceUntilIdle()
+            assertEquals(retained, viewModel.state.value.searchResults)
+            assertEquals("Unable to load more search results", viewModel.state.value.searchErrorMessage)
+        }
+
+    @Test
+    fun `opening a raw file loads its parent then records the relative path highlight`() =
+        runTest(dispatcher) {
+            val source = FakeBrowseSource()
+            val viewModel = FoldersViewModel(source)
+            advanceUntilIdle()
+            viewModel.updateSearchQuery("chapter file")
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            viewModel.openSearchResult("Author One/Book/chapter.m4b")
+            advanceUntilIdle()
+
+            assertEquals("Author One/Book", viewModel.state.value.path)
+            assertEquals(
+                "Author One/Book/chapter.m4b",
+                viewModel.state.value.searchHighlightedRelativePath,
+            )
+            assertEquals("", viewModel.state.value.searchQuery)
+        }
+
+    @Test
+    fun `raw file highlight is omitted when the loaded parent does not contain the file`() =
+        runTest(dispatcher) {
+            val source = FakeBrowseSource()
+            val viewModel = FoldersViewModel(source)
+            advanceUntilIdle()
+            viewModel.updateSearchQuery("missing file")
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            viewModel.openSearchResult("Author One/Book/missing.m4b")
+            advanceUntilIdle()
+
+            assertEquals("Author One/Book", viewModel.state.value.path)
+            assertEquals(null, viewModel.state.value.searchHighlightedRelativePath)
+        }
+
     private class FakeBrowseSource : BrowseSource {
         val searches = mutableListOf<String>()
+        val rawSearches = mutableListOf<Pair<String, String>>()
+        val buildingQueries = mutableSetOf<String>()
+        var rawNextCursor: String? = null
+        var nextRawPage: RawSearchPageDto? = null
         var failSearch = false
 
         override fun roots(): Flow<List<RootDto>> =
@@ -367,6 +479,25 @@ class FoldersViewModelTest {
             )
         }
 
+        override fun searchRaw(rootId: String, query: String, cursor: String?): Flow<RawSearchPageDto> {
+            rawSearches += rootId to query
+            searches += query
+            if (failSearch) return flow { throw IOException("search failed") }
+            if (query in buildingQueries) return flow { throw SearchIndexBuilding() }
+            if (cursor != null) return flowOf(checkNotNull(nextRawPage))
+            val entries = when (query) {
+                "black box" -> listOf(rawEntry("black-box", "Author/Black.Box", "folder"))
+                "chapter file" -> listOf(
+                    rawEntry("chapter", "Author One/Book/chapter.m4b", "file"),
+                )
+                "missing file" -> listOf(
+                    rawEntry("missing", "Author One/Book/missing.m4b", "file"),
+                )
+                else -> emptyList()
+            }
+            return flowOf(rawPage(rootId, query, entries, nextCursor = rawNextCursor))
+        }
+
         override fun bookFiles(bookId: String): Flow<BookFilesDto> =
             flowOf(
                 BookFilesDto(
@@ -394,3 +525,26 @@ class FoldersViewModelTest {
         )
     }
 }
+
+private fun rawEntry(id: String, path: String, kind: String) = RawSearchEntryDto(
+    id = id,
+    name = path.substringAfterLast('/'),
+    relativePath = path,
+    kind = kind,
+    size = if (kind == "file") 10 else null,
+    modifiedAt = if (kind == "file") "2026-08-08T00:00:00Z" else null,
+)
+
+private fun rawSnapshot(rootId: String) = SearchSnapshotDto(
+    rootId = rootId,
+    scanRunId = "00000000-0000-4000-8000-000000000001",
+    completedAt = "2026-08-08T00:00:00Z",
+)
+
+private fun rawPage(
+    rootId: String,
+    query: String,
+    entries: List<RawSearchEntryDto>,
+    snapshot: SearchSnapshotDto = rawSnapshot(rootId),
+    nextCursor: String? = null,
+) = RawSearchPageDto(rootId, query, snapshot, entries, nextCursor)

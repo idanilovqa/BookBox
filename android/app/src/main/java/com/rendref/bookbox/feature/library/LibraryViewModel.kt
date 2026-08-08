@@ -4,39 +4,42 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rendref.bookbox.core.model.BookCardDto
+import com.rendref.bookbox.core.model.BookSearchGroupDto
+import com.rendref.bookbox.core.model.SearchSnapshotDto
+import com.rendref.bookbox.core.network.SearchIndexBuilding
 import com.rendref.bookbox.core.repository.BookQuery
 import com.rendref.bookbox.core.repository.BookSort
 import com.rendref.bookbox.core.repository.CatalogFiltersDto
 import com.rendref.bookbox.core.repository.CatalogSource
 import com.rendref.bookbox.core.repository.PagedBooks
+import com.rendref.bookbox.core.search.SearchUpdate
+import com.rendref.bookbox.core.search.debouncedSearchUpdates
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 data class LibraryState(
     val query: BookQuery = BookQuery(),
     val books: List<BookCardDto> = emptyList(),
+    val groups: List<BookSearchGroupDto> = emptyList(),
+    val snapshots: List<SearchSnapshotDto> = emptyList(),
     val filters: CatalogFiltersDto = CatalogFiltersDto(),
     val selectedBookIds: Set<String> = emptySet(),
     val nextCursor: String? = null,
     val isLoading: Boolean = false,
     val isLoadingMore: Boolean = false,
+    val isIndexBuilding: Boolean = false,
     val errorMessage: String? = null,
     val scrollIndex: Int = 0,
     val scrollOffset: Int = 0,
 )
 
-@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class LibraryViewModel(
     private val savedState: SavedStateHandle,
     private val catalog: CatalogSource,
@@ -56,23 +59,18 @@ class LibraryViewModel(
     val state: StateFlow<LibraryState> = mutableState.asStateFlow()
 
     private val consumedCursors = mutableSetOf<String>()
-    private var loadingCursor: String? = null
+    private var paginationJob: Job? = null
 
     init {
         viewModelScope.launch {
             query
-                .debounce(SEARCH_DEBOUNCE_MILLIS)
-                .flatMapLatest { requested ->
-                    flow<LibraryLoad> {
-                        emit(LibraryLoad.Loading(requested))
-                        catalog.books(requested).collect { page ->
-                            emit(LibraryLoad.Loaded(requested, page))
-                        }
-                    }.catch { failure ->
-                        if (failure is CancellationException) throw failure
-                        emit(LibraryLoad.Failed(requested))
-                    }
-                }
+                .debouncedSearchUpdates(
+                    debounceMillis = SEARCH_DEBOUNCE_MILLIS,
+                    allowBlank = true,
+                    text = BookQuery::text,
+                    isIndexBuilding = { it is SearchIndexBuilding },
+                    load = { catalog.books(it).first() },
+                )
                 .collect(::accept)
         }
     }
@@ -85,7 +83,16 @@ class LibraryViewModel(
 
     fun setYear(year: Int?) = updateQuery { copy(year = year) }
 
-    fun setRoot(rootId: String?) = updateQuery { copy(rootId = rootId.cleanFilter()) }
+    fun setRoot(rootId: String?) = updateQuery {
+        copy(rootId = rootId.cleanFilter(), rootIds = emptyList())
+    }
+
+    fun setRoots(rootIds: List<String>) = updateQuery {
+        copy(
+            rootId = null,
+            rootIds = rootIds.map(String::trim).filter(String::isNotEmpty).distinct().sorted(),
+        )
+    }
 
     fun setReviewState(reviewState: String?) =
         updateQuery { copy(reviewState = reviewState.cleanFilter()) }
@@ -114,33 +121,48 @@ class LibraryViewModel(
     fun loadNextPage() {
         val cursor = mutableState.value.nextCursor ?: return
         if (
-            loadingCursor != null ||
+            paginationJob?.isActive == true ||
             cursor in consumedCursors ||
             mutableState.value.isLoading
         ) {
             return
         }
-        loadingCursor = cursor
         mutableState.value = mutableState.value.copy(
             isLoadingMore = true,
+            isIndexBuilding = false,
             errorMessage = null,
         )
         val baseQuery = mutableState.value.query.withoutCursor()
-        viewModelScope.launch {
+        lateinit var launchedJob: Job
+        launchedJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
                 val page = catalog.books(baseQuery.copy(cursor = cursor)).first()
-                if (loadingCursor != cursor || mutableState.value.query != baseQuery) return@launch
+                if (mutableState.value.query != baseQuery) return@launch
+                val current = mutableState.value
+                val appendedGroups = appendGroups(current, page)
+                val appendedBooks = if (appendedGroups.isNotEmpty()) {
+                    appendedGroups.flatMap(BookSearchGroupDto::books)
+                } else {
+                    val knownIds = current.books.mapTo(mutableSetOf(), BookCardDto::id)
+                    current.books + page.items.filter { knownIds.add(it.id) }
+                }
                 consumedCursors += cursor
-                val knownIds = mutableState.value.books.mapTo(mutableSetOf(), BookCardDto::id)
-                val additions = page.items.filter { knownIds.add(it.id) }
                 mutableState.value = mutableState.value.copy(
-                    books = mutableState.value.books + additions,
+                    books = appendedBooks,
+                    groups = appendedGroups,
+                    snapshots = page.snapshots.ifEmpty { current.snapshots },
                     filters = page.filters,
                     nextCursor = page.nextCursor,
                     isLoadingMore = false,
                 )
             } catch (failure: CancellationException) {
                 throw failure
+            } catch (_: SearchIndexBuilding) {
+                mutableState.value = mutableState.value.copy(
+                    isLoadingMore = false,
+                    isIndexBuilding = true,
+                    errorMessage = null,
+                )
             } catch (_: IOException) {
                 mutableState.value = mutableState.value.copy(
                     isLoadingMore = false,
@@ -152,74 +174,112 @@ class LibraryViewModel(
                     errorMessage = "Unable to load more audiobooks",
                 )
             } finally {
-                if (loadingCursor == cursor) loadingCursor = null
+                if (paginationJob === launchedJob) paginationJob = null
             }
         }
+        paginationJob = launchedJob
+        launchedJob.start()
     }
 
     private fun updateQuery(transform: BookQuery.() -> BookQuery) {
         val updated = query.value.transform().withoutCursor()
         if (updated == query.value) return
         savedState[QUERY_KEY] = updated
+        consumedCursors.clear()
+        paginationJob?.cancel()
+        paginationJob = null
         query.value = updated
-        mutableState.value = mutableState.value.copy(query = updated, errorMessage = null)
+        mutableState.value = mutableState.value.copy(
+            query = updated,
+            nextCursor = null,
+            isLoadingMore = false,
+            isIndexBuilding = false,
+            errorMessage = null,
+        )
     }
 
-    private fun accept(load: LibraryLoad) {
-        when (load) {
-            is LibraryLoad.Loading -> {
+    private fun accept(update: SearchUpdate<BookQuery, PagedBooks>) {
+        when (update) {
+            is SearchUpdate.Loading -> {
                 consumedCursors.clear()
-                loadingCursor = null
+                paginationJob?.cancel()
+                paginationJob = null
                 mutableState.value = mutableState.value.copy(
-                    query = load.query,
+                    query = update.query,
                     isLoading = true,
                     isLoadingMore = false,
+                    isIndexBuilding = false,
                     errorMessage = null,
                 )
             }
 
-            is LibraryLoad.Loaded -> {
+            is SearchUpdate.Loaded -> {
+                val groups = update.page.groups
                 mutableState.value = mutableState.value.copy(
-                    query = load.query,
-                    books = load.page.items.distinctBy(BookCardDto::id),
-                    filters = load.page.filters,
-                    nextCursor = load.page.nextCursor,
+                    query = update.query,
+                    books = if (groups.isEmpty()) {
+                        update.page.items.distinctBy(BookCardDto::id)
+                    } else {
+                        groups.flatMap(BookSearchGroupDto::books)
+                    },
+                    groups = groups,
+                    snapshots = update.page.snapshots,
+                    filters = update.page.filters,
+                    nextCursor = update.page.nextCursor,
                     isLoading = false,
                     isLoadingMore = false,
+                    isIndexBuilding = false,
                     errorMessage = null,
                 )
             }
 
-            is LibraryLoad.Failed -> {
+            is SearchUpdate.Failed -> {
                 mutableState.value = mutableState.value.copy(
-                    query = load.query,
+                    query = update.query,
                     isLoading = false,
                     isLoadingMore = false,
+                    isIndexBuilding = false,
                     errorMessage = "Unable to load audiobooks",
                 )
             }
+
+            is SearchUpdate.IndexBuilding -> mutableState.value = mutableState.value.copy(
+                query = update.query,
+                isLoading = false,
+                isLoadingMore = false,
+                isIndexBuilding = true,
+                errorMessage = null,
+            )
+
+            is SearchUpdate.Inactive -> mutableState.value = mutableState.value.copy(
+                query = update.query,
+                isLoading = false,
+                isLoadingMore = false,
+                isIndexBuilding = false,
+                errorMessage = null,
+            )
         }
     }
 }
 
-private sealed interface LibraryLoad {
-    val query: BookQuery
-
-    data class Loading(override val query: BookQuery) : LibraryLoad
-
-    data class Loaded(
-        override val query: BookQuery,
-        val page: PagedBooks,
-    ) : LibraryLoad
-
-    data class Failed(override val query: BookQuery) : LibraryLoad
+private fun appendGroups(current: LibraryState, page: PagedBooks): List<BookSearchGroupDto> {
+    require(page.snapshots == current.snapshots) { "Search snapshot changed during pagination" }
+    val knownGroups = current.groups.mapTo(mutableSetOf(), BookSearchGroupDto::groupId)
+    val additions = page.groups.filter { knownGroups.add(it.groupId) }
+    val knownBooks = current.groups
+        .flatMap(BookSearchGroupDto::books)
+        .mapTo(mutableSetOf(), BookCardDto::id)
+    require(additions.flatMap(BookSearchGroupDto::books).all { knownBooks.add(it.id) }) {
+        "Search page repeats an audiobook in another group"
+    }
+    return current.groups + additions
 }
 
 private fun BookQuery.withoutCursor() = copy(cursor = null)
 
 private fun String?.cleanFilter(): String? = this?.trim()?.takeIf(String::isNotEmpty)
 
-private const val SEARCH_DEBOUNCE_MILLIS = 300L
+private const val SEARCH_DEBOUNCE_MILLIS = 150L
 private const val QUERY_KEY = "library.query"
 private const val SELECTION_KEY = "library.selection"
 private const val SCROLL_INDEX_KEY = "library.scroll.index"

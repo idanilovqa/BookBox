@@ -2,6 +2,9 @@ package com.rendref.bookbox.feature.library
 
 import androidx.lifecycle.SavedStateHandle
 import com.rendref.bookbox.core.model.BookCardDto
+import com.rendref.bookbox.core.model.BookSearchGroupDto
+import com.rendref.bookbox.core.model.SearchSnapshotDto
+import com.rendref.bookbox.core.network.SearchIndexBuilding
 import com.rendref.bookbox.core.repository.BookQuery
 import com.rendref.bookbox.core.repository.BookSort
 import com.rendref.bookbox.core.repository.CatalogFiltersDto
@@ -43,16 +46,16 @@ class LibraryViewModelTest {
     }
 
     @Test
-    fun `search waits 300ms and only submits the latest text`() = runTest(dispatcher) {
+    fun `search waits 150ms and only submits the latest text`() = runTest(dispatcher) {
         val source = RecordingCatalogSource()
         val viewModel = LibraryViewModel(SavedStateHandle(), source)
         viewModel.setSearchText("du")
-        advanceTimeBy(299)
+        advanceTimeBy(149)
         runCurrent()
         assertTrue(source.queries.isEmpty())
 
         viewModel.setSearchText("dune")
-        advanceTimeBy(299)
+        advanceTimeBy(149)
         runCurrent()
         assertTrue(source.queries.isEmpty())
 
@@ -83,12 +86,12 @@ class LibraryViewModelTest {
         val viewModel = LibraryViewModel(SavedStateHandle(), source)
 
         viewModel.setSearchText("old")
-        advanceTimeBy(300)
+        advanceTimeBy(150)
         runCurrent()
         assertTrue(oldStarted.isCompleted)
 
         viewModel.setSearchText("new")
-        advanceTimeBy(300)
+        advanceTimeBy(150)
         advanceUntilIdle()
 
         assertTrue(oldCancelled)
@@ -106,7 +109,7 @@ class LibraryViewModelTest {
                 }
             }
             val viewModel = LibraryViewModel(SavedStateHandle(), source)
-            advanceTimeBy(300)
+            advanceTimeBy(150)
             advanceUntilIdle()
 
             viewModel.loadNextPage()
@@ -116,6 +119,169 @@ class LibraryViewModelTest {
             assertEquals(1, source.queries.count { it.cursor == "cursor-2" })
             assertEquals(listOf("one", "two"), viewModel.state.value.books.map(BookCardDto::id))
             assertFalse(viewModel.state.value.isLoadingMore)
+        }
+
+    @Test
+    fun `audiobook results preserve multi-root groups and snapshots`() =
+        runTest(dispatcher) {
+            val groups = listOf(
+                group("group-a", book("a1", "main"), book("a2", "main")),
+                group("group-b", book("b1", "archive")),
+            )
+            val snapshots = listOf(snapshot("archive"), snapshot("main"))
+            val source = RecordingCatalogSource {
+                page(groups = groups, snapshots = snapshots)
+            }
+            val viewModel = LibraryViewModel(SavedStateHandle(), source)
+
+            viewModel.setRoots(listOf("main", "archive", "main"))
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            assertEquals(listOf("archive", "main"), source.queries.last().rootIds)
+            assertEquals(groups, viewModel.state.value.groups)
+            assertEquals(snapshots, viewModel.state.value.snapshots)
+            assertEquals(listOf("a1", "a2", "b1"), viewModel.state.value.books.map { it.id })
+        }
+
+    @Test
+    fun `replacement loading and index building retain audiobook groups`() =
+        runTest(dispatcher) {
+            val retained = group("group-a", book("a1", "main"))
+            val source = object : CatalogSource {
+                override fun books(query: BookQuery): Flow<PagedBooks> = when (query.text) {
+                    "building" -> flow { throw SearchIndexBuilding() }
+                    else -> flowOf(page(groups = listOf(retained), snapshots = listOf(snapshot("main"))))
+                }
+            }
+            val viewModel = LibraryViewModel(SavedStateHandle(), source)
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            viewModel.setSearchText("building")
+            runCurrent()
+            assertTrue(viewModel.state.value.isLoading)
+            assertEquals(listOf(retained), viewModel.state.value.groups)
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            assertEquals(listOf(retained), viewModel.state.value.groups)
+            assertTrue(viewModel.state.value.isIndexBuilding)
+            assertEquals(null, viewModel.state.value.errorMessage)
+        }
+
+    @Test
+    fun `pagination appends complete groups and ignores a repeated group`() =
+        runTest(dispatcher) {
+            val first = group("group-a", book("a1", "main"), book("a2", "main"))
+            val second = group("group-b", book("b1", "archive"), book("b2", "archive"))
+            val source = RecordingCatalogSource { query ->
+                when (query.cursor) {
+                    null -> page(groups = listOf(first), nextCursor = "next")
+                    "next" -> page(groups = listOf(first, second))
+                    else -> error("Unexpected cursor")
+                }
+            }
+            val viewModel = LibraryViewModel(SavedStateHandle(), source)
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            viewModel.loadNextPage()
+            advanceUntilIdle()
+
+            assertEquals(listOf("group-a", "group-b"), viewModel.state.value.groups.map { it.groupId })
+            assertEquals(listOf("a1", "a2", "b1", "b2"), viewModel.state.value.books.map { it.id })
+        }
+
+    @Test
+    fun `query change cancels the exact pagination job`() = runTest(dispatcher) {
+        val pageStarted = CompletableDeferred<Unit>()
+        val pageCancelled = CompletableDeferred<Unit>()
+        val source = object : CatalogSource {
+            override fun books(query: BookQuery): Flow<PagedBooks> = when (query.cursor) {
+                null -> flowOf(page(book("one"), nextCursor = "next"))
+                else -> flow {
+                    pageStarted.complete(Unit)
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        pageCancelled.complete(Unit)
+                    }
+                }
+            }
+        }
+        val viewModel = LibraryViewModel(SavedStateHandle(), source)
+        advanceTimeBy(150)
+        advanceUntilIdle()
+        viewModel.loadNextPage()
+        runCurrent()
+        assertTrue(pageStarted.isCompleted)
+
+        viewModel.setSearchText("dune")
+        runCurrent()
+
+        assertTrue(pageCancelled.isCompleted)
+        assertFalse(viewModel.state.value.isLoadingMore)
+    }
+
+    @Test
+    fun `pagination rejects a different snapshot and duplicate child ids`() =
+        runTest(dispatcher) {
+            val firstSnapshot = snapshot("main")
+            val changedSnapshot = firstSnapshot.copy(scanRunId = "00000000-0000-4000-8000-000000000002")
+            var invalidPage = page(
+                groups = listOf(group("group-b", book("b1"))),
+                snapshots = listOf(changedSnapshot),
+            )
+            val source = RecordingCatalogSource { query ->
+                if (query.cursor == null) {
+                    page(
+                        groups = listOf(group("group-a", book("a1"))),
+                        snapshots = listOf(firstSnapshot),
+                        nextCursor = "next",
+                    )
+                } else {
+                    invalidPage
+                }
+            }
+            val viewModel = LibraryViewModel(SavedStateHandle(), source)
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            viewModel.loadNextPage()
+            advanceUntilIdle()
+            assertEquals(listOf("group-a"), viewModel.state.value.groups.map { it.groupId })
+            assertEquals("Unable to load more audiobooks", viewModel.state.value.errorMessage)
+
+            invalidPage = page(
+                groups = listOf(group("group-b", book("a1"))),
+                snapshots = listOf(firstSnapshot),
+            )
+            viewModel.loadNextPage()
+            advanceUntilIdle()
+            assertEquals(listOf("group-a"), viewModel.state.value.groups.map { it.groupId })
+            assertEquals("Unable to load more audiobooks", viewModel.state.value.errorMessage)
+        }
+
+    @Test
+    fun `inactive text clears transient state and retains audiobook groups`() =
+        runTest(dispatcher) {
+            val retained = group("group-a", book("a1"))
+            val viewModel = LibraryViewModel(
+                SavedStateHandle(),
+                RecordingCatalogSource { page(groups = listOf(retained)) },
+            )
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            viewModel.setSearchText("x")
+            runCurrent()
+
+            assertEquals(listOf(retained), viewModel.state.value.groups)
+            assertFalse(viewModel.state.value.isLoading)
+            assertFalse(viewModel.state.value.isLoadingMore)
+            assertFalse(viewModel.state.value.isIndexBuilding)
+            assertEquals(null, viewModel.state.value.errorMessage)
         }
 
     @Test
@@ -152,19 +318,36 @@ class LibraryViewModelTest {
     }
 }
 
-private fun book(id: String) = BookCardDto(
+private fun book(id: String, rootId: String = "main") = BookCardDto(
     id = id,
     title = id.replaceFirstChar(Char::uppercase),
     authors = listOf("Author"),
     reviewState = "matched",
     sourceFolder = "H:/Audiobooks/$id",
+    rootId = rootId,
+)
+
+private fun group(groupId: String, vararg books: BookCardDto) = BookSearchGroupDto(
+    groupId = groupId,
+    duplicate = books.size > 1,
+    books = books.toList(),
+)
+
+private fun snapshot(rootId: String) = SearchSnapshotDto(
+    rootId = rootId,
+    scanRunId = "00000000-0000-4000-8000-000000000001",
+    completedAt = "2026-08-08T00:00:00Z",
 )
 
 private fun page(
     vararg books: BookCardDto,
     nextCursor: String? = null,
+    groups: List<BookSearchGroupDto> = emptyList(),
+    snapshots: List<SearchSnapshotDto> = emptyList(),
 ) = PagedBooks(
-    items = books.toList(),
+    items = if (groups.isEmpty()) books.toList() else groups.flatMap(BookSearchGroupDto::books),
     nextCursor = nextCursor,
     filters = CatalogFiltersDto(genres = listOf("Science Fiction")),
+    groups = groups,
+    snapshots = snapshots,
 )
