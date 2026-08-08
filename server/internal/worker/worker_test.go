@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -172,11 +173,140 @@ func TestScanRootHandlerIndexesAndQueuesIncompleteBooks(t *testing.T) {
 		repository.files[0].RelativePath != "Book/book.m4b" ||
 		repository.files[0].Media["title"] != "Book" ||
 		len(repository.inferred) != 1 ||
-		!repository.finished.Success ||
+		repository.finalizeCalls != 1 ||
+		repository.finalizedRunID != repository.scan.ID ||
+		len(repository.finishResults) != 0 ||
+		!slices.Equal(repository.events, []string{"upsert", "finalize", "list", "enqueue"}) ||
 		!slices.Equal(repository.enrichedBooks, []uuid.UUID{bookID}) {
-		t.Fatalf("scan writes files=%#v inferred=%#v finished=%#v enrichment=%#v",
-			repository.files, repository.inferred, repository.finished,
+		t.Fatalf("scan writes files=%#v inferred=%#v finalized=%d run=%s finishes=%#v events=%v enrichment=%#v",
+			repository.files, repository.inferred, repository.finalizeCalls,
+			repository.finalizedRunID, repository.finishResults, repository.events,
 			repository.enrichedBooks)
+	}
+}
+
+func TestScanRootMarksScanFailedWhenProjectionPublicationFails(t *testing.T) {
+	root := config.Root{ID: "audio", Name: "Audio", ContainerPath: "/library/audio"}
+	finalizeErr := errors.New("projection failed")
+	repository := &scanRepositoryFake{
+		scan:        catalog.ScanRun{ID: uuid.New(), RootID: root.ID, Status: "running"},
+		finalizeErr: finalizeErr,
+	}
+	handler := &ScanRootHandler{
+		Repo: repository,
+		Scanner: scannerFake{result: scanner.Result{
+			RootID: root.ID,
+		}},
+		Roots: map[string]config.Root{root.ID: root},
+	}
+
+	err := handler.Handle(t.Context(), catalog.WorkerJob{
+		Kind: catalog.JobScanRoot, Payload: map[string]any{"rootId": root.ID},
+	})
+	if !errors.Is(err, finalizeErr) {
+		t.Fatalf("Handle() error=%v", err)
+	}
+	if repository.finalizeCalls != 1 || repository.finalizedRunID != repository.scan.ID {
+		t.Fatalf("finalized=%d run=%s", repository.finalizeCalls, repository.finalizedRunID)
+	}
+	if len(repository.finishResults) != 1 || repository.failedScans != 1 ||
+		repository.finished.Success || repository.finished.Partial ||
+		repository.finished.Error != "search projection publication failed" {
+		t.Fatalf("finishes=%#v failed=%d", repository.finishResults, repository.failedScans)
+	}
+	if len(repository.enrichedBooks) != 0 ||
+		!slices.Equal(repository.events, []string{"upsert", "finalize", "finish"}) {
+		t.Fatalf("events=%v enrichment=%v", repository.events, repository.enrichedBooks)
+	}
+}
+
+func TestScanRootJoinsProjectionAndFailedScanCompletionErrors(t *testing.T) {
+	root := config.Root{ID: "audio", Name: "Audio", ContainerPath: "/library/audio"}
+	finalizeErr := errors.New("projection failed")
+	finishErr := errors.New("finish failed")
+	repository := &scanRepositoryFake{
+		scan:        catalog.ScanRun{ID: uuid.New(), RootID: root.ID, Status: "running"},
+		finalizeErr: finalizeErr,
+		finishErr:   finishErr,
+	}
+	handler := &ScanRootHandler{
+		Repo: repository,
+		Scanner: scannerFake{result: scanner.Result{
+			RootID: root.ID,
+		}},
+		Roots: map[string]config.Root{root.ID: root},
+	}
+
+	err := handler.Handle(t.Context(), catalog.WorkerJob{
+		Kind: catalog.JobScanRoot, Payload: map[string]any{"rootId": root.ID},
+	})
+	if !errors.Is(err, finalizeErr) || !errors.Is(err, finishErr) {
+		t.Fatalf("Handle() error=%v, want joined finalize and finish errors", err)
+	}
+	if repository.finalizeCalls != 1 || len(repository.finishResults) != 1 ||
+		len(repository.enrichedBooks) != 0 ||
+		!slices.Equal(repository.events, []string{"upsert", "finalize", "finish"}) {
+		t.Fatalf("finalized=%d finishes=%#v events=%v enrichment=%v",
+			repository.finalizeCalls, repository.finishResults,
+			repository.events, repository.enrichedBooks)
+	}
+}
+
+func TestScanRootEnrichmentFailureDoesNotRollbackSuccessfulFinalization(t *testing.T) {
+	root := config.Root{ID: "audio", Name: "Audio", ContainerPath: "/library/audio"}
+	listErr := errors.New("list failed")
+	repository := &scanRepositoryFake{
+		scan:    catalog.ScanRun{ID: uuid.New(), RootID: root.ID, Status: "running"},
+		listErr: listErr,
+	}
+	handler := &ScanRootHandler{
+		Repo: repository,
+		Scanner: scannerFake{result: scanner.Result{
+			RootID: root.ID,
+		}},
+		Roots: map[string]config.Root{root.ID: root},
+	}
+
+	err := handler.Handle(t.Context(), catalog.WorkerJob{
+		Kind: catalog.JobScanRoot, Payload: map[string]any{"rootId": root.ID},
+	})
+	if !errors.Is(err, listErr) || !strings.Contains(err.Error(), "queue metadata enrichment") {
+		t.Fatalf("Handle() error=%v", err)
+	}
+	if repository.finalizeCalls != 1 || len(repository.finishResults) != 0 ||
+		!slices.Equal(repository.events, []string{"upsert", "finalize", "list"}) {
+		t.Fatalf("finalized=%d finishes=%#v events=%v",
+			repository.finalizeCalls, repository.finishResults, repository.events)
+	}
+}
+
+func TestScanRootPartialResultDoesNotFinalizeProjection(t *testing.T) {
+	root := config.Root{ID: "audio", Name: "Audio", ContainerPath: "/library/audio"}
+	repository := &scanRepositoryFake{
+		scan: catalog.ScanRun{ID: uuid.New(), RootID: root.ID, Status: "running"},
+	}
+	handler := &ScanRootHandler{
+		Repo: repository,
+		Scanner: scannerFake{result: scanner.Result{
+			RootID: root.ID,
+			Warnings: []scanner.Warning{{
+				RelativePath: "Unreadable", Operation: "read directory",
+			}},
+		}},
+		Roots: map[string]config.Root{root.ID: root},
+	}
+
+	err := handler.Handle(t.Context(), catalog.WorkerJob{
+		Kind: catalog.JobScanRoot, Payload: map[string]any{"rootId": root.ID},
+	})
+	if err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("Handle() error=%v", err)
+	}
+	if repository.finalizeCalls != 0 || repository.upsertCalled ||
+		len(repository.finishResults) != 1 || !repository.finished.Partial ||
+		repository.finished.Success {
+		t.Fatalf("finalized=%d upsert=%v finishes=%#v",
+			repository.finalizeCalls, repository.upsertCalled, repository.finishResults)
 	}
 }
 
@@ -198,9 +328,9 @@ func TestScanRootHandlerFailureFinishesScanAndPreservesCatalog(t *testing.T) {
 	if repository.finished.Success || repository.finished.Error == "" {
 		t.Fatalf("finished = %#v, want failed result", repository.finished)
 	}
-	if repository.upsertCalled || repository.replaceCalled {
-		t.Fatalf("failed scan changed catalog: upsert=%v replace=%v",
-			repository.upsertCalled, repository.replaceCalled)
+	if repository.upsertCalled || repository.replaceCalled || repository.finalizeCalls != 0 {
+		t.Fatalf("failed scan changed catalog: upsert=%v replace=%v finalized=%d",
+			repository.upsertCalled, repository.replaceCalled, repository.finalizeCalls)
 	}
 }
 
@@ -423,16 +553,24 @@ func (fake scannerFake) Scan(context.Context, config.Root) (scanner.Result, erro
 }
 
 type scanRepositoryFake struct {
-	scan          catalog.ScanRun
-	files         []catalog.SourceFile
-	inferred      []catalog.InferredBook
-	finished      catalog.ScanResult
-	page          catalog.Page[catalog.Book]
-	pages         []catalog.Page[catalog.Book]
-	listCursors   []string
-	enrichedBooks []uuid.UUID
-	upsertCalled  bool
-	replaceCalled bool
+	scan           catalog.ScanRun
+	files          []catalog.SourceFile
+	inferred       []catalog.InferredBook
+	finished       catalog.ScanResult
+	finishResults  []catalog.ScanResult
+	page           catalog.Page[catalog.Book]
+	pages          []catalog.Page[catalog.Book]
+	listCursors    []string
+	enrichedBooks  []uuid.UUID
+	events         []string
+	upsertCalled   bool
+	replaceCalled  bool
+	finalizeCalls  int
+	finalizedRunID uuid.UUID
+	finalizeErr    error
+	finishErr      error
+	listErr        error
+	failedScans    int
 }
 
 func (repository *scanRepositoryFake) BeginScan(
@@ -449,6 +587,7 @@ func (repository *scanRepositoryFake) UpsertSourceFiles(
 ) error {
 	repository.upsertCalled = true
 	repository.files = files
+	repository.events = append(repository.events, "upsert")
 	return nil
 }
 
@@ -459,7 +598,20 @@ func (repository *scanRepositoryFake) ReplaceInferredBooks(
 ) error {
 	repository.replaceCalled = true
 	repository.inferred = books
+	repository.events = append(repository.events, "replace")
 	return nil
+}
+
+func (repository *scanRepositoryFake) FinalizeSuccessfulScan(
+	_ context.Context,
+	runID uuid.UUID,
+	books []catalog.InferredBook,
+) error {
+	repository.finalizeCalls++
+	repository.finalizedRunID = runID
+	repository.inferred = books
+	repository.events = append(repository.events, "finalize")
+	return repository.finalizeErr
 }
 
 func (repository *scanRepositoryFake) FinishScan(
@@ -468,7 +620,12 @@ func (repository *scanRepositoryFake) FinishScan(
 	result catalog.ScanResult,
 ) error {
 	repository.finished = result
-	return nil
+	repository.finishResults = append(repository.finishResults, result)
+	repository.events = append(repository.events, "finish")
+	if !result.Success {
+		repository.failedScans++
+	}
+	return repository.finishErr
 }
 
 func (repository *scanRepositoryFake) ListBooks(
@@ -476,6 +633,10 @@ func (repository *scanRepositoryFake) ListBooks(
 	query catalog.BookQuery,
 ) (catalog.Page[catalog.Book], error) {
 	repository.listCursors = append(repository.listCursors, query.Cursor)
+	repository.events = append(repository.events, "list")
+	if repository.listErr != nil {
+		return catalog.Page[catalog.Book]{}, repository.listErr
+	}
 	if len(repository.pages) != 0 {
 		page := repository.pages[0]
 		repository.pages = repository.pages[1:]
@@ -491,6 +652,7 @@ func (repository *scanRepositoryFake) EnqueueDeduplicated(
 ) (catalog.WorkerJob, error) {
 	bookID, _ := uuid.Parse(job.Payload["bookId"].(string))
 	repository.enrichedBooks = append(repository.enrichedBooks, bookID)
+	repository.events = append(repository.events, "enqueue")
 	return job, nil
 }
 

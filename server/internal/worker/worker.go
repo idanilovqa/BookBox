@@ -205,7 +205,7 @@ type Scanner interface {
 type ScanRepository interface {
 	BeginScan(context.Context, string) (catalog.ScanRun, error)
 	UpsertSourceFiles(context.Context, uuid.UUID, []catalog.SourceFile) error
-	ReplaceInferredBooks(context.Context, string, []catalog.InferredBook) error
+	FinalizeSuccessfulScan(context.Context, uuid.UUID, []catalog.InferredBook) error
 	FinishScan(context.Context, uuid.UUID, catalog.ScanResult) error
 	ListBooks(context.Context, catalog.BookQuery) (catalog.Page[catalog.Book], error)
 	EnqueueDeduplicated(
@@ -276,13 +276,8 @@ func (handler *ScanRootHandler) Handle(
 	for _, folder := range result.Folders {
 		books = append(books, grouping.Infer(folder)...)
 	}
-	if err := handler.Repo.ReplaceInferredBooks(ctx, rootID, books); err != nil {
-		return handler.failScan(ctx, run.ID, "book grouping failed", err)
-	}
-	if err := handler.Repo.FinishScan(ctx, run.ID, catalog.ScanResult{
-		Success: true,
-	}); err != nil {
-		return fmt.Errorf("finish successful scan: %w", err)
+	if err := handler.Repo.FinalizeSuccessfulScan(ctx, run.ID, books); err != nil {
+		return handler.failScan(ctx, run.ID, "search projection publication failed", err)
 	}
 	if err := handler.queueIncompleteBooks(ctx, rootID); err != nil {
 		return fmt.Errorf("queue metadata enrichment: %w", err)
