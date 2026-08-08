@@ -791,10 +791,14 @@ database:
 
     if (-not $focusedCatalogSearchComplete) {
     $localTooling = Join-Path $repoRoot '.tooling'
-    $localJdk = Join-Path $localTooling 'jdk17\jdk-17.0.19+10'
+    $localJdkRoot = Join-Path $localTooling 'jdk17'
+    $localJdk = Get-ChildItem -LiteralPath $localJdkRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'bin\java.exe') -PathType Leaf } |
+        Sort-Object -Property Name -Descending |
+        Select-Object -ExpandProperty FullName -First 1
     $localGradleHome = Join-Path $localTooling 'gradle-home'
     $localSdk = Join-Path $localTooling 'android-sdk'
-    if (Test-Path -LiteralPath $localJdk -PathType Container) {
+    if (-not [string]::IsNullOrWhiteSpace($localJdk)) {
         $env:JAVA_HOME = $localJdk
     }
     if (Test-Path -LiteralPath $localGradleHome -PathType Container) {

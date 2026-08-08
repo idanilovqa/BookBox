@@ -4,7 +4,6 @@ import com.rendref.bookbox.core.model.BookFileDto
 import com.rendref.bookbox.core.model.BookFilesDto
 import com.rendref.bookbox.core.model.BrowseDto
 import com.rendref.bookbox.core.model.BrowseEntryDto
-import com.rendref.bookbox.core.model.FolderSearchDto
 import com.rendref.bookbox.core.model.RawSearchEntryDto
 import com.rendref.bookbox.core.model.RawSearchPageDto
 import com.rendref.bookbox.core.model.RootDto
@@ -128,11 +127,13 @@ class FoldersViewModelTest {
                     return flowOf(BrowseDto(rootId, path, emptyList()))
                 }
 
-                override fun searchFolders(
+                override fun searchRaw(
                     rootId: String,
                     query: String,
-                ): Flow<FolderSearchDto> =
-                    flowOf(FolderSearchDto(rootId, query, emptyList()))
+                    cursor: String?,
+                ): Flow<RawSearchPageDto> = flow {
+                    throw UnsupportedOperationException("Search is not used by this test")
+                }
 
                 override fun bookFiles(bookId: String): Flow<BookFilesDto> =
                     flowOf(
@@ -450,34 +451,6 @@ class FoldersViewModelTest {
                     },
                 ),
             )
-
-        override fun searchFolders(
-            rootId: String,
-            query: String,
-        ): Flow<FolderSearchDto> {
-            searches += query
-            if (failSearch) {
-                return flow { throw IOException("search failed") }
-            }
-            return flowOf(
-                FolderSearchDto(
-                    rootId = rootId,
-                    query = query,
-                    entries = if (query == "black box") {
-                        listOf(
-                            BrowseEntryDto(
-                                name = "Black.Box",
-                                relativePath = "Author/Black.Box",
-                                kind = "folder",
-                                modifiedAt = "2026-07-29T00:00:00Z",
-                            ),
-                        )
-                    } else {
-                        emptyList()
-                    },
-                ),
-            )
-        }
 
         override fun searchRaw(rootId: String, query: String, cursor: String?): Flow<RawSearchPageDto> {
             rawSearches += rootId to query

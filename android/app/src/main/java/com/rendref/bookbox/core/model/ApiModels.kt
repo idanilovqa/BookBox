@@ -35,13 +35,6 @@ data class BrowseDto(
 )
 
 @Serializable
-data class FolderSearchDto(
-    val rootId: String,
-    val query: String,
-    val entries: List<BrowseEntryDto>,
-)
-
-@Serializable
 data class SearchSnapshotDto(
     val rootId: String,
     val scanRunId: String,

@@ -1,6 +1,7 @@
 package com.rendref.bookbox.core.repository
 
-import com.rendref.bookbox.core.model.BookCardDto
+import com.rendref.bookbox.core.model.BookSearchGroupDto
+import com.rendref.bookbox.core.model.SearchSnapshotDto
 import com.rendref.bookbox.core.network.CatalogApi
 import java.io.Serializable
 import kotlinx.coroutines.flow.Flow
@@ -23,7 +24,7 @@ data class BookQuery(
     val genre: String? = null,
     val year: Int? = null,
     val rootId: String? = null,
-	val rootIds: List<String> = emptyList(),
+    val rootIds: List<String> = emptyList(),
     val reviewState: String? = null,
     val sort: BookSort = BookSort.TITLE,
     val cursor: String? = null,
@@ -39,11 +40,10 @@ data class CatalogFiltersDto(
 )
 
 data class PagedBooks(
-    val items: List<BookCardDto>,
+    val groups: List<BookSearchGroupDto>,
+    val snapshots: List<SearchSnapshotDto>,
     val nextCursor: String?,
     val filters: CatalogFiltersDto,
-	val groups: List<com.rendref.bookbox.core.model.BookSearchGroupDto> = emptyList(),
-	val snapshots: List<com.rendref.bookbox.core.model.SearchSnapshotDto> = emptyList(),
 )
 
 fun interface CatalogSource {

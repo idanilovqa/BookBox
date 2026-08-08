@@ -140,17 +140,12 @@ class LibraryViewModel(
                 if (mutableState.value.query != baseQuery) return@launch
                 val current = mutableState.value
                 val appendedGroups = appendGroups(current, page)
-                val appendedBooks = if (appendedGroups.isNotEmpty()) {
-                    appendedGroups.flatMap(BookSearchGroupDto::books)
-                } else {
-                    val knownIds = current.books.mapTo(mutableSetOf(), BookCardDto::id)
-                    current.books + page.items.filter { knownIds.add(it.id) }
-                }
+                val appendedBooks = appendedGroups.flatMap(BookSearchGroupDto::books)
                 consumedCursors += cursor
                 mutableState.value = mutableState.value.copy(
                     books = appendedBooks,
                     groups = appendedGroups,
-                    snapshots = page.snapshots.ifEmpty { current.snapshots },
+                    snapshots = page.snapshots,
                     filters = page.filters,
                     nextCursor = page.nextCursor,
                     isLoadingMore = false,
@@ -217,11 +212,7 @@ class LibraryViewModel(
                 val groups = update.page.groups
                 mutableState.value = mutableState.value.copy(
                     query = update.query,
-                    books = if (groups.isEmpty()) {
-                        update.page.items.distinctBy(BookCardDto::id)
-                    } else {
-                        groups.flatMap(BookSearchGroupDto::books)
-                    },
+                    books = groups.flatMap(BookSearchGroupDto::books),
                     groups = groups,
                     snapshots = update.page.snapshots,
                     filters = update.page.filters,

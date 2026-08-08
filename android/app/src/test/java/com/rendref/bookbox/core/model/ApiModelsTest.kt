@@ -230,27 +230,6 @@ class ApiModelsTest {
     }
 
     @Test
-    fun `folder search contract decodes full relative paths`() {
-        val search = json.decodeFromString<FolderSearchDto>(
-            """
-            {
-              "rootId": "audiobooks",
-              "query": "black box",
-              "entries": [{
-                "name": "Black.Box",
-                "relativePath": "Author/Black.Box",
-                "kind": "folder",
-                "modifiedAt": "2026-07-29T00:00:00Z"
-              }]
-            }
-            """.trimIndent(),
-        )
-
-        assertEquals("black box", search.query)
-        assertEquals("Author/Black.Box", search.entries.single().relativePath)
-    }
-
-    @Test
     fun `manifest contract decodes every verified file field`() {
         val manifest = json.decodeFromString<ManifestDto>(
             """

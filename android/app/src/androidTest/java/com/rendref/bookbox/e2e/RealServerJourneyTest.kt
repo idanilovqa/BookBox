@@ -208,7 +208,7 @@ class RealServerJourneyTest {
         minimum: Int,
     ): List<com.rendref.bookbox.core.model.BookCardDto> {
         repeat(120) {
-            val books = catalog.books(BookQuery(text = query)).items
+            val books = catalog.books(BookQuery(text = query)).groups.flatMap { it.books }
             if (books.size >= minimum) return books
             delay(1_000)
         }

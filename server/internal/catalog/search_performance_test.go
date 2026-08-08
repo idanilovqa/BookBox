@@ -90,15 +90,31 @@ func TestLibrarySearchPlan(t *testing.T) {
 		t.Fatalf("typo search did not recall target: %#v", typoPage.Groups)
 	}
 
+}
+
+func TestLibrarySearchPerformance(t *testing.T) {
 	if os.Getenv(searchPerformanceOptIn) != "1" {
-		t.Logf("latency assertions disabled; set %s=1 to enable", searchPerformanceOptIn)
-		return
+		t.Skipf("set %s=1 to enable latency assertions", searchPerformanceOptIn)
 	}
 	if testing.Short() {
 		t.Skip("search latency assertions are disabled in short mode")
 	}
-	t.Run("latency", func(t *testing.T) {
-		assertSearchLatency(t, repository, queries)
+
+	pool := testpostgres.Open(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	defer cancel()
+	if err := database.Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	seedSearchPerformanceProjection(t, ctx, pool)
+
+	repository := NewPostgresRepository(pool)
+	assertSearchLatency(t, repository, []struct {
+		name string
+		text string
+	}{
+		{name: "two character", text: "zx"},
+		{name: "trigram typo", text: "xyqtokem"},
 	})
 }
 

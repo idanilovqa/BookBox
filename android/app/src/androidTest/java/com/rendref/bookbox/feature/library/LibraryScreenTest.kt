@@ -73,7 +73,10 @@ class LibraryScreenTest {
         composeRule.setContent {
             MaterialTheme {
                 LibraryScreen(
-                    state = LibraryState(books = listOf(dune)),
+                    state = LibraryState(
+                        books = listOf(dune),
+                        groups = listOf(BookSearchGroupDto(dune.id, false, listOf(dune))),
+                    ),
                     onSearchTextChange = searches::add,
                     onAction = actions::add,
                     onAuthorChange = {},

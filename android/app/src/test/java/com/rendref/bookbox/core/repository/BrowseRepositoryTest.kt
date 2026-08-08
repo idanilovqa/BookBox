@@ -5,7 +5,6 @@ import com.rendref.bookbox.core.model.BookFileDto
 import com.rendref.bookbox.core.model.BookFilesDto
 import com.rendref.bookbox.core.model.BrowseDto
 import com.rendref.bookbox.core.model.BrowseEntryDto
-import com.rendref.bookbox.core.model.FolderSearchDto
 import com.rendref.bookbox.core.model.RootDto
 import com.rendref.bookbox.core.model.RootsDto
 import com.rendref.bookbox.core.model.RawSearchEntryDto
@@ -36,36 +35,65 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BrowseRepositoryTest {
-	@Test
-	fun `raw search encodes cursor and validates folder file page`() = runTest {
-		withRepository { server, repository ->
-			val snapshot=SearchSnapshotDto("audiobooks","11111111-1111-1111-1111-111111111111","2026-08-08T00:00:00Z")
-			val page=RawSearchPageDto("audiobooks","dune",snapshot,listOf(
-				RawSearchEntryDto("22222222-2222-2222-2222-222222222222","Dune","Dune","folder",duplicateBook=true),
-				RawSearchEntryDto("33333333-3333-3333-3333-333333333333","book.m4b","Dune/book.m4b","file",10,"2026-08-08T00:00:00Z","44444444-4444-4444-4444-444444444444")),"next")
-			server.enqueue(MockResponse(body=ApiJson.encodeToString(page)))
-			val actual=repository.searchRaw("audiobooks","dune","c1").first()
-			assertEquals("/v1/browse/search?root=audiobooks&q=dune&cursor=c1",server.takeRequest().target)
-			assertTrue(actual.entries.first().duplicateBook);assertEquals(10L,actual.entries.last().size)
-		}
-	}
+    @Test
+    fun `raw search encodes cursor and validates folder file page`() = runTest {
+        withRepository { server, repository ->
+            val snapshot = SearchSnapshotDto(
+                "audiobooks",
+                "11111111-1111-1111-1111-111111111111",
+                "2026-08-08T00:00:00Z",
+            )
+            val page = RawSearchPageDto(
+                "audiobooks",
+                "dune",
+                snapshot,
+                listOf(
+                    RawSearchEntryDto(
+                        "22222222-2222-2222-2222-222222222222",
+                        "Dune",
+                        "Dune",
+                        "folder",
+                        duplicateBook = true,
+                    ),
+                    RawSearchEntryDto(
+                        "33333333-3333-3333-3333-333333333333",
+                        "book.m4b",
+                        "Dune/book.m4b",
+                        "file",
+                        10,
+                        "2026-08-08T00:00:00Z",
+                        "44444444-4444-4444-4444-444444444444",
+                    ),
+                ),
+                "next",
+            )
+            server.enqueue(MockResponse(body = ApiJson.encodeToString(page)))
+            val actual = repository.searchRaw("audiobooks", "dune", "c1").first()
+            assertEquals(
+                "/v1/browse/search?root=audiobooks&q=dune&cursor=c1",
+                server.takeRequest().target,
+            )
+            assertTrue(actual.entries.first().duplicateBook)
+            assertEquals(10L, actual.entries.last().size)
+        }
+    }
 
-	@Test
-	fun `raw search rejects hostile shapes and maps exact building response`() = runTest {
-		withRepository { server, repository ->
-			val snapshot="""{"rootId":"audiobooks","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z"}"""
-			val invalid=listOf(
-				"""{"rootId":"other","query":"dune","snapshot":$snapshot,"entries":[]}""",
-				"""{"rootId":"audiobooks","query":"other","snapshot":$snapshot,"entries":[]}""",
-				"""{"rootId":"audiobooks","query":"dune","snapshot":$snapshot,"entries":[{"id":"22222222-2222-2222-2222-222222222222","name":"bad","relativePath":"../bad","kind":"folder"}]}""",
-				"""{"rootId":"audiobooks","query":"dune","snapshot":$snapshot,"entries":[{"id":"22222222-2222-2222-2222-222222222222","name":"file","relativePath":"file","kind":"file"}]}""",
-				"""{"rootId":"audiobooks","query":"dune","snapshot":$snapshot,"entries":[{"id":"22222222-2222-2222-2222-222222222222","name":"A","relativePath":"A","kind":"folder","duplicateGroupId":"not-a-uuid"}]}""
-			)
-			invalid.forEach { body -> server.enqueue(MockResponse(body=body)); assertThrows(IOException::class.java){kotlinx.coroutines.runBlocking{repository.searchRaw("audiobooks","dune").first()}} }
-			server.enqueue(MockResponse(code=503,body="""{"error":{"code":"search_index_building","message":"building"}}"""))
-			assertThrows(SearchIndexBuilding::class.java){kotlinx.coroutines.runBlocking{repository.searchRaw("audiobooks","dune").first()}}
-		}
-	}
+    @Test
+    fun `raw search rejects hostile shapes and maps exact building response`() = runTest {
+        withRepository { server, repository ->
+            val snapshot="""{"rootId":"audiobooks","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z"}"""
+            val invalid=listOf(
+                """{"rootId":"other","query":"dune","snapshot":$snapshot,"entries":[]}""",
+                """{"rootId":"audiobooks","query":"other","snapshot":$snapshot,"entries":[]}""",
+                """{"rootId":"audiobooks","query":"dune","snapshot":$snapshot,"entries":[{"id":"22222222-2222-2222-2222-222222222222","name":"bad","relativePath":"../bad","kind":"folder"}]}""",
+                """{"rootId":"audiobooks","query":"dune","snapshot":$snapshot,"entries":[{"id":"22222222-2222-2222-2222-222222222222","name":"file","relativePath":"file","kind":"file"}]}""",
+                """{"rootId":"audiobooks","query":"dune","snapshot":$snapshot,"entries":[{"id":"22222222-2222-2222-2222-222222222222","name":"A","relativePath":"A","kind":"folder","duplicateGroupId":"not-a-uuid"}]}""
+            )
+            invalid.forEach { body -> server.enqueue(MockResponse(body=body)); assertThrows(IOException::class.java){kotlinx.coroutines.runBlocking{repository.searchRaw("audiobooks","dune").first()}} }
+            server.enqueue(MockResponse(code=503,body="""{"error":{"code":"search_index_building","message":"building"}}"""))
+            assertThrows(SearchIndexBuilding::class.java){kotlinx.coroutines.runBlocking{repository.searchRaw("audiobooks","dune").first()}}
+        }
+    }
     @Test
     fun `list encodes root and relative path exactly once`() = runTest {
         withRepository { server, repository ->
@@ -87,93 +115,29 @@ class BrowseRepositoryTest {
     }
 
     @Test
-    fun `folder search encodes query and returns validated folder paths`() = runTest {
-        withRepository { server, repository ->
-            val result = FolderSearchDto(
-                rootId = "audiobooks",
-                query = "black box",
-                entries = listOf(
-                    BrowseEntryDto(
-                        name = "Black.Box",
-                        relativePath = "Author/Black.Box",
-                        kind = "folder",
-                        modifiedAt = "2026-07-29T00:00:00Z",
-                    ),
-                ),
-            )
-            server.enqueue(MockResponse(body = ApiJson.encodeToString(result)))
-
-            val actual = repository.searchFolders("audiobooks", "black box").first()
-
-            assertEquals(
-                "/v1/browse/search?root=audiobooks&q=black%20box",
-                server.takeRequest().target,
-            )
-            assertEquals("Author/Black.Box", actual.entries.single().relativePath)
-        }
-    }
-
-    @Test
-    fun `folder search rejects mismatched files duplicate paths and oversized results`() =
-        runTest {
-            withRepository { server, repository ->
-                val folder = BrowseEntryDto(
-                    name = "Book",
-                    relativePath = "Author/Book",
-                    kind = "folder",
-                    modifiedAt = "2026-07-29T00:00:00Z",
-                )
-                val invalid = listOf(
-                    FolderSearchDto("other", "book", listOf(folder)),
-                    FolderSearchDto("audiobooks", "other", listOf(folder)),
-                    FolderSearchDto(
-                        "audiobooks",
-                        "book",
-                        listOf(folder.copy(kind = "file", size = 1)),
-                    ),
-                    FolderSearchDto(
-                        "audiobooks",
-                        "book",
-                        listOf(folder.copy(relativePath = "../Book")),
-                    ),
-                    FolderSearchDto("audiobooks", "book", listOf(folder, folder)),
-                    FolderSearchDto(
-                        "audiobooks",
-                        "book",
-                        List(101) { index ->
-                            folder.copy(
-                                name = "Book $index",
-                                relativePath = "Author/Book $index",
-                            )
-                        },
-                    ),
-                )
-                invalid.forEach { response ->
-                    server.enqueue(MockResponse(body = ApiJson.encodeToString(response)))
-                    assertThrows(IOException::class.java) {
-                        kotlinx.coroutines.runBlocking {
-                            repository.searchFolders("audiobooks", "book").first()
-                        }
-                    }
-                }
-            }
-        }
-
-    @Test
-    fun `cancelling folder search cancels the in-flight HTTP call`() = runTest {
+    fun `cancelling raw search cancels the in-flight HTTP call`() = runTest {
         withRepository { server, repository ->
             server.enqueue(
                 MockResponse.Builder()
                     .body(
                         ApiJson.encodeToString(
-                            FolderSearchDto("audiobooks", "book", emptyList()),
+                            RawSearchPageDto(
+                                rootId = "audiobooks",
+                                query = "book",
+                                snapshot = SearchSnapshotDto(
+                                    rootId = "audiobooks",
+                                    scanRunId = "11111111-1111-1111-1111-111111111111",
+                                    completedAt = "2026-08-08T00:00:00Z",
+                                ),
+                                entries = emptyList(),
+                            ),
                         ),
                     )
                     .bodyDelay(10, TimeUnit.SECONDS)
                     .build(),
             )
             val search = backgroundScope.launch(Dispatchers.IO) {
-                repository.searchFolders("audiobooks", "book").first()
+                repository.searchRaw("audiobooks", "book").first()
             }
             server.takeRequest()
 

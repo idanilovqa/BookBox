@@ -66,15 +66,7 @@ fun LibraryScreen(
     var expandedGroupIds by rememberSaveable {
         mutableStateOf(arrayListOf<String>())
     }
-    val displayedGroups = state.groups.ifEmpty {
-        state.books.map { book ->
-            BookSearchGroupDto(
-                groupId = book.id,
-                duplicate = false,
-                books = listOf(book),
-            )
-        }
-    }
+    val displayedGroups = state.groups
     val hasResults = displayedGroups.any { it.books.isNotEmpty() }
     val displayedGroupIds = displayedGroups.map(BookSearchGroupDto::groupId).toSet()
     LaunchedEffect(displayedGroupIds) {

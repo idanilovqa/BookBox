@@ -26,7 +26,9 @@ import com.rendref.bookbox.core.model.BookCardDto
 import com.rendref.bookbox.core.model.BookDetailDto
 import com.rendref.bookbox.core.model.BookFilesDto
 import com.rendref.bookbox.core.model.BrowseDto
-import com.rendref.bookbox.core.model.FolderSearchDto
+import com.rendref.bookbox.core.model.BookSearchGroupDto
+import com.rendref.bookbox.core.model.RawSearchPageDto
+import com.rendref.bookbox.core.model.SearchSnapshotDto
 import com.rendref.bookbox.core.model.GroupingContextDto
 import com.rendref.bookbox.core.model.MatchSearchDto
 import com.rendref.bookbox.core.model.RootDto
@@ -238,7 +240,20 @@ private fun fakeRuntime(
     return ConnectedRuntime(
         instanceKey = instanceKey,
         catalog = CatalogSource {
-            flowOf(PagedBooks(listOf(book), null, CatalogFiltersDto()))
+            flowOf(
+                PagedBooks(
+                    groups = listOf(BookSearchGroupDto(book.id, false, listOf(book))),
+                    snapshots = listOf(
+                        SearchSnapshotDto(
+                            rootId = "audiobooks",
+                            scanRunId = "22222222-2222-4222-8222-222222222222",
+                            completedAt = "2026-08-08T00:00:00Z",
+                        ),
+                    ),
+                    nextCursor = null,
+                    filters = CatalogFiltersDto(),
+                ),
+            )
         },
         browse = object : BrowseSource {
             override fun roots() = flowOf(listOf(RootDto("audiobooks", "Audiobooks")))
@@ -247,8 +262,19 @@ private fun fakeRuntime(
                 BrowseDto(rootId, path, emptyList()),
             )
 
-            override fun searchFolders(rootId: String, query: String) =
-                flowOf(FolderSearchDto(rootId, query, emptyList()))
+            override fun searchRaw(rootId: String, query: String, cursor: String?) =
+                flowOf(
+                    RawSearchPageDto(
+                        rootId = rootId,
+                        query = query,
+                        snapshot = SearchSnapshotDto(
+                            rootId = rootId,
+                            scanRunId = "22222222-2222-4222-8222-222222222222",
+                            completedAt = "2026-08-08T00:00:00Z",
+                        ),
+                        entries = emptyList(),
+                    ),
+                )
 
             override fun bookFiles(bookId: String) = flowOf(TEST_FILES.copy(bookId = bookId))
         },

@@ -345,9 +345,12 @@ private fun page(
     groups: List<BookSearchGroupDto> = emptyList(),
     snapshots: List<SearchSnapshotDto> = emptyList(),
 ) = PagedBooks(
-    items = if (groups.isEmpty()) books.toList() else groups.flatMap(BookSearchGroupDto::books),
+    groups = if (groups.isEmpty()) books.map { group(it.id, it) } else groups,
+    snapshots = if (snapshots.isEmpty()) {
+        books.map(BookCardDto::rootId).distinct().map(::snapshot)
+    } else {
+        snapshots
+    },
     nextCursor = nextCursor,
     filters = CatalogFiltersDto(genres = listOf("Science Fiction")),
-    groups = groups,
-    snapshots = snapshots,
 )
