@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [string] $Address = $env:BOOKBOX_BIND_ADDRESS,
-    [int] $Port = $(if ($env:BOOKBOX_HOST_PORT) { [int]$env:BOOKBOX_HOST_PORT } else { 8787 }),
+    [string] $Address,
+    [Nullable[int]] $Port,
     [string] $DiscoveryExecutable,
     [string] $StateDirectory,
     [string] $ComposeFile
@@ -12,6 +12,29 @@ Set-StrictMode -Version Latest
 
 $deployRoot = Split-Path -Parent $PSScriptRoot
 $repoRoot = Split-Path -Parent $deployRoot
+. (Join-Path $PSScriptRoot 'startup-environment.ps1')
+$needsStartupEnvironment = (
+    (-not $PSBoundParameters.ContainsKey('Address') -and -not $env:BOOKBOX_BIND_ADDRESS) -or
+    (-not $PSBoundParameters.ContainsKey('Port') -and -not $env:BOOKBOX_HOST_PORT)
+)
+$startupEnvironment = $null
+if ($needsStartupEnvironment) {
+    $startupEnvironment = Read-BookBoxStartupEnvironment -Path (Join-Path $deployRoot '.env')
+}
+if (-not $PSBoundParameters.ContainsKey('Address')) {
+    $Address = if ($env:BOOKBOX_BIND_ADDRESS) {
+        $env:BOOKBOX_BIND_ADDRESS
+    } else {
+        $startupEnvironment.Address
+    }
+}
+if (-not $PSBoundParameters.ContainsKey('Port')) {
+    $Port = if ($env:BOOKBOX_HOST_PORT) {
+        [int]$env:BOOKBOX_HOST_PORT
+    } else {
+        $startupEnvironment.Port
+    }
+}
 if (-not $ComposeFile) {
     $ComposeFile = Join-Path $deployRoot 'compose.yml'
 }

@@ -53,6 +53,7 @@ $installedStartScript = Join-Path $scriptsDirectory 'start-bookbox.ps1'
 $manifestPath = Join-Path $installRoot 'bookbox-install.json'
 $managedScripts = @(
     'start-bookbox.ps1',
+    'startup-environment.ps1',
     'stop-bookbox.ps1',
     'discovery-process.ps1',
     'discovery-supervisor.ps1',
