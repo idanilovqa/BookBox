@@ -401,29 +401,63 @@ database:
     }
 
     $books = $null
+    $booksFile = Join-Path $scratch 'books-search.json'
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
-        $booksBody = @(
-            & curl.exe --fail --silent --show-error `
+        $statusCode = @(
+            & curl.exe --silent --show-error `
+                --output $booksFile `
+                --write-out '%{http_code}' `
                 --header "Authorization: Bearer $accessToken" `
                 "http://${bindAddress}:$port/v1/books?limit=10"
-        )
-        if ($LASTEXITCODE -ne 0) {
-            throw 'The authenticated catalog request failed.'
+        ) -join ''
+        if ($LASTEXITCODE -ne 0 -or $statusCode -notin @('200', '503')) {
+            throw 'The authenticated catalog request returned an unexpected status.'
         }
-        $books = ($booksBody -join '') | ConvertFrom-Json
-        if (@($books.items).Count -gt 0) {
+        if ($statusCode -eq '503') {
+            Start-Sleep -Seconds 1
+            continue
+        }
+        $books = Get-Content -Raw -LiteralPath $booksFile | ConvertFrom-Json
+        if (@($books.groups).Count -gt 0) {
             break
         }
         Start-Sleep -Seconds 1
     }
-    if (@($books.items).Count -ne 1) {
+    if (@($books.groups).Count -ne 1 -or @($books.groups[0].books).Count -ne 1) {
         $workerLogs = Invoke-Docker ($composeArgs + @(
             'logs', '--no-color', 'bookbox-catalog-worker'
         ))
         throw "The startup scan did not index exactly one audiobook:`n$($workerLogs -join [Environment]::NewLine)"
     }
-    if ($books.items[0].sourceFolder -ne 'Author/Book') {
-        throw "The indexed audiobook has an unexpected source folder: $($books.items[0].sourceFolder)"
+    if ($books.groups[0].books[0].sourceFolder -ne 'Author/Book') {
+        throw 'The indexed audiobook has an unexpected relative source folder.'
+    }
+    if (@($books.snapshots).Count -ne 1 -or
+        $books.snapshots[0].rootId -ne 'audiobooks') {
+        throw 'The audiobook search response has an invalid snapshot shape.'
+    }
+    $rawBody = @(
+        & curl.exe --fail --silent --show-error `
+            --header "Authorization: Bearer $accessToken" `
+            "http://${bindAddress}:$port/v1/browse/search?root=audiobooks&q=chapter&limit=10"
+    )
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The authenticated raw catalog-search request failed.'
+    }
+    $raw = ($rawBody -join '') | ConvertFrom-Json
+    $rawFiles = @($raw.entries | Where-Object {
+        $_.kind -eq 'file' -and $_.name -eq 'chapter.m4a'
+    })
+    if ($raw.rootId -ne 'audiobooks' -or
+        $raw.snapshot.rootId -ne 'audiobooks' -or
+        $rawFiles.Count -ne 1) {
+        throw 'The raw search response has an invalid root, snapshot, or entry shape.'
+    }
+    foreach ($searchResponse in @($books, $raw)) {
+        $searchJson = $searchResponse | ConvertTo-Json -Depth 20 -Compress
+        if ($searchJson -match '(?i)([a-z]:[\\/]|/library/|\\\\[^\\]+\\)') {
+            throw 'An indexed-search smoke response exposed a private source path.'
+        }
     }
 
     $after = Get-SourceSnapshot $library

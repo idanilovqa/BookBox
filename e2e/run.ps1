@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [ValidateRange(60, 1800)]
-    [int] $TimeoutSeconds = 600
+    [int] $TimeoutSeconds = 600,
+    [switch] $CatalogSearchOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,6 +27,7 @@ $config = Join-Path $taskRoot 'config.yml'
 $environmentFile = Join-Path $taskRoot 'compose.env'
 $sourceBefore = Join-Path $taskRoot 'source-before.json'
 $sourceAfter = Join-Path $taskRoot 'source-after.json'
+$sourceExpected = Join-Path $taskRoot 'source-expected.json'
 $ownedProcessIds = [Collections.Generic.List[int]]::new()
 $ownedLongLivedProcessIds = [Collections.Generic.List[int]]::new()
 $taskPorts = [Collections.Generic.List[int]]::new()
@@ -43,6 +45,7 @@ $composeArgs = @(
 $username = 'owner'
 $password = 'bookbox-e2e-password'
 $primaryFailure = $null
+$focusedCatalogSearchComplete = $false
 $adbInvocationID = 0
 
 function Write-Utf8 {
@@ -474,9 +477,21 @@ foreach ($port in @(18787, 18474)) {
 try {
     $null = New-Item -ItemType Directory -Path `
         $library, $secrets, $logs -Force
-    $normal = Join-Path $library 'Author One\Normal Book'
-    $shared = Join-Path $library 'Author Two\Shared Folder'
-    $null = New-Item -ItemType Directory -Path $normal, $shared -Force
+    $primaryLibrary = Join-Path $library 'primary'
+    $archiveLibrary = Join-Path $library 'archive'
+    $normal = Join-Path $primaryLibrary 'Author One\Normal Book'
+    $shared = Join-Path $primaryLibrary 'Author Two\Shared Folder'
+    $copyOne = Join-Path $primaryLibrary 'Frank Herbert\Needlebox Copy One'
+    $copyTwo = Join-Path $primaryLibrary 'Frank Herbert\Needlebox Copy Two'
+    $otherNarrator = Join-Path $primaryLibrary 'Frank Herbert\Needlebox Other Narrator'
+    $longRecording = Join-Path $primaryLibrary 'Frank Herbert\Needlebox Long Recording'
+    $nested = Join-Path $primaryLibrary 'Needlebox Nested\Needlebox Assets'
+    $emptyFolder = Join-Path $primaryLibrary 'Empty Folder'
+    $archiveBook = Join-Path $archiveLibrary 'Archive Author\Archive Needlebox'
+    $null = New-Item -ItemType Directory -Path `
+        $normal, $shared, $copyOne, $copyTwo, $otherNarrator, $longRecording, $nested,
+        $emptyFolder, $archiveBook -Force
+    Write-Utf8 -Path (Join-Path $primaryLibrary 'notes.txt') -Value 'not catalog content'
 
     $composePath = {
         param([string] $Path)
@@ -497,6 +512,7 @@ try {
         "BOOKBOX_TEST_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $composePath (Join-Path $secrets 'google_books_key.txt'))"
         'BOOKBOX_BIND_ADDRESS=127.0.0.1'
         'BOOKBOX_HOST_PORT=18787'
+        'BOOKBOX_TEST_SCAN_INTERVAL=6h'
     ) -join [Environment]::NewLine
     # Create this before any fallible fixture setup so finally cleanup can
     # always resolve the unique Compose project and remove the task root.
@@ -507,7 +523,10 @@ listen: ":8787"
 roots:
   - id: audiobooks
     name: Audiobooks
-    container_path: /library/audiobooks
+    container_path: /library/audiobooks/primary
+  - id: archive
+    name: Archive
+    container_path: /library/audiobooks/archive
 auth:
   username: owner
   password_hash_file: /run/bookbox-secrets/app_password_hash
@@ -574,24 +593,52 @@ database:
     Invoke-DockerChecked ($ffmpegBase + @(
         '-metadata', 'title=Normal Book',
         '-metadata', 'artist=Author One',
-        '/library/audiobooks/Author One/Normal Book/chapter01.mp3'
+        '/library/audiobooks/primary/Author One/Normal Book/chapter01.mp3'
     )) | Out-Null
     Invoke-DockerChecked ($ffmpegBase + @(
         '-metadata', 'title=Normal Book',
         '-metadata', 'artist=Author One',
-        '/library/audiobooks/Author One/Normal Book/chapter02.mp3'
+        '/library/audiobooks/primary/Author One/Normal Book/chapter02.mp3'
     )) | Out-Null
     Invoke-DockerChecked ($ffmpegBase + @(
         '-c:a', 'aac',
         '-metadata', 'title=Dune',
         '-metadata', 'artist=Frank Herbert',
-        '/library/audiobooks/Author Two/Shared Folder/Dune.m4b'
+        '/library/audiobooks/primary/Author Two/Shared Folder/Dune.m4b'
     )) | Out-Null
     Invoke-DockerChecked ($ffmpegBase + @(
         '-c:a', 'aac',
         '-metadata', 'title=Dune Messiah',
         '-metadata', 'artist=Frank Herbert',
-        '/library/audiobooks/Author Two/Shared Folder/Dune Messiah.m4b'
+        '/library/audiobooks/primary/Author Two/Shared Folder/Dune Messiah.m4b'
+    )) | Out-Null
+    foreach ($fixture in @(
+        @{ Path = '/library/audiobooks/primary/Frank Herbert/Needlebox Copy One/Needlebox.m4b'; Narrator = 'Shared Narrator' }
+        @{ Path = '/library/audiobooks/primary/Frank Herbert/Needlebox Copy Two/Needlebox.m4b'; Narrator = 'Shared Narrator' }
+        @{ Path = '/library/audiobooks/primary/Frank Herbert/Needlebox Other Narrator/Needlebox.m4b'; Narrator = 'Other Narrator' }
+        @{ Path = '/library/audiobooks/archive/Archive Author/Archive Needlebox/Needlebox Archive.m4b'; Narrator = 'Archive Narrator' }
+    )) {
+        Invoke-DockerChecked ($ffmpegBase + @(
+            '-c:a', 'aac',
+            '-movflags', 'use_metadata_tags',
+            '-metadata', 'title=Needlebox',
+            '-metadata', 'artist=Frank Herbert',
+            '-metadata', "narrator=$($fixture.Narrator)",
+            $fixture.Path
+        )) | Out-Null
+    }
+    Invoke-DockerChecked ($composeArgs + @(
+        'run', '--rm', '--no-deps', '--entrypoint', 'ffmpeg',
+        'bookbox-catalog-worker',
+        '-hide_banner', '-loglevel', 'error',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100',
+        '-t', '180', '-b:a', '96k',
+        '-c:a', 'aac',
+        '-movflags', 'use_metadata_tags',
+        '-metadata', 'title=Needlebox',
+        '-metadata', 'artist=Frank Herbert',
+        '-metadata', 'narrator=Shared Narrator',
+        '/library/audiobooks/primary/Frank Herbert/Needlebox Long Recording/Needlebox.m4b'
     )) | Out-Null
     $imageBase = $composeArgs + @(
         'run', '--rm', '--no-deps', '--entrypoint', 'ffmpeg',
@@ -601,12 +648,17 @@ database:
     Invoke-DockerChecked ($imageBase + @(
         '-f', 'lavfi', '-i', 'color=c=navy:s=1200x1200:d=0.1',
         '-frames:v', '1', '-y',
-        '/library/audiobooks/Author One/Normal Book/cover.jpg'
+        '/library/audiobooks/primary/Author One/Normal Book/cover.jpg'
     )) | Out-Null
     Invoke-DockerChecked ($imageBase + @(
         '-f', 'lavfi', '-i', 'color=c=gray:s=64x64:d=0.1',
         '-frames:v', '1', '-y',
-        '/library/audiobooks/Author Two/Shared Folder/folder.jpg'
+        '/library/audiobooks/primary/Author Two/Shared Folder/folder.jpg'
+    )) | Out-Null
+    Invoke-DockerChecked ($imageBase + @(
+        '-f', 'lavfi', '-i', 'color=c=green:s=128x128:d=0.1',
+        '-frames:v', '1', '-y',
+        '/library/audiobooks/primary/Needlebox Nested/Needlebox Assets/cover.jpg'
     )) | Out-Null
 
     $providerFixtureText = @(
@@ -649,6 +701,95 @@ database:
         -TimeoutSeconds 180
     Assert-ApiVersion
 
+    $catalogSearchTest = Join-Path $PSScriptRoot 'tests\catalog-search.tests.ps1'
+    $initialSearch = @(& $catalogSearchTest `
+        -HarnessInvocation `
+        -BaseUrl 'http://127.0.0.1:18787' `
+        -Username $username `
+        -Password $password `
+        -RootIds @('audiobooks', 'archive') `
+        -RawRootId 'audiobooks' `
+        -TimeoutSeconds ([Math]::Min($TimeoutSeconds, 180))) |
+        Where-Object { $_.PSObject.Properties.Name -contains 'RawCompletedAt' } |
+        Select-Object -Last 1
+    if ($null -eq $initialSearch) {
+        throw 'Initial catalog-search E2E did not return its sanitized result summary.'
+    }
+
+    # Prove both request paths use PostgreSQL after publication. Stop the only
+    # source reader, temporarily withdraw the two disposable configured roots,
+    # and restore them exactly even when an assertion fails.
+    Invoke-DockerChecked ($composeArgs + @('stop', 'bookbox-catalog-worker')) | Out-Null
+    $withdrawn = Join-Path $taskRoot 'withdrawn-library'
+    $null = New-Item -ItemType Directory -Path $withdrawn -Force
+    try {
+        Move-Item -LiteralPath $primaryLibrary -Destination $withdrawn
+        Move-Item -LiteralPath $archiveLibrary -Destination $withdrawn
+        $null = & $catalogSearchTest `
+            -HarnessInvocation `
+            -BaseUrl 'http://127.0.0.1:18787' `
+            -Username $username `
+            -Password $password `
+            -RootIds @('audiobooks', 'archive') `
+            -RawRootId 'audiobooks' `
+            -TimeoutSeconds 30
+    } finally {
+        foreach ($rootName in @('primary', 'archive')) {
+            $withdrawnRoot = Join-Path $withdrawn $rootName
+            if (Test-Path -LiteralPath $withdrawnRoot) {
+                Move-Item -LiteralPath $withdrawnRoot -Destination $library
+            }
+        }
+    }
+    Invoke-DockerChecked ($composeArgs + @(
+        'up', '--detach', '--wait', '--wait-timeout', '180',
+        'bookbox-catalog-worker'
+    )) | Out-Null
+
+    # Startup reconciliation may publish once. Establish that baseline before
+    # creating a new file, then require fsnotify to beat the six-hour fallback.
+    $postRestartSearch = @(& $catalogSearchTest `
+        -HarnessInvocation `
+        -BaseUrl 'http://127.0.0.1:18787' `
+        -Username $username `
+        -Password $password `
+        -RootIds @('audiobooks', 'archive') `
+        -RawRootId 'audiobooks' `
+        -PreviousCompletedAt $initialSearch.RawCompletedAt `
+        -TimeoutSeconds ([Math]::Min($TimeoutSeconds, 180))) |
+        Where-Object { $_.PSObject.Properties.Name -contains 'RawCompletedAt' } |
+        Select-Object -Last 1
+    if ($null -eq $postRestartSearch) {
+        throw 'Post-restart catalog-search baseline did not publish.'
+    }
+    $monitorFolder = Join-Path $primaryLibrary 'Monitor Trigger'
+    $null = New-Item -ItemType Directory -Path $monitorFolder -Force
+    Copy-Item `
+        -LiteralPath (Join-Path $normal 'chapter01.mp3') `
+        -Destination (Join-Path $monitorFolder 'Needlebox Watched.mp3')
+    $monitoredSearch = @(& $catalogSearchTest `
+        -HarnessInvocation `
+        -BaseUrl 'http://127.0.0.1:18787' `
+        -Username $username `
+        -Password $password `
+        -RootIds @('audiobooks', 'archive') `
+        -RawRootId 'audiobooks' `
+        -PreviousCompletedAt $postRestartSearch.RawCompletedAt `
+        -ExpectedRawRelativePath 'Monitor Trigger/Needlebox Watched.mp3' `
+        -TimeoutSeconds ([Math]::Min($TimeoutSeconds, 180))) |
+        Where-Object { $_.PSObject.Properties.Name -contains 'RawCompletedAt' } |
+        Select-Object -Last 1
+    if ($null -eq $monitoredSearch) {
+        throw 'Filesystem monitoring did not publish a changed search snapshot.'
+    }
+    & $manifestScript -Path $library -OutputPath $sourceExpected
+
+    if ($CatalogSearchOnly) {
+        Write-Output 'Focused catalog-search E2E passed.'
+        $focusedCatalogSearchComplete = $true
+    }
+
+    if (-not $focusedCatalogSearchComplete) {
     $localTooling = Join-Path $repoRoot '.tooling'
     $localJdk = Join-Path $localTooling 'jdk17\jdk-17.0.19+10'
     $localGradleHome = Join-Path $localTooling 'gradle-home'
@@ -823,10 +964,11 @@ database:
         -WorkingDirectory (Join-Path $repoRoot 'android')
 
     & $manifestScript -Path $library -OutputPath $sourceAfter
-    $beforeJson = Get-Content -Raw -LiteralPath $sourceBefore
+    $beforeJson = Get-Content -Raw -LiteralPath $sourceExpected
     $afterJson = Get-Content -Raw -LiteralPath $sourceAfter
     if ($beforeJson -cne $afterJson) {
         throw 'The synthetic Windows source tree changed during Android E2E.'
+    }
     }
 } catch {
     $primaryFailure = $_
@@ -854,4 +996,8 @@ database:
 if ($null -ne $primaryFailure) {
     throw $primaryFailure
 }
-Write-Output 'BookBox E2E passed; owned processes and ports are clean'
+if ($focusedCatalogSearchComplete) {
+    Write-Output 'Focused catalog-search E2E passed; owned processes and ports are clean'
+} else {
+    Write-Output 'BookBox E2E passed; owned processes and ports are clean'
+}

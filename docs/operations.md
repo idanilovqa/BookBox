@@ -74,7 +74,33 @@ The removal script validates its ownership manifest and refuses unrelated or mod
 
 ## Scan and metadata review
 
-The worker scans configured roots at startup and on its interval. Request a rescan from Android Settings after adding books. Provider failures do not remove local metadata. An empty Google Books key disables Google Books while Open Library remains available.
+The worker scans configured roots at startup, coalesces filesystem changes for
+five seconds per root, and keeps a six-hour fallback scan. A create, write,
+rename, or remove event normally publishes a fresh PostgreSQL search snapshot;
+the fallback covers missed watcher events. Request a rescan from Android
+Settings if freshness does not advance after a change. Provider failures do not
+remove local metadata. An empty Google Books key disables Google Books while
+Open Library remains available.
+
+Both audiobook and raw search are served entirely from the last completed
+PostgreSQL projection; API requests do not read the source mount. Audiobook
+search may span multiple roots, while raw search is confined to its selected
+root. HTTP 503 `search_index_building` is expected before a root's first
+successful projection. A failed refresh keeps the older snapshot queryable, so
+the app can label retained results stale instead of clearing them.
+
+To request a manual refresh outside Android, authenticate and send:
+
+```http
+POST /v1/catalog/rescan
+Content-Type: application/json
+
+{"rootId":"audiobooks"}
+```
+
+Confirm freshness using the `completedAt` value in `/v1/books` `snapshots` or
+the `/v1/browse/search` `snapshot`. Do not inspect or expose host source paths
+when diagnosing search; use root IDs, scan-run IDs, and worker logs.
 
 Catalog corrections affect grouping and displayed metadata. The Android app cannot edit audio tags or rearrange Windows folders.
 

@@ -1,10 +1,32 @@
 # Audiobook catalog
 
-The catalog worker indexes configured roots when it starts and every six hours. It
-uses `ffprobe` to read audio metadata, groups audio files into books, queries
+The catalog worker indexes configured roots when it starts, after monitored
+filesystem changes, and every six hours as a fallback. It uses `ffprobe` to read audio metadata, groups audio files into books, queries
 Open Library (and optionally Google Books), and publishes a confirmed cover only
 when it is a material improvement. PostgreSQL stores the catalog, jobs, review
 decisions, and cover audit events.
+
+## Indexed library search
+
+After a successful scan, the worker atomically publishes one PostgreSQL search
+snapshot for that root. Audiobook search can combine multiple configured roots;
+each response names every root snapshot used. Raw search intentionally accepts
+one selected root and returns recognized audio files, recognized cover images,
+and their nonempty ancestor folders. Neither request path walks or reads a
+configured source root. If publication fails, PostgreSQL retains the previous
+completed snapshot.
+
+Search normalizes Unicode text and ignores case, whitespace, punctuation, and
+other symbols. Text queries require at least two Unicode letters or digits.
+Audiobook results preserve the catalog's author, genre, review-state, year, and
+sort filters. Cursors are opaque and bound to the exact query and snapshots.
+
+Two recordings form a duplicate group only when normalized title, sorted author
+identity, and nonempty sorted narrator identity match and their durations differ
+by no more than the smaller of five minutes and the larger of two minutes or
+0.5 percent of the longer recording. Duplicate groups never cross roots. A raw
+file or ancestor associated with such a recording is marked as duplicate;
+another narrator remains a separate audiobook.
 
 The Android app and API remain source-read-only. They can browse, search,
 download, request a scan, and confirm a metadata match. Only the isolated worker
@@ -13,7 +35,9 @@ image extension). It never edits tags, audio files, names, or directory layout.
 
 ## Scan status and manual scans
 
-The worker logs scan failures without exposing host paths. A failed or partial
+The worker coalesces create, write, rename, and remove events for five seconds
+per root before scheduling a scan. The six-hour scan remains a fallback for
+missed or unsupported watcher events. The worker logs scan failures without exposing host paths. A failed or partial
 filesystem walk does not replace the previous inferred catalog. Jobs use
 15-minute leases, bounded retries, and stale-lease recovery.
 
@@ -29,6 +53,11 @@ Content-Type: application/json
 The API returns `202 Accepted` with the deduplicated job ID. Startup and periodic
 jobs use the same deduplication key, so concurrent requests do not run duplicate
 scans for one root.
+
+Before the first successful scan, search returns HTTP 503 with
+`search_index_building`. Clients should keep retained results when a later
+refresh is pending or fails; operators can use the manual rescan endpoint above
+without clearing the last completed projection.
 
 ## Review states and provider attribution
 

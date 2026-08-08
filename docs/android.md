@@ -32,7 +32,24 @@ BookBox stores access to that document tree. It does not request broad storage p
 
 **Audiobooks** shows catalog cards with available covers and metadata. **Raw folders** shows the configured Windows roots, folders, and files. Both views use the server's read-only API.
 
-Use **Search raw folders** to find nested folders by their full path. Search ignores case, spaces, punctuation, and other symbols, so `black box` also matches names such as `Black.Box` and `blackbox`.
+Use the search field in **Audiobooks** to search titles, authors, series,
+narrators, filenames, and other indexed catalog metadata across every configured
+root. Recordings with the same normalized title, authors, and nonempty
+narrators appear in a collapsible duplicate group when their durations are
+close enough. Copies with another narrator remain separate.
+
+Use **Search raw folders** to find recognized audio files, cover images, and
+their ancestor folders within the selected root. Unrelated and empty content is
+not included. Search ignores case, spaces, punctuation, and other symbols, so
+`black box` also matches names such as `Black.Box` and `blackbox`. A raw file
+result opens its parent folder and highlights the matching row; duplicate
+recordings carry a **Duplicate book** badge.
+
+BookBox waits 150 milliseconds after typing and submits text search only after
+it contains at least two Unicode letters or digits. Existing results stay on
+screen while a replacement query loads. **Search index is building** means that
+the selected root has not completed its first projection; a failed later scan
+leaves the previous results visible as stale data until a successful refresh.
 
 To copy:
 

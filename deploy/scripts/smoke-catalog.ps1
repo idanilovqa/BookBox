@@ -52,11 +52,13 @@ if ($dockerfileText -match '(?m)^EXPOSE\s') {
 
 # smoke-server starts the complete Compose project, including PostgreSQL, API,
 # and the catalog worker. Its task-scoped library snapshot proves that startup
-# indexing does not alter audio/source files, and its finally block removes the
-# exact Compose project, volumes, image, and temporary directory.
+# indexing does not alter audio/source files. The server smoke also exercises
+# the audiobook and raw indexed-search response shapes, authentication, and
+# source-path confidentiality. Its finally block removes the exact Compose
+# project, volumes, image, and temporary directory.
 & $serverSmoke
 if (-not $?) {
     throw 'The catalog startup smoke failed.'
 }
 
-Write-Host 'PASS: catalog worker image and Compose isolation passed; startup scan preserved the source tree.'
+Write-Host 'PASS: catalog worker isolation and indexed-search smoke checks passed; startup scan preserved the source tree.'

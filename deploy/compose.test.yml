@@ -24,7 +24,7 @@ services:
 
   bookbox-catalog-worker:
     environment:
-      BOOKBOX_SCAN_INTERVAL: 5s
+      BOOKBOX_SCAN_INTERVAL: "${BOOKBOX_TEST_SCAN_INTERVAL:-5s}"
       BOOKBOX_OPENLIBRARY_BASE_URL: "${BOOKBOX_TEST_OPENLIBRARY_URL:-http://provider-fixtures:8080/openlibrary}"
       BOOKBOX_GOOGLE_BOOKS_BASE_URL: "${BOOKBOX_TEST_GOOGLE_BOOKS_URL:-http://provider-fixtures:8080/googlebooks}"
     volumes:
