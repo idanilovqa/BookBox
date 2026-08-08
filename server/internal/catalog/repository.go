@@ -14,12 +14,13 @@ import (
 )
 
 var (
-	ErrNotFound    = errors.New("catalog record not found")
-	ErrNoJob       = errors.New("no worker job is ready")
-	ErrInvalidPath = errors.New("invalid relative path")
-	ErrInvalidData = errors.New("invalid catalog data")
-	ErrInvalidPage = errors.New("invalid catalog page")
-	ErrConflict    = errors.New("catalog state conflict")
+	ErrNotFound            = errors.New("catalog record not found")
+	ErrNoJob               = errors.New("no worker job is ready")
+	ErrInvalidPath         = errors.New("invalid relative path")
+	ErrInvalidData         = errors.New("invalid catalog data")
+	ErrInvalidPage         = errors.New("invalid catalog page")
+	ErrConflict            = errors.New("catalog state conflict")
+	ErrSearchIndexBuilding = errors.New("search index is building")
 )
 
 var windowsDrivePath = regexp.MustCompile(`^[A-Za-z]:/`)
@@ -30,6 +31,8 @@ type Repository interface {
 	UpsertSourceFiles(context.Context, uuid.UUID, []SourceFile) error
 	FinishScan(context.Context, uuid.UUID, ScanResult) error
 	ReplaceInferredBooks(context.Context, string, []InferredBook) error
+	FinalizeSuccessfulScan(context.Context, uuid.UUID, []InferredBook) error
+	SearchLibrary(context.Context, SearchQuery) (SearchPage, error)
 	ListBooks(context.Context, BookQuery) (Page[Book], error)
 	ListCatalogFilters(context.Context) (FilterSnapshot, error)
 	GetBook(context.Context, uuid.UUID) (BookDetail, error)

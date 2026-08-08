@@ -325,6 +325,21 @@ func (repository *PostgresRepository) ReplaceInferredBooks(
 		return fmt.Errorf("begin inferred book replacement: %w", err)
 	}
 	defer transaction.Rollback(ctx)
+	if err := replaceInferredBooksTx(ctx, transaction, rootID, inferred); err != nil {
+		return err
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return fmt.Errorf("commit inferred book replacement: %w", err)
+	}
+	return nil
+}
+
+func replaceInferredBooksTx(
+	ctx context.Context,
+	transaction pgx.Tx,
+	rootID string,
+	inferred []InferredBook,
+) error {
 	var rootExists bool
 	if err := transaction.QueryRow(
 		ctx,
@@ -465,9 +480,6 @@ func (repository *PostgresRepository) ReplaceInferredBooks(
 		); err != nil {
 			return err
 		}
-	}
-	if err := transaction.Commit(ctx); err != nil {
-		return fmt.Errorf("commit inferred book replacement: %w", err)
 	}
 	return nil
 }

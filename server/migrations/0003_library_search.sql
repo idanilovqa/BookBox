@@ -105,6 +105,14 @@ create index library_search_documents_page
 create index library_search_documents_root_filter
     on library_search_documents(root_id)
     where entity_kind = 'audiobook';
+create index library_search_documents_audiobook_group
+    on library_search_documents(
+        root_id,
+        (coalesce(duplicate_group_id, document_id))
+    ) where entity_kind = 'audiobook';
+create index library_search_documents_duplicate_group
+    on library_search_documents(root_id, duplicate_group_id)
+    where entity_kind = 'audiobook' and duplicate_group_id is not null;
 create index library_search_documents_review_filter
     on library_search_documents(review_state)
     where entity_kind = 'audiobook';
@@ -113,26 +121,41 @@ create index library_search_documents_year_filter
     where entity_kind = 'audiobook';
 create index library_search_documents_title_sort
     on library_search_documents(
+        root_id,
         lower(title),
+        compact_name,
+        relative_path,
         document_id
-    ) where entity_kind = 'audiobook';
+    ) where entity_kind = 'audiobook' and duplicate_group_id is null;
 create index library_search_documents_author_sort
     on library_search_documents(
+        root_id,
         lower(coalesce(authors[1], '')),
+        compact_name,
+        relative_path,
         document_id
-    ) where entity_kind = 'audiobook';
+    ) where entity_kind = 'audiobook' and duplicate_group_id is null;
 create index library_search_documents_year_sort
     on library_search_documents(
+        root_id,
         coalesce(publication_year, -2147483648) desc,
-        document_id desc
-    ) where entity_kind = 'audiobook';
+        compact_name,
+        relative_path,
+        document_id
+    ) where entity_kind = 'audiobook' and duplicate_group_id is null;
 create index library_search_documents_added_sort
     on library_search_documents(
-        created_at desc,
-        document_id desc
-    ) where entity_kind = 'audiobook';
+        root_id,
+        coalesce(created_at, 'epoch'::timestamptz) desc,
+        compact_name,
+        relative_path,
+        document_id
+    ) where entity_kind = 'audiobook' and duplicate_group_id is null;
 create index library_search_documents_scanned_sort
     on library_search_documents(
+        root_id,
         coalesce(recently_scanned_at, 'epoch'::timestamptz) desc,
-        document_id desc
-    ) where entity_kind = 'audiobook';
+        compact_name,
+        relative_path,
+        document_id
+    ) where entity_kind = 'audiobook' and duplicate_group_id is null;

@@ -158,6 +158,8 @@ func TestMigrateCreatesIndexedLibrarySearchProjection(t *testing.T) {
 		"library_search_documents_trgm",
 		"library_search_documents_grams",
 		"library_search_documents_page",
+		"library_search_documents_audiobook_group",
+		"library_search_documents_duplicate_group",
 		"library_search_documents_review_filter",
 	} {
 		var exists bool
@@ -314,14 +316,31 @@ func TestLibrarySearchProjectionIndexesEveryCatalogSortAndFilter(t *testing.T) {
 		"library_search_documents_root_filter":   "(root_id)",
 		"library_search_documents_review_filter": "(review_state)",
 		"library_search_documents_year_filter":   "(publication_year)",
-		"library_search_documents_title_sort":    "(lower(title), document_id)",
-		"library_search_documents_author_sort":   "(lower(COALESCE(authors[1], ''::text)), document_id)",
-		"library_search_documents_year_sort":     "(COALESCE(publication_year, '-2147483648'::integer) DESC, document_id DESC)",
-		"library_search_documents_added_sort":    "(created_at DESC, document_id DESC)",
-		"library_search_documents_scanned_sort":  "(COALESCE(recently_scanned_at, '1970-01-01 00:00:00+00'::timestamp with time zone) DESC, document_id DESC)",
 	} {
 		assertSearchIndex(t, pool, ctx, index, keys, "WHERE (entity_kind = 'audiobook'::text)")
 	}
+	for index, keys := range map[string]string{
+		"library_search_documents_title_sort":   "(root_id, lower(title), compact_name, relative_path, document_id)",
+		"library_search_documents_author_sort":  "(root_id, lower(COALESCE(authors[1], ''::text)), compact_name, relative_path, document_id)",
+		"library_search_documents_year_sort":    "(root_id, COALESCE(publication_year, '-2147483648'::integer) DESC, compact_name, relative_path, document_id)",
+		"library_search_documents_added_sort":   "(root_id, COALESCE(created_at, '1970-01-01 00:00:00+00'::timestamp with time zone) DESC, compact_name, relative_path, document_id)",
+		"library_search_documents_scanned_sort": "(root_id, COALESCE(recently_scanned_at, '1970-01-01 00:00:00+00'::timestamp with time zone) DESC, compact_name, relative_path, document_id)",
+	} {
+		assertSearchIndex(
+			t, pool, ctx, index, keys,
+			"entity_kind = 'audiobook'::text", "duplicate_group_id IS NULL",
+		)
+	}
+	assertSearchIndex(
+		t, pool, ctx, "library_search_documents_audiobook_group",
+		"(root_id, COALESCE(duplicate_group_id, document_id))",
+		"WHERE (entity_kind = 'audiobook'::text)",
+	)
+	assertSearchIndex(
+		t, pool, ctx, "library_search_documents_duplicate_group",
+		"(root_id, duplicate_group_id)",
+		"entity_kind = 'audiobook'::text", "duplicate_group_id IS NOT NULL",
+	)
 }
 
 func assertSearchIndex(

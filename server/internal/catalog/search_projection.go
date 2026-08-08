@@ -415,8 +415,10 @@ func prepareSearchDocument(document *SearchDocument) {
 	metadata = append(metadata, document.Narrators...)
 	metadata = append(metadata, document.Genres...)
 	document.CompactMetadata = searchCompact(strings.Join(metadata, " "))
-	document.SearchCompact = document.CompactName + document.CompactPath + document.CompactMetadata
-	document.SearchTerms = searchTokens(strings.Join(append([]string{document.DisplayName, document.RelativePath}, metadata...), " "))
+	indexed := append([]string{document.DisplayName, document.RelativePath}, document.Filenames...)
+	indexed = append(indexed, metadata...)
+	document.SearchCompact = searchCompact(strings.Join(indexed, " "))
+	document.SearchTerms = searchTokens(strings.Join(indexed, " "))
 	document.SearchGrams = searchGrams(document.SearchCompact)
 }
 
