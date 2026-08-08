@@ -53,9 +53,11 @@ create table library_search_documents (
     modified_at timestamptz,
     title text not null default '',
     authors text[] not null default '{}',
+    compact_authors text[] not null default '{}',
     series text not null default '',
     narrators text[] not null default '{}',
     genres text[] not null default '{}',
+    compact_genres text[] not null default '{}',
     review_state text,
     publication_year integer check (
         publication_year is null or publication_year between 1000 and 3000
@@ -86,8 +88,12 @@ create index library_search_documents_trgm
     on library_search_documents using gin (search_compact gin_trgm_ops);
 create index library_search_documents_grams
     on library_search_documents using gin (search_grams);
-create index library_search_documents_genres
-    on library_search_documents using gin (genres);
+create index library_search_documents_author_filter
+    on library_search_documents using gin (compact_authors)
+    where entity_kind = 'audiobook';
+create index library_search_documents_genre_filter
+    on library_search_documents using gin (compact_genres)
+    where entity_kind = 'audiobook';
 create index library_search_documents_page
     on library_search_documents(
         root_id,
@@ -96,12 +102,37 @@ create index library_search_documents_page
         relative_path,
         document_id
     );
-create index library_search_documents_filters
+create index library_search_documents_root_filter
+    on library_search_documents(root_id)
+    where entity_kind = 'audiobook';
+create index library_search_documents_review_filter
+    on library_search_documents(review_state)
+    where entity_kind = 'audiobook';
+create index library_search_documents_year_filter
+    on library_search_documents(publication_year)
+    where entity_kind = 'audiobook';
+create index library_search_documents_title_sort
     on library_search_documents(
-        root_id,
-        entity_kind,
-        review_state,
-        publication_year,
-        created_at,
-        recently_scanned_at
-    );
+        lower(title),
+        document_id
+    ) where entity_kind = 'audiobook';
+create index library_search_documents_author_sort
+    on library_search_documents(
+        lower(coalesce(authors[1], '')),
+        document_id
+    ) where entity_kind = 'audiobook';
+create index library_search_documents_year_sort
+    on library_search_documents(
+        coalesce(publication_year, -2147483648) desc,
+        document_id desc
+    ) where entity_kind = 'audiobook';
+create index library_search_documents_added_sort
+    on library_search_documents(
+        created_at desc,
+        document_id desc
+    ) where entity_kind = 'audiobook';
+create index library_search_documents_scanned_sort
+    on library_search_documents(
+        coalesce(recently_scanned_at, 'epoch'::timestamptz) desc,
+        document_id desc
+    ) where entity_kind = 'audiobook';

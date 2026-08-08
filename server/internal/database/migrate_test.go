@@ -3,11 +3,13 @@ package database
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"bookbox.local/server/internal/testpostgres"
 	"bookbox.local/server/migrations"
@@ -156,7 +158,7 @@ func TestMigrateCreatesIndexedLibrarySearchProjection(t *testing.T) {
 		"library_search_documents_trgm",
 		"library_search_documents_grams",
 		"library_search_documents_page",
-		"library_search_documents_filters",
+		"library_search_documents_review_filter",
 	} {
 		var exists bool
 		if err := pool.QueryRow(ctx,
@@ -262,5 +264,86 @@ func TestLibrarySearchDocumentsRejectCrossRootBook(t *testing.T) {
 		)
 	`, uuid.New(), bookID); err == nil {
 		t.Fatal("library_search_documents accepted a book belonging to another root")
+	}
+}
+
+func TestLibrarySearchProjectionStoresNormalizedCatalogFilters(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, column := range []string{"compact_authors", "compact_genres"} {
+		var dataType string
+		var nullable string
+		if err := pool.QueryRow(ctx, `
+			select data_type, is_nullable
+			from information_schema.columns
+			where table_schema = 'public'
+			  and table_name = 'library_search_documents'
+			  and column_name = $1
+		`, column).Scan(&dataType, &nullable); err != nil {
+			t.Fatalf("column %s: %v", column, err)
+		}
+		if dataType != "ARRAY" || nullable != "NO" {
+			t.Fatalf("column %s data_type=%q nullable=%q", column, dataType, nullable)
+		}
+	}
+
+	for _, index := range []string{
+		"library_search_documents_author_filter",
+		"library_search_documents_genre_filter",
+	} {
+		assertSearchIndex(
+			t, pool, ctx, index,
+			"USING gin (compact_",
+			"WHERE (entity_kind = 'audiobook'::text)",
+		)
+	}
+}
+
+func TestLibrarySearchProjectionIndexesEveryCatalogSortAndFilter(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	for index, keys := range map[string]string{
+		"library_search_documents_root_filter":   "(root_id)",
+		"library_search_documents_review_filter": "(review_state)",
+		"library_search_documents_year_filter":   "(publication_year)",
+		"library_search_documents_title_sort":    "(lower(title), document_id)",
+		"library_search_documents_author_sort":   "(lower(COALESCE(authors[1], ''::text)), document_id)",
+		"library_search_documents_year_sort":     "(COALESCE(publication_year, '-2147483648'::integer) DESC, document_id DESC)",
+		"library_search_documents_added_sort":    "(created_at DESC, document_id DESC)",
+		"library_search_documents_scanned_sort":  "(COALESCE(recently_scanned_at, '1970-01-01 00:00:00+00'::timestamp with time zone) DESC, document_id DESC)",
+	} {
+		assertSearchIndex(t, pool, ctx, index, keys, "WHERE (entity_kind = 'audiobook'::text)")
+	}
+}
+
+func assertSearchIndex(
+	t *testing.T,
+	pool interface {
+		QueryRow(context.Context, string, ...any) pgx.Row
+	},
+	ctx context.Context,
+	index string,
+	wants ...string,
+) {
+	t.Helper()
+	var definition string
+	if err := pool.QueryRow(ctx, `
+		select coalesce(pg_get_indexdef(to_regclass('public.' || $1)), '')
+	`, index).
+		Scan(&definition); err != nil {
+		t.Fatalf("index %s: %v", index, err)
+	}
+	for _, want := range wants {
+		if !strings.Contains(definition, want) {
+			t.Fatalf("index %s definition=%q, want %q", index, definition, want)
+		}
 	}
 }
