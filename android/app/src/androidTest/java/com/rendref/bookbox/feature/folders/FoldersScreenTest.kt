@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import com.rendref.bookbox.core.model.BrowseEntryDto
+import com.rendref.bookbox.core.model.RawSearchEntryDto
 import com.rendref.bookbox.core.model.RootDto
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -95,12 +96,12 @@ class FoldersScreenTest {
                 FoldersScreen(
                     state = folderState.copy(
                         searchQuery = "black box",
-                        searchResults = listOf(
-                            BrowseEntryDto(
+						searchResults = listOf(
+                            RawSearchEntryDto(
+                                id = "00000000-0000-4000-8000-000000000001",
                                 name = "Black.Box",
                                 relativePath = "Author/Black.Box",
                                 kind = "folder",
-                                modifiedAt = "2026-07-29T00:00:00Z",
                             ),
                         ),
                     ),
@@ -125,10 +126,68 @@ class FoldersScreenTest {
     }
 
     @Test
+    fun rawSearchRendersFolderAndFileMetadataAndRoutesBothResults() {
+        val actions = mutableListOf<FolderAction>()
+        composeRule.setContent {
+            MaterialTheme {
+                FoldersScreen(
+                    state = folderState.copy(
+                        searchQuery = "dune",
+						searchHighlightedRelativePath = "Loose Files/Dune.m4b",
+                        searchResults = listOf(
+                            RawSearchEntryDto(
+                                id = "00000000-0000-4000-8000-000000000010",
+                                name = "Dune",
+                                relativePath = "Frank Herbert/Dune",
+                                kind = "folder",
+                                duplicateGroupId =
+                                    "00000000-0000-4000-8000-000000000012",
+                                duplicateBook = true,
+                            ),
+                            RawSearchEntryDto(
+                                id = "00000000-0000-4000-8000-000000000011",
+                                name = "Dune.m4b",
+                                relativePath = "Loose Files/Dune.m4b",
+                                kind = "file",
+                                size = 1_536,
+                                modifiedAt = "2026-08-08T12:00:00Z",
+                                bookId = "00000000-0000-4000-8000-000000000013",
+                                duplicateGroupId =
+                                    "00000000-0000-4000-8000-000000000012",
+                                duplicateBook = true,
+                            ),
+                        ),
+                    ),
+                    onAction = actions::add,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("FOLDER").assertIsDisplayed()
+		composeRule.onNodeWithText("AUDIO FILE").assertIsDisplayed()
+		composeRule.onNodeWithContentDescription("Highlighted search result").assertIsDisplayed()
+        composeRule.onNodeWithText("Frank Herbert/Dune").assertIsDisplayed()
+        composeRule.onNodeWithText("Loose Files/Dune.m4b").assertIsDisplayed()
+        composeRule.onNodeWithText("1.5 KB").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Duplicate book").assertCountEquals(2)
+
+        composeRule.onNodeWithText("Dune").performClick()
+        composeRule.onNodeWithText("Dune.m4b").performClick()
+
+        assertEquals(
+            listOf(
+                FolderAction.OpenSearchResult("Frank Herbert/Dune"),
+                FolderAction.OpenSearchResult("Loose Files/Dune.m4b"),
+            ),
+            actions,
+        )
+    }
+
+    @Test
     fun folderSearchShowsProgressEmptyAndErrorStates() {
         var state by mutableStateOf(
             folderState.copy(
-                searchQuery = "\uD801\uDC00",
+				searchQuery = "\uD801\uDC00\uD801\uDC01",
                 isSearching = true,
             ),
         )
@@ -146,7 +205,7 @@ class FoldersScreenTest {
         composeRule.runOnIdle {
             state = folderState.copy(searchQuery = "missing")
         }
-        composeRule.onNodeWithText("No matching folders.").assertIsDisplayed()
+		composeRule.onNodeWithText("No matching folders or files.").assertIsDisplayed()
 
         composeRule.runOnIdle {
             state = folderState.copy(

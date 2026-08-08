@@ -13,6 +13,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import com.rendref.bookbox.core.model.BookCardDto
+import com.rendref.bookbox.core.model.BookSearchGroupDto
+import com.rendref.bookbox.core.model.SearchSnapshotDto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -53,8 +55,8 @@ class LibraryScreenTest {
 
         assertEquals(
             listOf(
-                LibraryAction.ToggleSelected("b1"),
-                LibraryAction.ViewRawFiles("b1"),
+                LibraryAction.ToggleSelected(dune.id),
+                LibraryAction.ViewRawFiles(dune.id),
             ),
             actions,
         )
@@ -94,12 +96,113 @@ class LibraryScreenTest {
         composeRule.onNodeWithText("Dune").performClick()
 
         assertTrue(searches.last().contains("dune"))
-        assertEquals(LibraryAction.OpenBook("b1"), actions.last())
+        assertEquals(LibraryAction.OpenBook(dune.id), actions.last())
+    }
+
+    @Test
+    fun duplicateGroupStartsCollapsedExpandsAcrossRootsAndRoutesEachBook() {
+        val actions = mutableListOf<LibraryAction>()
+        composeRule.setContent {
+            MaterialTheme {
+                LibraryScreen(
+                    state = LibraryState(
+                        groups = listOf(
+                            BookSearchGroupDto(
+                                groupId = "00000000-0000-4000-8000-000000000010",
+                                duplicate = true,
+                                books = listOf(dune, alternateDune),
+                            ),
+                        ),
+                        selectedBookIds = setOf(dune.id),
+                    ),
+                    onSearchTextChange = {},
+                    onAction = actions::add,
+                    onAuthorChange = {},
+                    onGenreChange = {},
+                    onYearChange = {},
+                    onRootChange = {},
+                    onReviewStateChange = {},
+                    onSortChange = {},
+                    onLoadNextPage = {},
+                    onGridPositionChange = { _, _ -> },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("2 copies", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("primary").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(
+            "Dune, 2 copies, primary, 1 selected",
+        ).assertIsDisplayed()
+        composeRule.onAllNodesWithContentDescription(
+            "Select Dune from primary, Frank Herbert/Dune",
+        )
+            .assertCountEquals(0)
+        composeRule.onAllNodesWithText("Duplicate book").assertCountEquals(0)
+
+        composeRule.onNodeWithText("2 copies", substring = true).performClick()
+
+        composeRule.onAllNodesWithText("Duplicate book").assertCountEquals(2)
+        composeRule.onAllNodesWithText("Library: primary").assertCountEquals(2)
+        composeRule.onNodeWithContentDescription(
+            "Select Dune from primary, Frank Herbert/Dune",
+        )
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithContentDescription(
+            "Select Dune from primary, Alternate/Dune",
+        )
+            .assertIsDisplayed()
+            .performClick()
+
+        assertEquals(
+            listOf(
+                LibraryAction.ToggleSelected(dune.id),
+                LibraryAction.ToggleSelected(alternateDune.id),
+            ),
+            actions,
+        )
+    }
+
+    @Test
+    fun sameTitleSingletonsAcrossRootsShowRootIdentity() {
+        composeRule.setContent {
+            MaterialTheme {
+                LibraryScreen(
+                    state = LibraryState(
+                        groups = listOf(
+                            BookSearchGroupDto(dune.id, false, listOf(dune)),
+                            BookSearchGroupDto(archiveDune.id, false, listOf(archiveDune)),
+                        ),
+                        snapshots = listOf(archiveSnapshot, primarySnapshot),
+                    ),
+                    onSearchTextChange = {},
+                    onAction = {},
+                    onAuthorChange = {},
+                    onGenreChange = {},
+                    onYearChange = {},
+                    onRootChange = {},
+                    onReviewStateChange = {},
+                    onSortChange = {},
+                    onLoadNextPage = {},
+                    onGridPositionChange = { _, _ -> },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Library: primary").assertIsDisplayed()
+        composeRule.onNodeWithText("Library: archive").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(
+            "Select Dune from primary, Frank Herbert/Dune",
+        ).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(
+            "Select Dune from archive, Archive/Dune",
+        ).assertIsDisplayed()
     }
 }
 
 private val dune = BookCardDto(
-    id = "b1",
+    id = "00000000-0000-4000-8000-000000000030",
     title = "Dune",
     authors = listOf("Frank Herbert"),
     publicationYear = 1965,
@@ -109,6 +212,39 @@ private val dune = BookCardDto(
     coverUrl = null,
     reviewState = "confirmed",
     sourceFolder = "Frank Herbert/Dune",
+    rootId = "primary",
+)
+
+private val archiveDune = BookCardDto(
+    id = "00000000-0000-4000-8000-000000000031",
+    title = "Dune",
+    authors = listOf("Frank Herbert"),
+    publicationYear = 1965,
+    genres = listOf("Science Fiction"),
+    series = "Dune",
+    narrators = listOf("George Guidall"),
+    coverUrl = null,
+    reviewState = "confirmed",
+    sourceFolder = "Archive/Dune",
+    rootId = "archive",
+)
+
+private val alternateDune = archiveDune.copy(
+    id = "00000000-0000-4000-8000-000000000032",
+    rootId = "primary",
+    sourceFolder = "Alternate/Dune",
+)
+
+private val primarySnapshot = SearchSnapshotDto(
+    rootId = "primary",
+    scanRunId = "00000000-0000-4000-8000-000000000020",
+    completedAt = "2026-08-08T12:00:00Z",
+)
+
+private val archiveSnapshot = SearchSnapshotDto(
+    rootId = "archive",
+    scanRunId = "00000000-0000-4000-8000-000000000021",
+    completedAt = "2026-08-08T12:00:00Z",
 )
 
 private val forbiddenLabels = listOf(

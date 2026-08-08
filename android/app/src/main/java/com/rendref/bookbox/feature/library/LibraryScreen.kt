@@ -22,7 +22,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -31,13 +30,19 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.rendref.bookbox.core.model.BookSearchGroupDto
 import com.rendref.bookbox.core.repository.BookSort
+import com.rendref.bookbox.core.search.LibrarySearchField
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
@@ -58,6 +63,26 @@ fun LibraryScreen(
 ) {
     var filtersVisible by remember { mutableStateOf(false) }
     var sortVisible by remember { mutableStateOf(false) }
+    var expandedGroupIds by rememberSaveable {
+        mutableStateOf(arrayListOf<String>())
+    }
+    val displayedGroups = state.groups.ifEmpty {
+        state.books.map { book ->
+            BookSearchGroupDto(
+                groupId = book.id,
+                duplicate = false,
+                books = listOf(book),
+            )
+        }
+    }
+    val hasResults = displayedGroups.any { it.books.isNotEmpty() }
+    val displayedGroupIds = displayedGroups.map(BookSearchGroupDto::groupId).toSet()
+    LaunchedEffect(displayedGroupIds) {
+        val retained = expandedGroupIds.filterTo(arrayListOf()) {
+            it in displayedGroupIds
+        }
+        if (retained != expandedGroupIds) expandedGroupIds = retained
+    }
     val gridState = rememberLazyGridState(
         initialFirstVisibleItemIndex = state.scrollIndex,
         initialFirstVisibleItemScrollOffset = state.scrollOffset,
@@ -101,12 +126,11 @@ fun LibraryScreen(
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.SemiBold,
         )
-        OutlinedTextField(
+        LibrarySearchField(
             value = state.query.text,
+            label = "Search audiobooks",
+            isLoading = state.isLoading && hasResults,
             onValueChange = onSearchTextChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Search audiobooks") },
-            singleLine = true,
         )
         Row(
             modifier = Modifier
@@ -149,8 +173,24 @@ fun LibraryScreen(
         state.errorMessage?.let { message ->
             Text(
                 text = message,
-                modifier = Modifier.padding(bottom = 8.dp),
+                modifier = Modifier
+                    .padding(bottom = 8.dp)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
                 color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        if (state.isIndexBuilding) {
+            Text(
+                text = if (hasResults) {
+                    "Showing previous results while the search index updates."
+                } else {
+                    "The search index is building. Results will appear after the scan finishes."
+                },
+                modifier = Modifier
+                    .padding(bottom = 8.dp)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+                color = MaterialTheme.colorScheme.primary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
@@ -163,7 +203,7 @@ fun LibraryScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (state.isLoading && state.books.isEmpty()) {
+            if (state.isLoading && !hasResults) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Row(
                         modifier = Modifier
@@ -174,7 +214,7 @@ fun LibraryScreen(
                         CircularProgressIndicator()
                     }
                 }
-            } else if (state.books.isEmpty()) {
+            } else if (!state.isIndexBuilding && !hasResults) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Text(
                         text = "No audiobooks match these filters.",
@@ -184,15 +224,46 @@ fun LibraryScreen(
                 }
             }
             items(
-                count = state.books.size,
-                key = { index -> state.books[index].id },
+                count = displayedGroups.size,
+                key = { index ->
+                    val group = displayedGroups[index]
+                    if (group.duplicate) {
+                        "group:${group.groupId}"
+                    } else {
+                        "book:${group.books.firstOrNull()?.id ?: group.groupId}"
+                    }
+                },
+                span = { index ->
+                    if (displayedGroups[index].duplicate) {
+                        GridItemSpan(maxLineSpan)
+                    } else {
+                        GridItemSpan(1)
+                    }
+                },
             ) { index ->
-                val book = state.books[index]
-                AudiobookCard(
-                    book = book,
-                    selected = book.id in state.selectedBookIds,
-                    onAction = onAction,
-                )
+                val group = displayedGroups[index]
+                if (group.duplicate) {
+                    DuplicateBookGroupCard(
+                        group = group,
+                        expanded = group.groupId in expandedGroupIds,
+                        selectedBookIds = state.selectedBookIds,
+                        onExpandedChange = { expanded ->
+                            expandedGroupIds = ArrayList(expandedGroupIds).apply {
+                                if (expanded) add(group.groupId) else remove(group.groupId)
+                            }
+                        },
+                        onAction = onAction,
+                    )
+                } else {
+                    group.books.firstOrNull()?.let { book ->
+                        AudiobookCard(
+                            book = book,
+                            selected = book.id in state.selectedBookIds,
+                            onAction = onAction,
+                            showRoot = state.snapshots.size > 1,
+                        )
+                    }
+                }
             }
             if (state.isLoadingMore) {
                 item(span = { GridItemSpan(maxLineSpan) }) {

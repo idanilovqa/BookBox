@@ -45,11 +45,27 @@ fun AudiobookCard(
     selected: Boolean,
     onAction: (LibraryAction) -> Unit,
     modifier: Modifier = Modifier,
+    duplicate: Boolean = false,
+    showRoot: Boolean = false,
 ) {
+    val actionContext = if (showRoot) {
+        listOf(book.rootId, book.sourceFolder)
+            .filter(String::isNotBlank)
+            .joinToString(", ")
+            .takeIf(String::isNotEmpty)
+            ?.let { " from $it" }
+            .orEmpty()
+    } else {
+        ""
+    }
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .clickable { onAction(LibraryAction.OpenBook(book.id)) },
+            .clickable(
+                onClickLabel = "Open ${book.title}$actionContext",
+            ) {
+                onAction(LibraryAction.OpenBook(book.id))
+            },
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface,
@@ -60,7 +76,7 @@ fun AudiobookCard(
             Box {
                 AsyncImage(
                     model = book.coverUrl,
-                    contentDescription = "Cover of ${book.title}",
+                    contentDescription = "Cover of ${book.title}$actionContext",
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(0.68f)
@@ -86,7 +102,9 @@ fun AudiobookCard(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(4.dp)
-                        .semantics { contentDescription = "Select ${book.title}" },
+                        .semantics {
+                            contentDescription = "Select ${book.title}$actionContext"
+                        },
                 )
             }
 
@@ -134,6 +152,17 @@ fun AudiobookCard(
                 book.narrators.takeIf(List<String>::isNotEmpty)?.let { narrators ->
                     MetadataLine("Narrated by ${narrators.joinToString()}")
                 }
+                if (duplicate) {
+                    Text(
+                        text = "Duplicate book",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                if (showRoot && book.rootId.isNotBlank()) {
+                    MetadataLine("Library: ${book.rootId}")
+                }
             }
 
             Row(
@@ -144,6 +173,9 @@ fun AudiobookCard(
             ) {
                 TextButton(
                     onClick = { onAction(LibraryAction.ViewRawFiles(book.id)) },
+                    modifier = Modifier.semantics {
+                        contentDescription = "View raw files for ${book.title}$actionContext"
+                    },
                 ) {
                     Text("View raw files")
                 }

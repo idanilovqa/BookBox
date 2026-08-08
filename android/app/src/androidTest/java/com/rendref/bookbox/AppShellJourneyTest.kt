@@ -23,10 +23,12 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import com.rendref.bookbox.core.model.BookCardDto
+import com.rendref.bookbox.core.model.BookSearchGroupDto
 import com.rendref.bookbox.core.model.BookDetailDto
 import com.rendref.bookbox.core.model.BookFileDto
 import com.rendref.bookbox.core.model.BrowseEntryDto
 import com.rendref.bookbox.core.model.RootDto
+import com.rendref.bookbox.core.model.RawSearchEntryDto
 import com.rendref.bookbox.core.repository.BookQuery
 import com.rendref.bookbox.feature.book.BookDetailScreen
 import com.rendref.bookbox.feature.book.BookReviewAction
@@ -125,6 +127,23 @@ class AppShellJourneyTest {
         compose.onNodeWithText("Connect").performClick()
         compose.onNodeWithText("Audiobooks").assertIsDisplayed()
     }
+
+	@Test
+	fun duplicateChildOpensItsRawFileParentAndHighlightsTheFile() {
+		compose.setContent { MaterialTheme { DuplicateRawJourneyHarness() } }
+
+		compose.onNodeWithText("2 copies").performClick()
+		compose.onNodeWithContentDescription(
+			"Select Dune from archive, Alternate/Dune",
+		).performClick()
+		compose.onNodeWithText("1 selected").assertIsDisplayed()
+		compose.onNodeWithContentDescription(
+			"View raw files for Dune from archive, Alternate/Dune",
+		).performClick()
+		compose.onNodeWithText("Loose/Dune-alt.m4b").performClick()
+		compose.onNodeWithContentDescription("Highlighted search result").assertIsDisplayed()
+		compose.onNodeWithText("Opened file").assertIsDisplayed()
+	}
 }
 
 private enum class JourneyStage {
@@ -193,6 +212,7 @@ private fun JourneyHarness() {
                     state = LibraryState(
                         query = BookQuery(text = search),
                         books = listOf(BOOK),
+						groups = listOf(BookSearchGroupDto(BOOK.id, false, listOf(BOOK))),
                         selectedBookIds = if (selected) setOf(BOOK.id) else emptySet(),
                     ),
                     onSearchTextChange = { search = it },
@@ -263,6 +283,64 @@ private fun JourneyHarness() {
     }
 }
 
+@Composable
+private fun DuplicateRawJourneyHarness() {
+	var route by remember { mutableStateOf(AppRoute.Library) }
+	var selected by remember { mutableStateOf(emptySet<String>()) }
+	var folders by remember {
+		mutableStateOf(
+			FoldersState(
+				roots = listOf(RootDto("archive", "Archive")),
+				selectedRootId = "archive",
+				searchQuery = "dune",
+				searchResults = listOf(RAW_ALTERNATE),
+			),
+		)
+	}
+	when (route) {
+		AppRoute.Library -> LibraryScreen(
+			state = LibraryState(
+				groups = listOf(
+					BookSearchGroupDto(
+						DUPLICATE_GROUP_ID,
+						true,
+						listOf(ARCHIVE_BOOK, ALTERNATE_BOOK),
+					),
+				),
+				selectedBookIds = selected,
+			),
+			onSearchTextChange = {},
+			onAction = { action ->
+				when (action) {
+					is LibraryAction.ToggleSelected -> selected = selected + action.bookId
+					is LibraryAction.ViewRawFiles -> route = AppRoute.Folders
+					is LibraryAction.OpenBook -> Unit
+				}
+			},
+			onAuthorChange = {}, onGenreChange = {}, onYearChange = {}, onRootChange = {},
+			onReviewStateChange = {}, onSortChange = {}, onLoadNextPage = {},
+			onGridPositionChange = { _, _ -> },
+		)
+		AppRoute.Folders -> FoldersScreen(
+			state = folders,
+			onAction = { action ->
+				if (action is FolderAction.OpenSearchResult) {
+					folders = folders.copy(
+						searchQuery = "",
+						searchResults = emptyList(),
+						path = "Loose",
+						entries = listOf(
+							BrowseEntryDto("Dune-alt.m4b", action.relativePath, "file", 2_048, "2026-08-08T12:00:00Z"),
+						),
+						searchHighlightedRelativePath = action.relativePath,
+					)
+				}
+			},
+		)
+		else -> error("Unexpected route")
+	}
+}
+
 private val BOOK = BookCardDto(
     id = "11111111-1111-4111-8111-111111111111",
     title = "Dune",
@@ -271,6 +349,27 @@ private val BOOK = BookCardDto(
     genres = listOf("Science fiction"),
     reviewState = "confirmed",
     sourceFolder = "Frank Herbert/Dune",
+)
+
+private const val DUPLICATE_GROUP_ID = "55555555-5555-4555-8555-555555555555"
+
+private val ARCHIVE_BOOK = BOOK.copy(rootId = "archive")
+
+private val ALTERNATE_BOOK = ARCHIVE_BOOK.copy(
+	id = "66666666-6666-4666-8666-666666666666",
+	rootId = "archive",
+	sourceFolder = "Alternate/Dune",
+)
+
+private val RAW_ALTERNATE = RawSearchEntryDto(
+	id = "77777777-7777-4777-8777-777777777777",
+	name = "Dune-alt.m4b",
+	relativePath = "Loose/Dune-alt.m4b",
+	kind = "file",
+	size = 2_048,
+	modifiedAt = "2026-08-08T12:00:00Z",
+	bookId = ALTERNATE_BOOK.id,
+	duplicateBook = true,
 )
 
 private val FOLDERS = FoldersState(

@@ -19,7 +19,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -37,6 +36,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.rendref.bookbox.core.model.BrowseEntryDto
+import com.rendref.bookbox.core.model.RawSearchEntryDto
+import com.rendref.bookbox.core.search.LibrarySearchField
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -55,6 +56,7 @@ sealed interface FolderAction {
     data class UpdateSearchQuery(val query: String) : FolderAction
 
     data class OpenSearchResult(val relativePath: String) : FolderAction
+	data object LoadMoreSearchResults : FolderAction
 
     data object NavigateBack : FolderAction
 
@@ -71,7 +73,7 @@ fun FoldersScreen(
     modifier: Modifier = Modifier,
 ) {
     var rootsExpanded by remember { mutableStateOf(false) }
-    val searchActive = hasSearchCharacters(state.searchQuery)
+	val searchActive = state.searchQuery.isNotEmpty()
     BackHandler(enabled = searchActive || state.path.isNotEmpty()) {
         onAction(FolderAction.NavigateBack)
     }
@@ -151,17 +153,17 @@ fun FoldersScreen(
             }
         }
 
-        OutlinedTextField(
+		LibrarySearchField(
             value = state.searchQuery,
-            onValueChange = { onAction(FolderAction.UpdateSearchQuery(it)) },
+			label = "Search raw folders",
+			isLoading = state.isSearching || state.isSearchLoadingMore,
+			onValueChange = { onAction(FolderAction.UpdateSearchQuery(it)) },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 8.dp)
-                .semantics {
+				.semantics(mergeDescendants = true) {
                     contentDescription = "Search raw folders"
                 },
-            label = { Text("Search raw folders") },
-            singleLine = true,
         )
 
         Breadcrumbs(
@@ -223,6 +225,7 @@ fun FoldersScreen(
                                     entry = entry,
                                     selected = entry.relativePath in state.selectedFolderPaths,
                                     assigned = entry.relativePath in state.assignedRelativePaths,
+									highlighted = entry.relativePath == state.searchHighlightedRelativePath,
                                     onAction = onAction,
                                 )
                             }
@@ -244,8 +247,26 @@ private fun FolderSearchResults(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+		if (state.searchResults.isNotEmpty()) {
+			when {
+				state.isSearchIndexBuilding -> Text("Search index is still building.", color = MaterialTheme.colorScheme.primary)
+				state.searchErrorMessage != null -> Text(state.searchErrorMessage, color = MaterialTheme.colorScheme.error)
+				state.isSearching -> Text("Updating search results...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+			}
+		}
         when {
-            state.isSearching -> {
+			!hasAtLeastTwoSearchCharacters(state.searchQuery) && state.searchResults.isEmpty() -> Text(
+				text = "Enter at least 2 letters or numbers",
+				modifier = Modifier.padding(24.dp),
+			)
+
+			state.isSearchIndexBuilding && state.searchResults.isEmpty() -> Text(
+				text = "Search index is still building.",
+				modifier = Modifier.padding(24.dp),
+				color = MaterialTheme.colorScheme.primary,
+			)
+
+			state.isSearching && state.searchResults.isEmpty() -> {
                 CircularProgressIndicator(
                     modifier = Modifier
                         .align(Alignment.CenterHorizontally)
@@ -256,7 +277,7 @@ private fun FolderSearchResults(
                 )
             }
 
-            state.searchErrorMessage != null -> {
+			state.searchErrorMessage != null && state.searchResults.isEmpty() -> {
                 Text(
                     text = state.searchErrorMessage,
                     modifier = Modifier.padding(24.dp),
@@ -264,9 +285,9 @@ private fun FolderSearchResults(
                 )
             }
 
-            state.searchResults.isEmpty() -> {
+			state.searchResults.isEmpty() -> {
                 Text(
-                    text = "No matching folders.",
+				text = "No matching folders or files.",
                     modifier = Modifier
                         .align(Alignment.CenterHorizontally)
                         .padding(24.dp),
@@ -280,10 +301,11 @@ private fun FolderSearchResults(
                 ) {
                     items(
                         items = state.searchResults,
-                        key = BrowseEntryDto::relativePath,
+						key = RawSearchEntryDto::id,
                     ) { entry ->
                         FolderSearchResultRow(
                             entry = entry,
+						highlighted = entry.relativePath == state.searchHighlightedRelativePath,
                             onOpen = {
                                 onAction(
                                     FolderAction.OpenSearchResult(entry.relativePath),
@@ -291,6 +313,13 @@ private fun FolderSearchResults(
                             },
                         )
                     }
+					if (state.searchNextCursor != null) {
+						item {
+							TextButton(onClick = { onAction(FolderAction.LoadMoreSearchResults) }, enabled = !state.isSearchLoadingMore) {
+								Text(if (state.isSearchLoadingMore) "Loading..." else "Load more")
+							}
+						}
+					}
                 }
             }
         }
@@ -299,20 +328,24 @@ private fun FolderSearchResults(
 
 @Composable
 private fun FolderSearchResultRow(
-    entry: BrowseEntryDto,
+	entry: RawSearchEntryDto,
+	highlighted: Boolean,
     onOpen: () -> Unit,
 ) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onOpen),
-        shape = RoundedCornerShape(14.dp),
+			.clickable(onClick = onOpen)
+			.semantics { if (highlighted) contentDescription = "Highlighted search result" },
+		shape = RoundedCornerShape(14.dp),
+		color = if (highlighted) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
         tonalElevation = 1.dp,
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
+			Text(if (entry.kind == "folder") "FOLDER" else "AUDIO FILE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             Text(
                 text = entry.name,
                 style = MaterialTheme.typography.bodyLarge,
@@ -325,6 +358,12 @@ private fun FolderSearchResultRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+			if (entry.kind == "file" && entry.size != null) {
+				Text(formatBytes(entry.size), style = MaterialTheme.typography.bodySmall)
+			}
+			if (entry.duplicateBook) {
+				Text("Duplicate book", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+			}
         }
     }
 }
@@ -363,12 +402,14 @@ private fun FolderEntryRow(
     entry: BrowseEntryDto,
     selected: Boolean,
     assigned: Boolean,
+	highlighted: Boolean,
     onAction: (FolderAction) -> Unit,
 ) {
     val isFolder = entry.kind == "folder"
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+			.semantics { if (highlighted) contentDescription = "Highlighted search result" }
             .then(
                 if (isFolder) {
                     Modifier.clickable {
@@ -379,7 +420,7 @@ private fun FolderEntryRow(
                 },
             ),
         shape = RoundedCornerShape(14.dp),
-        color = if (assigned) {
+        color = if (assigned || highlighted) {
             MaterialTheme.colorScheme.primaryContainer
         } else {
             MaterialTheme.colorScheme.surface
@@ -406,9 +447,9 @@ private fun FolderEntryRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (!isFolder) {
+					if (!isFolder && entry.size != null) {
                         Text(
-                            text = formatBytes(entry.size ?: 0),
+							text = formatBytes(entry.size),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f),
                         )
@@ -428,6 +469,9 @@ private fun FolderEntryRow(
                     fontWeight = FontWeight.Bold,
                 )
             }
+			if (highlighted) {
+				Text("Opened file", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+			}
             if (isFolder) {
                 Checkbox(
                     checked = selected,
@@ -462,3 +506,6 @@ private fun formatModified(value: String): String =
             .withZone(ZoneId.systemDefault())
             .format(Instant.parse(value))
     }.getOrDefault("Date unavailable")
+
+private fun hasAtLeastTwoSearchCharacters(value: String): Boolean =
+	value.codePoints().filter { Character.isLetterOrDigit(it) }.limit(2).count() >= 2
