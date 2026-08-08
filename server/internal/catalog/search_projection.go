@@ -100,10 +100,11 @@ func BuildSearchProjection(input SearchProjectionInput) (SearchProjection, error
 	bookIDs := sortedUUIDKeys(books)
 	for _, bookID := range bookIDs {
 		book := books[bookID]
-		duration, known, filenames, recentlyScanned, err := audiobookMedia(assignments[bookID], files)
+		duration, known, filenames, _, err := audiobookMedia(assignments[bookID], files)
 		if err != nil {
 			return SearchProjection{}, err
 		}
+		recentlyScanned := timePointer(input.CompletedAt)
 		document := SearchDocument{
 			ID:     searchUUID(input.RootID, "audiobook", strings.ToLower(book.ID.String())),
 			RootID: input.RootID, EntityKind: SearchEntityAudiobook, BookID: book.ID,
@@ -163,6 +164,13 @@ func BuildSearchProjection(input SearchProjectionInput) (SearchProjection, error
 		applyLinkedMetadata(&document, linked, books, documents, bookDocument)
 		prepareSearchDocument(&document)
 		documents = append(documents, document)
+	}
+	documentIDs := make(map[uuid.UUID]struct{}, len(documents))
+	for _, document := range documents {
+		if _, exists := documentIDs[document.ID]; exists {
+			return SearchProjection{}, ErrInvalidData
+		}
+		documentIDs[document.ID] = struct{}{}
 	}
 
 	sort.Slice(documents, func(i, j int) bool {
@@ -464,7 +472,7 @@ func cleanStrings(values []string) []string {
 		}
 		key := searchCompact(value)
 		if key != "" {
-			if _, exists := set[key]; !exists {
+			if existing, exists := set[key]; !exists || value < existing {
 				set[key] = value
 			}
 		}

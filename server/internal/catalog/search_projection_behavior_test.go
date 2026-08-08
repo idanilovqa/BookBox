@@ -1,7 +1,9 @@
 package catalog
 
 import (
+	"errors"
 	"math"
+	"reflect"
 	"testing"
 	"time"
 
@@ -158,6 +160,50 @@ func TestBuildSearchProjectionPropagatesDistinctDuplicateGroupsToRawAncestors(t 
 		if document.RelativePath == "Shared/notes.txt" || document.RelativePath == "Shared/book.nfo" {
 			t.Fatalf("unrecognized file was indexed: %#v", document)
 		}
+	}
+}
+
+func TestBuildSearchProjectionRejectsCanonicallyEquivalentFolderPaths(t *testing.T) {
+	input := SearchProjectionInput{
+		RootID: "audiobooks", ScanRunID: uuid.New(), CompletedAt: time.Now().UTC(),
+		Files: []SourceFile{
+			projectionFile(uuid.New(), "Caf\u00e9/one.m4b", FileRoleAudio, 1_000),
+			projectionFile(uuid.New(), "Cafe\u0301/two.m4b", FileRoleAudio, 1_000),
+		},
+	}
+	if _, err := BuildSearchProjection(input); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("BuildSearchProjection(canonical folder collision) = %v, want ErrInvalidData", err)
+	}
+}
+
+func TestBuildSearchProjectionUsesScanCompletionForRecentlyScanned(t *testing.T) {
+	input := oneBookProjectionInput(1_000)
+	input.CompletedAt = time.Date(2026, 8, 8, 18, 30, 0, 0, time.UTC)
+	input.Files[0].ModifiedAt = time.Date(1999, 1, 1, 0, 0, 0, 0, time.UTC)
+	projection, err := BuildSearchProjection(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := audiobookDocument(t, projection, input.Books[0].ID)
+	if document.RecentlyScannedAt == nil || !document.RecentlyScannedAt.Equal(input.CompletedAt) {
+		t.Fatalf("RecentlyScannedAt = %v, want %v", document.RecentlyScannedAt, input.CompletedAt)
+	}
+}
+
+func TestBuildSearchProjectionChoosesEquivalentMetadataDeterministically(t *testing.T) {
+	input := oneBookProjectionInput(1_000)
+	input.Books[0].Authors = []string{"author", "Author"}
+	first, err := BuildSearchProjection(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Books[0].Authors = []string{"Author", "author"}
+	second, err := BuildSearchProjection(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first.Documents, second.Documents) {
+		t.Fatalf("equivalent metadata order changed projection:\nfirst=%#v\nsecond=%#v", first.Documents, second.Documents)
 	}
 }
 
