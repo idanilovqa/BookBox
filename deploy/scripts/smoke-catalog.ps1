@@ -43,7 +43,7 @@ $dockerfileText = Get-Content -LiteralPath $dockerfile -Raw
 if ($dockerfileText -notmatch '(?m)^RUN apk add --no-cache ca-certificates ffmpeg') {
     throw 'The worker image does not install ffprobe through FFmpeg.'
 }
-if ($dockerfileText -notmatch '(?m)^USER 10001:10001$') {
+if ($dockerfileText -notmatch '(?m)^USER 10001:10001\r?$') {
     throw 'The worker image does not use the dedicated non-root user.'
 }
 if ($dockerfileText -match '(?m)^EXPOSE\s') {

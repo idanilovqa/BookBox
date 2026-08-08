@@ -58,8 +58,10 @@ $bindRecord = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
         $_.IPAddress -match '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)'
     } |
     Where-Object {
-        (Get-NetConnectionProfile -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue).
-            NetworkCategory -eq 'Private'
+        $profile = Get-NetConnectionProfile `
+            -InterfaceIndex $_.InterfaceIndex `
+            -ErrorAction SilentlyContinue
+        $null -ne $profile -and $profile.NetworkCategory -eq 'Private'
     } |
     Select-Object -First 1
 if (-not $bindRecord) {
