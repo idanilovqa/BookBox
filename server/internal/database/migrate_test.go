@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"bookbox.local/server/internal/testpostgres"
+	"bookbox.local/server/migrations"
 )
 
 func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
@@ -43,6 +45,8 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 		"cover_events",
 		"worker_jobs",
 		"availability_events",
+		"library_search_snapshots",
+		"library_search_documents",
 	} {
 		var exists bool
 		if err := pool.QueryRow(
@@ -58,8 +62,8 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 	if err := pool.QueryRow(ctx, "select count(*) from schema_migrations").Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 2 {
-		t.Fatalf("schema migration rows = %d, want 2", applied)
+	if applied != 3 {
+		t.Fatalf("schema migration rows = %d, want 3", applied)
 	}
 
 	var rejectsCrossRootScan bool
@@ -104,29 +108,14 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 func TestMigrateUpgradesVersionOneWorkerJobsForDeduplication(t *testing.T) {
 	pool := testpostgres.Open(t)
 	ctx := context.Background()
-	if _, err := pool.Exec(ctx, `
-		create table schema_migrations (
-			version bigint primary key,
-			applied_at timestamptz not null default now()
-		);
-		insert into schema_migrations(version) values (1);
-		create table worker_jobs (
-			id uuid primary key,
-			kind text not null,
-			payload jsonb not null default '{}'::jsonb,
-			status text not null default 'queued',
-			run_after timestamptz not null default now(),
-			attempts integer not null default 0,
-			max_attempts integer not null default 5,
-			locked_at timestamptz,
-			locked_by text,
-			lease_until timestamptz,
-			lease_token uuid,
-			last_error text,
-			created_at timestamptz not null default now(),
-			updated_at timestamptz not null default now()
-		);
-	`); err != nil {
+	versionOne, err := migrations.Files.ReadFile("0001_catalog.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, string(versionOne)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `insert into schema_migrations(version) values (1)`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -153,5 +142,125 @@ func TestMigrateUpgradesVersionOneWorkerJobsForDeduplication(t *testing.T) {
 	}
 	if !columnExists || !indexExists {
 		t.Fatalf("dedupe upgrade column=%v index=%v", columnExists, indexExists)
+	}
+}
+
+func TestMigrateCreatesIndexedLibrarySearchProjection(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, index := range []string{
+		"library_search_documents_trgm",
+		"library_search_documents_grams",
+		"library_search_documents_page",
+		"library_search_documents_filters",
+	} {
+		var exists bool
+		if err := pool.QueryRow(ctx,
+			`select to_regclass('public.' || $1) is not null`, index,
+		).Scan(&exists); err != nil || !exists {
+			t.Fatalf("index %s exists=%v err=%v", index, exists, err)
+		}
+	}
+
+	for column, dataType := range map[string]string{
+		"genres":              "ARRAY",
+		"review_state":        "text",
+		"publication_year":    "integer",
+		"created_at":          "timestamp with time zone",
+		"recently_scanned_at": "timestamp with time zone",
+	} {
+		var actual string
+		if err := pool.QueryRow(ctx, `
+			select data_type
+			from information_schema.columns
+			where table_schema = 'public'
+			  and table_name = 'library_search_documents'
+			  and column_name = $1
+		`, column).Scan(&actual); err != nil {
+			t.Fatalf("column %s: %v", column, err)
+		}
+		if actual != dataType {
+			t.Fatalf("column %s data_type=%q, want %q", column, actual, dataType)
+		}
+	}
+
+	var compact string
+	var grams []string
+	if err := pool.QueryRow(ctx, `
+		select catalog_search_compact(' Black.Box 42 '),
+		       catalog_search_grams('blackbox')
+	`).Scan(&compact, &grams); err != nil {
+		t.Fatal(err)
+	}
+	if compact != "blackbox42" || !slices.Contains(grams, "bl") ||
+		!slices.Contains(grams, "bla") {
+		t.Fatalf("compact=%q grams=%v", compact, grams)
+	}
+}
+
+func TestCatalogSearchNormalizationAndGramsSupportUnicode(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	var composed, decomposed string
+	var grams []string
+	if err := pool.QueryRow(ctx, `
+		select catalog_search_compact(' Ångström—東京 42 '),
+		       catalog_search_compact(E' A\u030Angstro\u0308m—東京 42 '),
+		       catalog_search_grams('東京本')
+	`).Scan(&composed, &decomposed, &grams); err != nil {
+		t.Fatal(err)
+	}
+	if composed != "ångström東京42" || decomposed != composed {
+		t.Fatalf("composed=%q decomposed=%q", composed, decomposed)
+	}
+	if want := []string{"京本", "東京", "東京本"}; !slices.Equal(grams, want) {
+		t.Fatalf("grams=%v, want %v", grams, want)
+	}
+}
+
+func TestLibrarySearchDocumentsRejectCrossRootBook(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		insert into library_roots(id, display_name)
+		values ('one', 'One'), ('two', 'Two')
+	`); err != nil {
+		t.Fatal(err)
+	}
+	bookID := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		insert into books(
+			id, root_id, source_folder, grouping_key, title,
+			metadata_source, confidence, review_state
+		)
+		values ($1, 'one', '', 'book', 'Book', 'inferred', 1, 'unreviewed')
+	`, bookID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		insert into library_search_documents(
+			root_id, document_id, entity_kind, book_id, relative_path,
+			display_name, compact_name, compact_path, compact_metadata,
+			search_compact, search_terms, search_grams
+		)
+		values (
+			'two', $1, 'audiobook', $2, '',
+			'Book', 'book', '', '', 'book', 'book', array['bo', 'boo']
+		)
+	`, uuid.New(), bookID); err == nil {
+		t.Fatal("library_search_documents accepted a book belonging to another root")
 	}
 }
