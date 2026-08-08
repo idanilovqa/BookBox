@@ -24,6 +24,7 @@ import (
 	"bookbox.local/server/internal/library"
 	"bookbox.local/server/internal/media"
 	"bookbox.local/server/internal/metadata"
+	"bookbox.local/server/internal/monitor"
 	"bookbox.local/server/internal/scanner"
 	"bookbox.local/server/internal/worker"
 )
@@ -132,7 +133,26 @@ func run(args []string) error {
 		syscall.SIGTERM,
 	)
 	defer stop()
-	return runtime.Run(ctx)
+	return runWorkerWithMonitor(ctx, runtime, monitor.New(repository, cfg.Roots), func(err error) {
+		log.Printf("warning: root monitor unavailable: %v", err)
+	})
+}
+
+type contextRunner interface{ Run(context.Context) error }
+
+func runWorkerWithMonitor(ctx context.Context, runtime, rootMonitor contextRunner, warn func(error)) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	monitorDone := make(chan struct{})
+	go func() {
+		defer close(monitorDone)
+		if err := rootMonitor.Run(runCtx); err != nil && runCtx.Err() == nil && warn != nil {
+			warn(err)
+		}
+	}()
+	err := runtime.Run(runCtx)
+	cancel()
+	<-monitorDone
+	return err
 }
 
 type workerOptions struct {

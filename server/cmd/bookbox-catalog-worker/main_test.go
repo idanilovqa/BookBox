@@ -1,11 +1,52 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+type runnerFunc func(context.Context) error
+
+func (run runnerFunc) Run(ctx context.Context) error { return run(ctx) }
+
+func TestMonitorFailureWarnsWhileWorkerContinues(t *testing.T) {
+	monitorErr := errors.New("watcher failed")
+	monitorCalled := make(chan struct{})
+	warned := make(chan error, 1)
+	workerRan := false
+	err := runWorkerWithMonitor(t.Context(), runnerFunc(func(context.Context) error {
+		<-monitorCalled
+		workerRan = true
+		return nil
+	}), runnerFunc(func(context.Context) error {
+		close(monitorCalled)
+		return monitorErr
+	}), func(err error) { warned <- err })
+	if err != nil || !workerRan {
+		t.Fatalf("err=%v workerRan=%v", err, workerRan)
+	}
+	select {
+	case got := <-warned:
+		if !errors.Is(got, monitorErr) {
+			t.Fatalf("warning=%v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("monitor warning missing")
+	}
+}
+
+func TestWorkerShutdownCancelsAndJoinsMonitor(t *testing.T) {
+	monitorStopped := false
+	err := runWorkerWithMonitor(t.Context(), runnerFunc(func(context.Context) error { return nil }),
+		runnerFunc(func(ctx context.Context) error { <-ctx.Done(); monitorStopped = true; return nil }), nil)
+	if err != nil || !monitorStopped {
+		t.Fatalf("err=%v monitorStopped=%v", err, monitorStopped)
+	}
+}
 
 func TestMetadataProvidersAllowEmptyOptionalGoogleKey(t *testing.T) {
 	keyPath := filepath.Join(t.TempDir(), "google_books_key.txt")
