@@ -1,5 +1,12 @@
 # Shared Library Search Implementation Plan
 
+> Superseded for execution by
+> `docs/superpowers/plans/2026-08-08-staged-audiobook-catalog-and-search.md`.
+> Commit `f796660` approved staged inventory, background probing, subtree
+> grouping, review, and optional reorganization after this plan was written.
+> The replacement plan retains this document's search semantics and integrates
+> the overlapping worker, projection, monitoring, and Android tasks.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace request-time raw filesystem search with one PostgreSQL search projection that serves audiobook cards and raw folder/file results, including duplicate-recording groups.
