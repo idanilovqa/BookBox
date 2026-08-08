@@ -250,15 +250,34 @@ func TestBuildHandlerWiresPostgresCatalogIntoAuthenticatedBooksRoute(t *testing.
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	bookID := uuid.New()
-	if _, err := pool.Exec(ctx, `
-		insert into books(
-			id,root_id,source_folder,grouping_key,title,authors,
-			metadata_source,confidence,review_state
-		)
-		values($1,'audiobooks','Book','folder-key','Dune',
-		       array['Frank Herbert'],'local',0.8,'unreviewed')
-	`, bookID); err != nil {
+	scan, err := repository.BeginScan(ctx, "audiobooks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileID := uuid.New()
+	if err := repository.UpsertSourceFiles(ctx, scan.ID, []catalog.SourceFile{{
+		ID: fileID, RootID: "audiobooks", RelativePath: "Book/Dune.m4b",
+		Size: 1_024, ModifiedAt: time.Now().UTC(),
+		Media: map[string]any{
+			"role": catalog.FileRoleAudio, "durationMs": int64(3_600_000),
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinalizeSuccessfulScan(ctx, scan.ID, []catalog.InferredBook{{
+		RootID: "audiobooks", SourceFolder: "Book", GroupingKey: "folder-key",
+		Title: "Dune", Authors: []string{"Frank Herbert"}, Narrators: []string{"Narrator"},
+		MetadataSource: catalog.MetadataLocal, Confidence: 0.8,
+		ReviewState:   catalog.ReviewUnreviewed,
+		SourceFileIDs: []uuid.UUID{fileID},
+		FileRoles:     map[uuid.UUID]string{fileID: catalog.FileRoleAudio},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	var bookID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		select id from books where root_id='audiobooks' and source_folder='Book'
+	`).Scan(&bookID); err != nil {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
