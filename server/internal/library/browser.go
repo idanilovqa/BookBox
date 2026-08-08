@@ -4,11 +4,9 @@ import (
 	"context"
 	"os"
 	"path"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 )
 
 type Entry struct {
@@ -22,12 +20,6 @@ type Entry struct {
 type Directory struct {
 	RootID  string  `json:"rootId"`
 	Path    string  `json:"path"`
-	Entries []Entry `json:"entries"`
-}
-
-type SearchResult struct {
-	RootID  string  `json:"rootId"`
-	Query   string  `json:"query"`
 	Entries []Entry `json:"entries"`
 }
 
@@ -97,96 +89,3 @@ func (b *Browser) List(ctx context.Context, rootID, relativePath string) (Direct
 		Entries: entries,
 	}, nil
 }
-
-func (b *Browser) Search(ctx context.Context, rootID, query string) (SearchResult, error) {
-	if err := ctx.Err(); err != nil {
-		return SearchResult{}, err
-	}
-	resolved, err := b.resolver.Resolve(rootID, "")
-	if err != nil {
-		return SearchResult{}, err
-	}
-	result := SearchResult{
-		RootID:  rootID,
-		Query:   query,
-		Entries: []Entry{},
-	}
-	normalizedQuery := normalizeSearchText(query)
-	if normalizedQuery == "" {
-		return result, nil
-	}
-
-	err = filepath.WalkDir(
-		resolved.Absolute,
-		func(absolute string, dirEntry os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if absolute == resolved.Absolute {
-				return nil
-			}
-			if dirEntry.Type()&os.ModeSymlink != 0 {
-				if dirEntry.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !dirEntry.IsDir() {
-				return nil
-			}
-			relative, err := filepath.Rel(resolved.Absolute, absolute)
-			if err != nil {
-				return err
-			}
-			relative = filepath.ToSlash(relative)
-			if !strings.Contains(normalizeSearchText(relative), normalizedQuery) {
-				return nil
-			}
-			info, err := dirEntry.Info()
-			if err != nil {
-				return err
-			}
-			result.Entries = append(result.Entries, Entry{
-				Name:         dirEntry.Name(),
-				RelativePath: relative,
-				Kind:         "folder",
-				ModifiedAt:   info.ModTime(),
-			})
-			return nil
-		},
-	)
-	if err != nil {
-		return SearchResult{}, err
-	}
-
-	sort.SliceStable(result.Entries, func(left, right int) bool {
-		leftPath := strings.ToLower(result.Entries[left].RelativePath)
-		rightPath := strings.ToLower(result.Entries[right].RelativePath)
-		if leftPath != rightPath {
-			return leftPath < rightPath
-		}
-		return result.Entries[left].RelativePath < result.Entries[right].RelativePath
-	})
-	if len(result.Entries) > maxFolderSearchResults {
-		result.Entries = result.Entries[:maxFolderSearchResults]
-	}
-	return result, nil
-}
-
-func normalizeSearchText(value string) string {
-	var normalized strings.Builder
-	for _, character := range value {
-		switch {
-		case unicode.IsLetter(character):
-			normalized.WriteRune(unicode.ToLower(character))
-		case unicode.IsDigit(character):
-			normalized.WriteRune(character)
-		}
-	}
-	return normalized.String()
-}
-
-const maxFolderSearchResults = 100

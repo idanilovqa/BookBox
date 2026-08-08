@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"bookbox.local/server/internal/catalog"
 	"bookbox.local/server/internal/config"
 	"bookbox.local/server/internal/library"
+	"github.com/google/uuid"
 )
 
 func TestBooksHandlersReturnCardsDetailsAndRelativeFiles(t *testing.T) {
@@ -28,20 +28,18 @@ func TestBooksHandlersReturnCardsDetailsAndRelativeFiles(t *testing.T) {
 	fileID := uuid.New()
 	confirmedMatchID := uuid.New()
 	repository := &catalogAPIFake{
+		searchPage: catalog.SearchPage{
+			Snapshots: []catalog.SearchSnapshot{{
+				RootID: "audio", ScanRunID: uuid.New(),
+				CompletedAt: time.Unix(20, 0).UTC(), DocumentCount: 1,
+			}},
+			Groups:     []catalog.SearchGroup{{ID: uuid.New()}},
+			NextCursor: "next-page",
+		},
 		filters: catalog.FilterSnapshot{
 			Authors: []string{"Frank Herbert"}, Genres: []string{"Science Fiction"},
 			Years: []int{1965}, Roots: []string{"audio"},
 			ReviewStates: []string{catalog.ReviewConfirmed},
-		},
-		page: catalog.Page[catalog.Book]{
-			Items: []catalog.Book{{
-				ID: bookID, RootID: "audio", SourceFolder: "Frank Herbert/Dune",
-				Title: "Dune", Authors: []string{"Frank Herbert"},
-				PublicationYear: &year, Genres: []string{"Science Fiction"},
-				Series: "Dune", Narrators: []string{"Simon Vance"},
-				ReviewState: catalog.ReviewConfirmed,
-			}},
-			NextCursor: "next-page",
 		},
 		details: map[uuid.UUID]catalog.BookDetail{
 			bookID: {
@@ -65,29 +63,43 @@ func TestBooksHandlersReturnCardsDetailsAndRelativeFiles(t *testing.T) {
 			},
 		},
 	}
+	documentID := uuid.New()
+	repository.searchPage.Groups[0] = catalog.SearchGroup{
+		ID: documentID,
+		Documents: []catalog.SearchDocument{{
+			ID: documentID, RootID: "audio", EntityKind: catalog.SearchEntityAudiobook,
+			BookID: bookID, RelativePath: "Frank Herbert/Dune", DisplayName: "Dune",
+			Title: "Dune", Authors: []string{"Frank Herbert"}, PublicationYear: &year,
+			Genres: []string{"Science Fiction"}, Series: "Dune",
+			Narrators: []string{"Simon Vance"}, ReviewState: catalog.ReviewConfirmed,
+			DuplicateCount: 1,
+		}},
+	}
 
 	listRequest := newJSONRequest(t, "GET",
 		"/v1/books?q=dune&author=Frank+Herbert&genre=Science+Fiction&year=1965"+
 			"&rootId=audio&reviewState=confirmed&sort=year&limit=20&cursor=cursor-1",
 		nil)
-	listResponse := performHandler(booksHandler(repository), listRequest)
+	listResponse := performHandler(booksHandler(repository, []config.Root{{ID: "audio"}}), listRequest)
 	if listResponse.Code != 200 {
 		t.Fatalf("list status = %d, body %s", listResponse.Code, listResponse.Body)
 	}
-	if repository.query.Search != "dune" || repository.query.Author != "Frank Herbert" ||
-		repository.query.Genre != "Science Fiction" ||
-		repository.query.PublicationYear == nil || *repository.query.PublicationYear != 1965 ||
-		repository.query.RootID != "audio" || repository.query.Sort != catalog.BookSortYear ||
-		repository.query.ReviewState != catalog.ReviewConfirmed ||
-		repository.query.Limit != 20 || repository.query.Cursor != "cursor-1" {
-		t.Fatalf("query = %#v", repository.query)
+	searchQuery := repository.searchQueries[0]
+	if searchQuery.Text != "dune" || searchQuery.Author != "Frank Herbert" ||
+		searchQuery.Genre != "Science Fiction" ||
+		searchQuery.PublicationYear == nil || *searchQuery.PublicationYear != 1965 ||
+		len(searchQuery.RootIDs) != 1 || searchQuery.RootIDs[0] != "audio" ||
+		searchQuery.Sort != catalog.BookSortYear || searchQuery.ReviewState != catalog.ReviewConfirmed ||
+		searchQuery.Limit != 20 || searchQuery.Cursor != "cursor-1" {
+		t.Fatalf("query = %#v", searchQuery)
 	}
 	var page BooksResponse
 	if err := json.Unmarshal(listResponse.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Items) != 1 || page.Items[0].ID != bookID.String() ||
-		page.Items[0].CoverURL != "/v1/books/"+bookID.String()+"/cover" ||
+	if len(page.Groups) != 1 || len(page.Groups[0].Books) != 1 ||
+		page.Groups[0].Books[0].ID != bookID.String() ||
+		page.Groups[0].Books[0].CoverURL != "/v1/books/"+bookID.String()+"/cover" ||
 		page.NextCursor != "next-page" ||
 		!slices.Equal(page.Filters.Authors, []string{"Frank Herbert"}) ||
 		!slices.Equal(page.Filters.Roots, []string{"audio"}) {
@@ -242,9 +254,19 @@ type catalogAPIFake struct {
 	jobIDs          map[uuid.UUID]struct{}
 	dedupeJobs      map[string]catalog.WorkerJob
 	err             error
+	searchPage      catalog.SearchPage
+	searchQueries   []catalog.SearchQuery
 	enqueueErr      error
 	lastEnqueueID   uuid.UUID
 	confirmCalls    int
+}
+
+func (repository *catalogAPIFake) SearchLibrary(
+	_ context.Context,
+	query catalog.SearchQuery,
+) (catalog.SearchPage, error) {
+	repository.searchQueries = append(repository.searchQueries, query)
+	return repository.searchPage, repository.err
 }
 
 func (repository *catalogAPIFake) ListCatalogFilters(

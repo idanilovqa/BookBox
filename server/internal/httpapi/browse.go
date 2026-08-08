@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 
+	"bookbox.local/server/internal/catalog"
 	"bookbox.local/server/internal/config"
 	"bookbox.local/server/internal/library"
 )
@@ -62,10 +63,10 @@ func browseHandler(browser *library.Browser) http.Handler {
 	})
 }
 
-func folderSearchHandler(browser *library.Browser) http.Handler {
+func folderSearchHandler(repository CatalogRepository, roots []config.Root) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		if browser == nil {
-			writeError(w, errors.New("browser is not configured"))
+		if repository == nil {
+			writeInternalError(w)
 			return
 		}
 		query, err := url.ParseQuery(request.URL.RawQuery)
@@ -73,16 +74,39 @@ func folderSearchHandler(browser *library.Browser) http.Handler {
 			writeError(w, library.ErrPathEscape)
 			return
 		}
-		result, err := browser.Search(
-			request.Context(),
-			query.Get("root"),
-			query.Get("q"),
-		)
-		if err != nil {
-			writeError(w, err)
+		rootID := query.Get("root")
+		if !configuredRoot(roots, rootID) {
+			writeError(w, library.ErrUnknownRoot)
 			return
 		}
-		writeJSON(w, http.StatusOK, result)
+		limit, err := parseSearchLimit(query.Get("limit"))
+		if err != nil {
+			writeSearchError(w, err)
+			return
+		}
+		result, err := repository.SearchLibrary(request.Context(), catalog.SearchQuery{
+			RootIDs: []string{rootID}, Mode: catalog.SearchModeRaw,
+			Text: query.Get("q"), Sort: catalog.BookSortTitle,
+			Limit: limit, Cursor: query.Get("cursor"),
+		})
+		if err != nil {
+			writeSearchError(w, err)
+			return
+		}
+		snapshots, ok := shapeSnapshots(result.Snapshots, map[string]struct{}{rootID: {}})
+		if !ok || len(snapshots) != 1 {
+			writeInternalError(w)
+			return
+		}
+		entries, ok := shapeRawEntries(result.Groups, rootID)
+		if !ok {
+			writeInternalError(w)
+			return
+		}
+		writeJSON(w, http.StatusOK, RawSearchResponse{
+			RootID: rootID, Query: query.Get("q"), Snapshot: snapshots[0],
+			Entries: entries, NextCursor: result.NextCursor,
+		})
 	})
 }
 

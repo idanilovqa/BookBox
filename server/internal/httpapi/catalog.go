@@ -14,15 +14,16 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/google/uuid"
 	"bookbox.local/server/internal/catalog"
 	"bookbox.local/server/internal/config"
 	"bookbox.local/server/internal/metadata"
+	"github.com/google/uuid"
 )
 
 const maxCatalogBodyBytes = 64 << 10
 
 type CatalogRepository interface {
+	SearchLibrary(context.Context, catalog.SearchQuery) (catalog.SearchPage, error)
 	ListBooks(context.Context, catalog.BookQuery) (catalog.Page[catalog.Book], error)
 	ListCatalogFilters(context.Context) (catalog.FilterSnapshot, error)
 	GetBook(context.Context, uuid.UUID) (catalog.BookDetail, error)

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -98,126 +97,6 @@ func TestListHonorsCancelledContext(t *testing.T) {
 	_, err := NewBrowser(resolverFor(t, root)).List(ctx, "audiobooks", "")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("List() error = %v, want context.Canceled", err)
-	}
-}
-
-func TestSearchMatchesNormalizedFullFolderPathsOnly(t *testing.T) {
-	root := createTree(t,
-		"Author/Black.Box/chapter.mp3",
-		"Blacksmith/chapter.mp3",
-		"Loose black box.mp3",
-	)
-	browser := NewBrowser(resolverFor(t, root))
-
-	got, err := browser.Search(context.Background(), "audiobooks", "black box")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.RootID != "audiobooks" || got.Query != "black box" {
-		t.Fatalf("search result = %#v", got)
-	}
-	if paths := entryPaths(got.Entries); !slices.Equal(paths, []string{"Author/Black.Box"}) {
-		t.Fatalf("paths = %v, want [Author/Black.Box]", paths)
-	}
-
-	got, err = browser.Search(context.Background(), "audiobooks", "author black box")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if paths := entryPaths(got.Entries); !slices.Equal(
-		paths,
-		[]string{"Author/Black.Box"},
-	) {
-		t.Fatalf("paths = %v, want full-path match", paths)
-	}
-}
-
-func TestSearchReturnsNothingForSymbolOnlyQuery(t *testing.T) {
-	root := createTree(t, "Book/chapter.mp3")
-
-	got, err := NewBrowser(resolverFor(t, root)).Search(
-		context.Background(),
-		"audiobooks",
-		" ... ",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Entries) != 0 {
-		t.Fatalf("entries = %#v, want none", got.Entries)
-	}
-}
-
-func TestSearchSortsAndLimitsFolderResults(t *testing.T) {
-	paths := make([]string, 105)
-	for index := range paths {
-		paths[index] = fmt.Sprintf("Match %03d/chapter.mp3", 104-index)
-	}
-	root := createTree(t, paths...)
-
-	got, err := NewBrowser(resolverFor(t, root)).Search(
-		context.Background(),
-		"audiobooks",
-		"match",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Entries) != 100 {
-		t.Fatalf("entry count = %d, want 100", len(got.Entries))
-	}
-	if got.Entries[0].RelativePath != "Match 000" ||
-		got.Entries[99].RelativePath != "Match 099" {
-		t.Fatalf(
-			"result bounds = %q ... %q",
-			got.Entries[0].RelativePath,
-			got.Entries[99].RelativePath,
-		)
-	}
-}
-
-func TestSearchHonorsCancelledContext(t *testing.T) {
-	root := createTree(t, "Book/chapter.mp3")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, err := NewBrowser(resolverFor(t, root)).Search(ctx, "audiobooks", "book")
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Search() error = %v, want context.Canceled", err)
-	}
-}
-
-func TestSearchDoesNotFollowDirectorySymlinks(t *testing.T) {
-	root := createTree(t, "Visible/chapter.mp3")
-	outside := createTree(t, "Hidden Match/chapter.mp3")
-	link := filepath.Join(root, "Linked Match")
-	if err := os.Symlink(outside, link); err != nil {
-		t.Skipf("directory symlinks unavailable: %v", err)
-	}
-
-	got, err := NewBrowser(resolverFor(t, root)).Search(
-		context.Background(),
-		"audiobooks",
-		"match",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Entries) != 0 {
-		t.Fatalf("entries = %#v, want no symlink or target folders", got.Entries)
-	}
-}
-
-func TestSearchReturnsFilesystemErrors(t *testing.T) {
-	root := createTree(t, "Book/chapter.mp3")
-	browser := NewBrowser(resolverFor(t, root))
-	if err := os.RemoveAll(root); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := browser.Search(context.Background(), "audiobooks", "book")
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Search() error = %v, want os.ErrNotExist", err)
 	}
 }
 

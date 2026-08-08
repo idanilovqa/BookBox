@@ -10,13 +10,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"bookbox.local/server/internal/catalog"
+	"bookbox.local/server/internal/config"
 	"bookbox.local/server/internal/library"
+	"github.com/google/uuid"
 )
 
 type BookCardResponse struct {
 	ID              string   `json:"id"`
+	RootID          string   `json:"rootId"`
 	Title           string   `json:"title"`
 	Authors         []string `json:"authors"`
 	PublicationYear *int     `json:"publicationYear,omitempty"`
@@ -26,12 +28,14 @@ type BookCardResponse struct {
 	CoverURL        string   `json:"coverUrl,omitempty"`
 	ReviewState     string   `json:"reviewState"`
 	SourceFolder    string   `json:"sourceFolder"`
+	DurationMS      *int64   `json:"durationMs,omitempty"`
 }
 
 type BooksResponse struct {
-	Items      []BookCardResponse     `json:"items"`
-	NextCursor string                 `json:"nextCursor,omitempty"`
-	Filters    catalog.FilterSnapshot `json:"filters"`
+	Groups     []BookSearchGroupResponse `json:"groups"`
+	Snapshots  []SearchSnapshotResponse  `json:"snapshots"`
+	NextCursor string                    `json:"nextCursor,omitempty"`
+	Filters    catalog.FilterSnapshot    `json:"filters"`
 }
 
 type MetadataAttributionResponse struct {
@@ -78,20 +82,20 @@ type BookFilesResponse struct {
 	Files        []BookFileResponse `json:"files"`
 }
 
-func booksHandler(repository CatalogRepository) http.Handler {
+func booksHandler(repository CatalogRepository, roots []config.Root) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if repository == nil {
 			writeInternalError(response)
 			return
 		}
-		query, err := parseBookQuery(request)
+		query, err := parseLibrarySearchQuery(request, roots)
 		if err != nil {
 			writeCatalogError(response, err)
 			return
 		}
-		page, err := repository.ListBooks(request.Context(), query)
+		page, err := repository.SearchLibrary(request.Context(), query)
 		if err != nil {
-			writeCatalogError(response, err)
+			writeSearchError(response, err)
 			return
 		}
 		filters, err := repository.ListCatalogFilters(request.Context())
@@ -100,19 +104,47 @@ func booksHandler(repository CatalogRepository) http.Handler {
 			return
 		}
 		result := BooksResponse{
-			Items:      make([]BookCardResponse, 0, len(page.Items)),
 			NextCursor: page.NextCursor,
 			Filters:    filters,
 		}
-		for _, book := range page.Items {
-			if !publicBook(book) {
-				writeInternalError(response)
-				return
-			}
-			result.Items = append(result.Items, bookCard(book))
+		rootSet := make(map[string]struct{}, len(query.RootIDs))
+		for _, rootID := range query.RootIDs {
+			rootSet[rootID] = struct{}{}
+		}
+		var ok bool
+		result.Snapshots, ok = shapeSnapshots(page.Snapshots, rootSet)
+		if !ok {
+			writeInternalError(response)
+			return
+		}
+		result.Groups, ok = shapeBookGroups(page.Groups, rootSet)
+		if !ok {
+			writeInternalError(response)
+			return
 		}
 		writeJSON(response, http.StatusOK, result)
 	})
+}
+
+func parseLibrarySearchQuery(request *http.Request, roots []config.Root) (catalog.SearchQuery, error) {
+	book, err := parseBookQuery(request)
+	if err != nil {
+		return catalog.SearchQuery{}, err
+	}
+	rootIDs, err := requestedRootIDs(request, roots)
+	if err != nil {
+		return catalog.SearchQuery{}, err
+	}
+	limit, err := parseSearchLimit(request.URL.Query().Get("limit"))
+	if err != nil {
+		return catalog.SearchQuery{}, err
+	}
+	return catalog.SearchQuery{
+		RootIDs: rootIDs, Mode: catalog.SearchModeAudiobooks, Text: book.Search,
+		Author: book.Author, Genre: book.Genre, ReviewState: book.ReviewState,
+		PublicationYear: book.PublicationYear, Sort: book.Sort, Limit: limit,
+		Cursor: book.Cursor,
+	}, nil
 }
 
 func parseBookQuery(request *http.Request) (catalog.BookQuery, error) {
@@ -274,7 +306,7 @@ func publicBook(book catalog.Book) bool {
 
 func bookCard(book catalog.Book) BookCardResponse {
 	return BookCardResponse{
-		ID: book.ID.String(), Title: book.Title, Authors: nonNil(book.Authors),
+		ID: book.ID.String(), RootID: book.RootID, Title: book.Title, Authors: nonNil(book.Authors),
 		PublicationYear: book.PublicationYear, Genres: nonNil(book.Genres),
 		Series: book.Series, Narrators: nonNil(book.Narrators),
 		CoverURL:    "/v1/books/" + book.ID.String() + "/cover",
