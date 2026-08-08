@@ -27,7 +27,7 @@ $requirements = [ordered]@{
     'source manifest before' = 'source-before\.json'
     'source manifest after' = 'source-after\.json'
     'Argon2 password hash' = '\^\\\$argon2id\\\$'
-    'project-local JDK' = "jdk17\\jdk-17\.0\.19\+10"
+    'project-local JDK' = '(?s)localJdkRoot.*?jdk17.*?bin\\java\.exe'
     'project-local Gradle home' = "localGradleHome"
     'task-scoped AVD home' = 'ANDROID_AVD_HOME\s*=\s*Join-Path\s+\$taskRoot\s+''avd'''
     'unique AVD name' = 'bookbox_api36_\$runID'
