@@ -42,6 +42,42 @@ data class FolderSearchDto(
 )
 
 @Serializable
+data class SearchSnapshotDto(
+    val rootId: String,
+    val scanRunId: String,
+    val completedAt: String,
+)
+
+@Serializable
+data class BookSearchGroupDto(
+    val groupId: String,
+    val duplicate: Boolean,
+    val books: List<BookCardDto>,
+)
+
+@Serializable
+data class RawSearchEntryDto(
+    val id: String,
+    val name: String,
+    val relativePath: String,
+    val kind: String,
+    val size: Long? = null,
+    val modifiedAt: String? = null,
+    val bookId: String? = null,
+    val duplicateGroupId: String? = null,
+    val duplicateBook: Boolean = false,
+)
+
+@Serializable
+data class RawSearchPageDto(
+    val rootId: String,
+    val query: String,
+    val snapshot: SearchSnapshotDto,
+    val entries: List<RawSearchEntryDto>,
+    val nextCursor: String? = null,
+)
+
+@Serializable
 data class BookFileDto(
     val id: String,
     val relativePath: String,
@@ -86,6 +122,8 @@ data class BookCardDto(
     val coverUrl: String? = null,
     val reviewState: String,
     val sourceFolder: String,
+    val rootId: String = "",
+    val durationMs: Long? = null,
 )
 
 @Serializable

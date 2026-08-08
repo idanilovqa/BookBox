@@ -7,9 +7,13 @@ import com.rendref.bookbox.core.model.BrowseEntryDto
 import com.rendref.bookbox.core.model.FolderSearchDto
 import com.rendref.bookbox.core.model.RootDto
 import com.rendref.bookbox.core.model.RootsDto
+import com.rendref.bookbox.core.model.RawSearchPageDto
+import com.rendref.bookbox.core.model.RawSearchEntryDto
+import com.rendref.bookbox.core.model.ApiErrorDto
 import java.io.IOException
 import java.time.Instant
 import java.time.format.DateTimeParseException
+import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -67,28 +71,26 @@ class BrowseApi(
     }
 
     suspend fun searchFolders(rootId: String, query: String): FolderSearchDto {
-        require(validRootId(rootId)) { "Invalid root identifier" }
-        require(query.isNotBlank()) {
-            "Invalid folder search query"
-        }
-        val url = baseUrl.newBuilder()
-            .addPathSegments("v1/browse/search")
-            .addQueryParameter("root", rootId)
-            .addQueryParameter("q", query)
-            .build()
-        return execute<FolderSearchDto>(url).also { result ->
-            if (
-                result.rootId != rootId ||
-                result.query != query ||
-                result.entries.size > MAX_FOLDER_SEARCH_RESULTS ||
-                result.entries.distinctBy(BrowseEntryDto::relativePath).size !=
-                result.entries.size ||
-                result.entries.any { !validSearchFolder(it) }
-            ) {
-                throw IOException("Server returned invalid folder search results")
-            }
-        }
+		val page = searchRaw(rootId, query)
+		return FolderSearchDto(rootId, query, page.entries.filter { it.kind == "folder" }.map {
+			BrowseEntryDto(it.name, it.relativePath, it.kind, modifiedAt = page.snapshot.completedAt)
+		})
     }
+
+	suspend fun searchRaw(rootId: String, query: String, cursor: String? = null): RawSearchPageDto {
+		require(validRootId(rootId)); require(query.codePoints().filter { Character.isLetterOrDigit(it) }.count() >= 2)
+		val url = baseUrl.newBuilder().addPathSegments("v1/browse/search")
+			.addQueryParameter("root", rootId).addQueryParameter("q", query).apply {
+				cursor?.takeIf(String::isNotBlank)?.let { addQueryParameter("cursor", it) }
+			}.build()
+		return execute<RawSearchPageDto>(url).also { page ->
+			if (page.rootId != rootId || page.query != query || page.snapshot.rootId != rootId ||
+				!validUuid(page.snapshot.scanRunId) || !validInstant(page.snapshot.completedAt) ||
+				page.entries.distinctBy(RawSearchEntryDto::id).size != page.entries.size ||
+				page.entries.distinctBy(RawSearchEntryDto::relativePath).size != page.entries.size ||
+				page.entries.any { !validRawEntry(it) }) throw IOException("Server returned invalid raw search results")
+		}
+	}
 
     suspend fun bookFiles(bookId: String): BookFilesDto {
         require(bookId.isNotBlank() && bookId.length <= MAX_IDENTIFIER_LENGTH)
@@ -146,16 +148,15 @@ class BrowseApi(
                     override fun onResponse(call: Call, response: Response) {
                         try {
                             response.use {
-                                if (!it.isSuccessful) {
-                                    throw IOException(
-                                        "Browse request failed with HTTP ${it.code}",
-                                    )
-                                }
                                 val source = it.body.source()
                                 if (source.request(MAX_BROWSE_RESPONSE_BYTES + 1L)) {
                                     throw IOException("Browse response is too large")
                                 }
                                 val payload = source.readByteArray()
+								if (!it.isSuccessful) {
+									if (it.code == 503 && runCatching { ApiJson.decodeFromString<ApiErrorDto>(payload.toString(Charsets.UTF_8)).error.code }.getOrNull() == "search_index_building") throw SearchIndexBuilding()
+									throw IOException("Browse request failed with HTTP ${it.code}")
+								}
                                 if (continuation.isActive) {
                                     continuation.resume(payload)
                                 }
@@ -170,6 +171,17 @@ class BrowseApi(
             )
         }
 }
+
+private fun validRawEntry(entry: RawSearchEntryDto): Boolean {
+	if (!validUuid(entry.id) || !validDisplayName(entry.name) || !validRelativePath(entry.relativePath, false) || entry.relativePath.substringAfterLast('/') != entry.name || entry.duplicateGroupId?.let(::validUuid) == false || (entry.duplicateGroupId != null && !entry.duplicateBook)) return false
+	return when(entry.kind) {
+		"folder" -> entry.size == null && entry.modifiedAt == null && entry.bookId == null
+		"file" -> entry.size?.let { it >= 0 } == true && entry.modifiedAt?.let(::validInstant) == true && (entry.bookId == null || validUuid(entry.bookId))
+		else -> false
+	}
+}
+
+private fun validUuid(value: String): Boolean = runCatching { val id=UUID.fromString(value); id != UUID(0,0) && id.toString()==value }.getOrDefault(false)
 
 private fun validEntry(parent: String, entry: BrowseEntryDto): Boolean =
     entry.kind in ENTRY_KINDS &&
@@ -226,8 +238,7 @@ private fun validRootId(value: String): Boolean =
 private fun validInstant(value: String): Boolean {
     if (value.isEmpty() || value.length > MAX_INSTANT_LENGTH) return false
     return try {
-        Instant.parse(value)
-        true
+		Instant.parse(value) != Instant.EPOCH
     } catch (_: DateTimeParseException) {
         false
     }

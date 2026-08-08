@@ -23,6 +23,7 @@ data class BookQuery(
     val genre: String? = null,
     val year: Int? = null,
     val rootId: String? = null,
+	val rootIds: List<String> = emptyList(),
     val reviewState: String? = null,
     val sort: BookSort = BookSort.TITLE,
     val cursor: String? = null,
@@ -41,6 +42,8 @@ data class PagedBooks(
     val items: List<BookCardDto>,
     val nextCursor: String?,
     val filters: CatalogFiltersDto,
+	val groups: List<com.rendref.bookbox.core.model.BookSearchGroupDto> = emptyList(),
+	val snapshots: List<com.rendref.bookbox.core.model.SearchSnapshotDto> = emptyList(),
 )
 
 fun interface CatalogSource {
