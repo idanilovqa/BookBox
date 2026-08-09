@@ -20,6 +20,7 @@ type repositoryFake struct {
 	mu   sync.Mutex
 	base catalog.WorkerJob
 	keys []string
+	jobs []catalog.WorkerJob
 	err  error
 }
 
@@ -27,6 +28,7 @@ func (r *repositoryFake) EnqueueDeduplicated(_ context.Context, job catalog.Work
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.keys = append(r.keys, key)
+	r.jobs = append(r.jobs, job)
 	if r.err != nil {
 		return catalog.WorkerJob{}, r.err
 	}
@@ -39,6 +41,12 @@ func (r *repositoryFake) snapshot() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.keys...)
+}
+
+func (r *repositoryFake) snapshotJobs() []catalog.WorkerJob {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]catalog.WorkerJob(nil), r.jobs...)
 }
 
 type sourceFake struct {
