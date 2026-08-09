@@ -4,7 +4,10 @@ param(
     [Nullable[int]] $Port,
     [string] $DiscoveryExecutable,
     [string] $StateDirectory,
-    [string] $ComposeFile
+    [string] $ComposeFile,
+    [string] $HybridComposeFile,
+    [ValidateSet('Container', 'Hybrid')]
+    [string] $DeploymentMode = 'Container'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,7 +41,11 @@ if (-not $PSBoundParameters.ContainsKey('Port')) {
 if (-not $ComposeFile) {
     $ComposeFile = Join-Path $deployRoot 'compose.yml'
 }
+if (-not $HybridComposeFile) {
+    $HybridComposeFile = Join-Path $deployRoot 'compose.hybrid.yml'
+}
 $composeFile = [System.IO.Path]::GetFullPath($ComposeFile)
+$hybridComposeFile = [System.IO.Path]::GetFullPath($HybridComposeFile)
 if (-not $DiscoveryExecutable) {
     $DiscoveryExecutable = Join-Path $repoRoot 'artifacts\bookbox-discovery.exe'
 }
@@ -46,6 +53,24 @@ if (-not $StateDirectory) {
     $StateDirectory = Join-Path $deployRoot '.state'
 }
 . (Join-Path $PSScriptRoot 'discovery-process.ps1')
+. (Join-Path $PSScriptRoot 'compose-lifecycle.ps1')
+
+$composeScope = Resolve-BookBoxComposeScope `
+    -DeploymentMode $DeploymentMode `
+    -ComposeFile $composeFile `
+    -HybridComposeFile $hybridComposeFile
+$composeEnvironment = Join-Path $deployRoot '.env'
+$composeEnvironment = if (Test-Path -LiteralPath $composeEnvironment -PathType Leaf) {
+    $composeEnvironment
+} else { $null }
+$composeUpArguments = Get-BookBoxComposeArguments `
+    -Scope $composeScope `
+    -EnvironmentFile $composeEnvironment `
+    -Command @('up', '-d')
+$composeDownArguments = Get-BookBoxComposeArguments `
+    -Scope $composeScope `
+    -EnvironmentFile $composeEnvironment `
+    -Command @('down', '--remove-orphans')
 
 function Test-PrivateIPv4 {
     param([Parameter(Mandatory)][Net.IPAddress] $IPAddress)
@@ -112,8 +137,16 @@ $env:BOOKBOX_BIND_ADDRESS = $Address
 $env:BOOKBOX_HOST_PORT = [string]$Port
 $composeStarted = $false
 $discoveryStarted = $false
+$composeStateWritten = $false
 try {
-    & docker compose -f $composeFile up -d
+    Write-BookBoxComposeState `
+        -StateDirectory $StateDirectory `
+        -Scope $composeScope `
+        -Address $Address `
+        -Port $Port `
+        -EnvironmentFile $composeEnvironment
+    $composeStateWritten = $true
+    & docker @composeUpArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Docker Compose start failed with exit code $LASTEXITCODE."
     }
@@ -169,8 +202,11 @@ try {
     if ($discoveryStarted) {
         Stop-BookBoxDiscovery -StateDirectory $StateDirectory
     }
-    if ($composeStarted) {
-        & docker compose -f $composeFile down --remove-orphans
+    if ($composeStateWritten) {
+        & docker @composeDownArguments
+        if ($LASTEXITCODE -eq 0) {
+            Remove-BookBoxComposeState -StateDirectory $StateDirectory
+        }
     }
     throw
 }

@@ -42,6 +42,9 @@ try {
     if ($installText -notmatch [regex]::Escape("'startup-environment.ps1'")) {
         throw 'Discovery installer does not include the startup environment loader.'
     }
+    if ($installText -notmatch [regex]::Escape("'compose-lifecycle.ps1'")) {
+        throw 'Discovery installer does not include the Compose lifecycle module.'
+    }
 
     Write-Output 'PASS: startup environment loads address and port from deploy .env.'
 } finally {

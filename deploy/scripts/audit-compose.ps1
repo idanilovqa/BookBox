@@ -1,7 +1,10 @@
 param(
     [string] $ComposeFile = (Join-Path $PSScriptRoot '..\compose.yml'),
+    [string] $HybridComposeFile = (Join-Path $PSScriptRoot '..\compose.hybrid.yml'),
     [string] $EnvironmentFile,
-    [string] $ProjectName = 'bookbox-e2e-audit'
+    [string] $ProjectName = 'bookbox-e2e-audit',
+    [ValidateSet('Container', 'Hybrid')]
+    [string] $DeploymentMode = 'Container'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,6 +14,12 @@ $compose = [IO.Path]::GetFullPath($ComposeFile)
 if (-not (Test-Path -LiteralPath $compose -PathType Leaf)) {
     throw "Compose file not found: $compose"
 }
+$hybridCompose = [IO.Path]::GetFullPath($HybridComposeFile)
+. (Join-Path $PSScriptRoot 'compose-lifecycle.ps1')
+$composeScope = Resolve-BookBoxComposeScope `
+    -DeploymentMode $DeploymentMode `
+    -ComposeFile $compose `
+    -HybridComposeFile $hybridCompose
 if (-not $EnvironmentFile) {
     $productionEnvironment = Join-Path (Split-Path $compose) '.env'
     $EnvironmentFile = if (Test-Path -LiteralPath $productionEnvironment) {
@@ -23,38 +32,56 @@ $environment = [IO.Path]::GetFullPath($EnvironmentFile)
 if (-not (Test-Path -LiteralPath $environment -PathType Leaf)) {
     throw "Compose environment file not found: $environment"
 }
+. (Join-Path $PSScriptRoot 'startup-environment.ps1')
+$startupEnvironment = Read-BookBoxStartupEnvironment -Path $environment
+$selectedAddress = $null
+$isPrivateAddress = if (
+    [Net.IPAddress]::TryParse([string]$startupEnvironment.Address, [ref]$selectedAddress)
+) {
+    $addressBytes = $selectedAddress.GetAddressBytes()
+    $addressBytes.Count -eq 4 -and (
+        $addressBytes[0] -eq 10 -or
+        ($addressBytes[0] -eq 172 -and $addressBytes[1] -ge 16 -and $addressBytes[1] -le 31) -or
+        ($addressBytes[0] -eq 192 -and $addressBytes[1] -eq 168)
+    )
+} else {
+    $false
+}
+if (-not $isPrivateAddress) {
+    throw 'BOOKBOX_BIND_ADDRESS must be an RFC1918 private IPv4 address.'
+}
 
-$raw = @(& docker compose --env-file $environment -p $ProjectName -f $compose config --format json 2>&1)
+$composeArguments = Get-BookBoxComposeArguments `
+    -Scope $composeScope `
+    -EnvironmentFile $environment `
+    -ProjectName $ProjectName `
+    -Command @('config', '--format', 'json')
+$raw = @(& docker @composeArguments 2>&1)
 if ($LASTEXITCODE -ne 0) {
     throw "Compose resolution failed:`n$($raw -join [Environment]::NewLine)"
 }
 $resolved = ($raw -join [Environment]::NewLine) | ConvertFrom-Json
 $api = $resolved.services.'bookbox-api'
-$worker = $resolved.services.'bookbox-catalog-worker'
+$workerProperty = $resolved.services.PSObject.Properties['bookbox-catalog-worker']
+$worker = if ($workerProperty) { $workerProperty.Value } else { $null }
 $postgres = $resolved.services.postgres
-if (-not $api -or -not $worker -or -not $postgres) {
-    throw 'Production Compose must define API, catalog worker, and PostgreSQL.'
+if (-not $api -or -not $postgres) {
+	throw 'Production Compose must activate API and PostgreSQL.'
+}
+if ($DeploymentMode -eq 'Container' -and -not $worker) {
+	throw 'Container mode must activate the catalog worker profile.'
+}
+if ($DeploymentMode -eq 'Hybrid' -and $worker) {
+	throw 'Hybrid mode must leave the catalog worker profile inactive.'
 }
 
 $apiLibrary = @($api.volumes | Where-Object target -eq '/library/audiobooks')
 if ($apiLibrary.Count -ne 1 -or $apiLibrary[0].read_only -ne $true) {
     throw 'API library mount must be read-only.'
 }
-$workerLibrary = @($worker.volumes | Where-Object target -eq '/library/audiobooks')
-$workerReadOnly = if (
-    $workerLibrary.Count -eq 1 -and
-    $workerLibrary[0].PSObject.Properties['read_only']
-) {
-    $workerLibrary[0].read_only
-} else {
-    $false
-}
-if ($workerLibrary.Count -ne 1 -or $workerReadOnly -eq $true) {
-    throw 'Worker library mount must be writable for approved cover publication.'
-}
 $composeSource = Get-Content -LiteralPath $compose -Raw
 if ($composeSource -notmatch 'Explicitly approved risk: Docker grants this worker mount-level write') {
-    throw 'Worker writable-library risk disclosure is missing.'
+	throw 'Worker writable-library risk disclosure is missing.'
 }
 $resourceDefinitions = [regex]::Match(
     $composeSource,
@@ -63,15 +90,46 @@ $resourceDefinitions = [regex]::Match(
 if (-not $resourceDefinitions -or $resourceDefinitions -match '(?m)^    name:\s') {
     throw 'Volumes and networks must use Compose project-scoped names.'
 }
-if (
-    $worker.PSObject.Properties['ports'] -or
-    $worker.PSObject.Properties['expose'] -or
-    $postgres.PSObject.Properties['ports'] -or
-    $postgres.PSObject.Properties['expose']
-) {
-    throw 'Worker and PostgreSQL must have no inbound published or exposed port.'
+if ($DeploymentMode -eq 'Container') {
+	$workerLibrary = @($worker.volumes | Where-Object target -eq '/library/audiobooks')
+	$workerReadOnly = if (
+		$workerLibrary.Count -eq 1 -and
+		$workerLibrary[0].PSObject.Properties['read_only']
+	) {
+		$workerLibrary[0].read_only
+	} else {
+		$false
+	}
+	if ($workerLibrary.Count -ne 1 -or $workerReadOnly -eq $true) {
+		throw 'Worker library mount must be writable for approved cover publication.'
+	}
+	if ($worker.PSObject.Properties['ports'] -or $worker.PSObject.Properties['expose']) {
+		throw 'Worker must have no inbound published or exposed port.'
+	}
+	if (@($worker.profiles) -notcontains 'container-worker') {
+		throw 'Catalog worker must remain behind the container-worker profile.'
+	}
+	if ($postgres.PSObject.Properties['ports'] -or $postgres.PSObject.Properties['expose']) {
+        throw 'Container PostgreSQL must have no inbound published or exposed port.'
+    }
+} else {
+    $postgresPorts = @($postgres.ports)
+    if ($postgres.PSObject.Properties['expose'] -or
+        $postgresPorts.Count -ne 1 -or
+        [string]$postgresPorts[0].name -cne 'hybrid-postgres' -or
+        [string]$postgresPorts[0].target -cne '5432' -or
+        [string]$postgresPorts[0].host_ip -cne '127.0.0.1' -or
+        [string]$postgresPorts[0].protocol -cne 'tcp' -or
+        [string]$postgresPorts[0].published -notmatch '^[1-9][0-9]{0,4}$' -or
+        [int]$postgresPorts[0].published -gt 65535) {
+        throw 'Hybrid PostgreSQL must publish exactly one named TCP port on 127.0.0.1.'
+    }
 }
-foreach ($serviceName in @('bookbox-api', 'bookbox-catalog-worker')) {
+$hardenedServices = @('bookbox-api')
+if ($DeploymentMode -eq 'Container') {
+    $hardenedServices += 'bookbox-catalog-worker'
+}
+foreach ($serviceName in $hardenedServices) {
     $service = $resolved.services.$serviceName
     if (@($service.cap_drop) -notcontains 'ALL') {
         throw "$serviceName does not drop all capabilities."
@@ -89,25 +147,30 @@ foreach ($serviceName in @('bookbox-api', 'bookbox-catalog-worker')) {
         throw "$serviceName does not use the dedicated non-root user."
     }
 }
+$apiPorts = @($api.ports)
 if (
-    [string]$api.ports[0].target -cne '8787' -or
-    [string]$api.ports[0].published -cne '8787' -or
-    [string]$api.ports[0].name -cne 'http'
+    $apiPorts.Count -ne 1 -or
+    [string]$apiPorts[0].target -cne '8787' -or
+    [string]$apiPorts[0].published -cne [string]$startupEnvironment.Port -or
+    [string]$apiPorts[0].name -cne 'http' -or
+    [string]$apiPorts[0].host_ip -cne [string]$startupEnvironment.Address
 ) {
-    throw 'Production API must publish named HTTP port 8787 by default.'
+    throw 'Production API must publish exactly one named HTTP port on the selected private address.'
 }
-if (
-    -not (Test-Path -LiteralPath (Join-Path (Split-Path $compose) '.env')) -and
-    [string]$api.ports[0].host_ip -notmatch '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)'
-) {
-    throw 'Example deployment must use an RFC1918 private bind address.'
+$requiredSecrets = @('postgres_password', 'app_password_hash', 'session_key')
+if ($DeploymentMode -eq 'Container') {
+	$requiredSecrets += 'google_books_key'
 }
-foreach ($secret in @('postgres_password', 'app_password_hash', 'session_key', 'google_books_key')) {
+foreach ($secret in $requiredSecrets) {
     if (-not $resolved.secrets.$secret.file) {
         throw "Secret $secret is not file-backed."
     }
 }
-foreach ($serviceName in @('postgres', 'bookbox-api', 'bookbox-catalog-worker')) {
+$healthServices = @('postgres', 'bookbox-api')
+if ($DeploymentMode -eq 'Container') {
+    $healthServices += 'bookbox-catalog-worker'
+}
+foreach ($serviceName in $healthServices) {
     if (-not $resolved.services.$serviceName.healthcheck) {
         throw "$serviceName lacks a health gate."
     }
@@ -133,10 +196,17 @@ $testVariables = @{
 foreach ($entry in $testVariables.GetEnumerator()) {
     [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
 }
-$testRaw = @(
-    & docker compose --env-file $environment -p $ProjectName `
-        -f $compose -f $testCompose config --format json 2>&1
-)
+$testScope = [pscustomobject]@{
+    DeploymentMode = 'Container'
+    ComposeFiles = @($compose, $testCompose)
+    Profiles = @('container-worker')
+}
+$testArguments = Get-BookBoxComposeArguments `
+    -Scope $testScope `
+    -EnvironmentFile $environment `
+    -ProjectName $ProjectName `
+    -Command @('config', '--format', 'json')
+$testRaw = @(& docker @testArguments 2>&1)
 if ($LASTEXITCODE -ne 0) {
     throw "Test Compose resolution failed:`n$($testRaw -join [Environment]::NewLine)"
 }
@@ -177,4 +247,4 @@ foreach ($serviceName in @('bookbox-api', 'bookbox-catalog-worker')) {
     }
 }
 
-Write-Host 'PASS: production Compose keeps API source read-only, isolates worker/PostgreSQL ports, and applies container hardening.'
+Write-Host "PASS: $DeploymentMode Compose keeps API and database publication within the approved network scope."

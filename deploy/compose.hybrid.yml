@@ -1,0 +1,8 @@
+services:
+  postgres:
+    ports:
+      - name: hybrid-postgres
+        target: 5432
+        published: "${BOOKBOX_POSTGRES_HOST_PORT:-55432}"
+        host_ip: 127.0.0.1
+        protocol: tcp

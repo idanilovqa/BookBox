@@ -37,6 +37,7 @@ $adb = ''
 $emulatorSerial = ''
 $composeArgs = @(
     'compose',
+    '--profile', 'container-worker',
     '--project-name', $project,
     '--env-file', $environmentFile,
     '-f', $baseCompose,

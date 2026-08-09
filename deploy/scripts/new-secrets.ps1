@@ -114,4 +114,4 @@ foreach ($path in $paths.Values) {
 foreach ($path in $created) {
     Write-Host "Created $([IO.Path]::GetFileName($path))"
 }
-Write-Host 'Next: docker compose --env-file deploy/.env -f deploy/compose.yml up -d --build'
+Write-Host 'Next: docker compose --profile container-worker --env-file deploy/.env -f deploy/compose.yml up -d --build'

@@ -54,6 +54,7 @@ $manifestPath = Join-Path $installRoot 'bookbox-install.json'
 $managedScripts = @(
     'start-bookbox.ps1',
     'startup-environment.ps1',
+    'compose-lifecycle.ps1',
     'stop-bookbox.ps1',
     'discovery-process.ps1',
     'discovery-supervisor.ps1',

@@ -31,7 +31,8 @@ $newPassword = 'bookbox-recovery-rotated'
 $primaryFailure = $null
 $ownedProcesses = [Collections.Generic.List[int]]::new()
 $compose = @(
-    'compose', '--project-name', $project, '--env-file', $environment,
+    'compose', '--profile', 'container-worker',
+    '--project-name', $project, '--env-file', $environment,
     '-f', $baseCompose, '-f', $testCompose
 )
 

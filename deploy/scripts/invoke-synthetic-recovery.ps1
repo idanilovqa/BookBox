@@ -135,6 +135,7 @@ if (
 $environmentFile = [IO.Path]::GetFullPath([string] $document.EnvironmentFile)
 $composeArguments = @(
     'compose',
+    '--profile', 'container-worker',
     '--project-name', [string] $document.ProjectName,
     '--env-file', $environmentFile,
     '-f', $composeFiles[0],

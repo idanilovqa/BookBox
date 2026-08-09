@@ -99,6 +99,7 @@ services:
           memory: 192M
 
   bookbox-catalog-worker:
+    profiles: ["container-worker"]
     build:
       context: ..
       dockerfile: deploy/Dockerfile.worker

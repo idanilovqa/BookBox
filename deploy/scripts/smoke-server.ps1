@@ -212,7 +212,10 @@ database:
     ) -join [Environment]::NewLine
     [IO.File]::WriteAllText($envFile, $envText, [Text.UTF8Encoding]::new($false))
 
-    $composeArgs = @('compose', '--env-file', $envFile, '-p', $project, '-f', $compose)
+    $composeArgs = @(
+        'compose', '--profile', 'container-worker',
+        '--env-file', $envFile, '-p', $project, '-f', $compose
+    )
     $cleanupRequired = $true
     Invoke-Docker ($composeArgs + @('build')) | Out-Null
 

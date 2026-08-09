@@ -93,7 +93,10 @@ foreach ($path in @($composeFiles) + @($environment, $config)) {
         throw "Required recovery input not found: $path"
     }
 }
-$composeArgs = @('compose', '--env-file', $environment, '-p', $ProjectName)
+$composeArgs = @(
+    'compose', '--profile', 'container-worker',
+    '--env-file', $environment, '-p', $ProjectName
+)
 foreach ($path in $composeFiles) {
     $composeArgs += @('-f', $path)
 }
