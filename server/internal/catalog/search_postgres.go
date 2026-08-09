@@ -76,7 +76,7 @@ func (repository *PostgresRepository) SearchLibrary(
 	}
 	page := SearchPage{}
 	snapshotRows, err := transaction.Query(ctx, `
-		select root_id, scan_run_id, completed_at, document_count
+		select root_id, scan_run_id, completed_at, document_count, catalog_generation
 		from library_search_snapshots
 		where root_id=any($1::text[])
 		order by root_id
@@ -87,7 +87,8 @@ func (repository *PostgresRepository) SearchLibrary(
 	for snapshotRows.Next() {
 		var snapshot SearchSnapshot
 		if err := snapshotRows.Scan(
-			&snapshot.RootID, &snapshot.ScanRunID, &snapshot.CompletedAt, &snapshot.DocumentCount,
+			&snapshot.RootID, &snapshot.ScanRunID, &snapshot.CompletedAt,
+			&snapshot.DocumentCount, &snapshot.CatalogGeneration,
 		); err != nil {
 			snapshotRows.Close()
 			return SearchPage{}, fmt.Errorf("scan search snapshot: %w", err)
@@ -283,6 +284,7 @@ func buildRawSearchStatement(
 		  select root_id, document_id, entity_kind, book_id, relative_path, display_name,
 		         size, modified_at, title, authors, compact_authors, series, narrators,
 		         genres, compact_genres, coalesce(review_state,'') as review_state,
+		         coalesce(review_reason,'') as review_reason,
 		         publication_year, created_at, recently_scanned_at, filenames, duration_ms,
 		         duplicate_group_id, duplicate_count, compact_name, compact_path,
 		         compact_metadata, search_compact, search_terms, search_grams,
@@ -294,7 +296,7 @@ func buildRawSearchStatement(
 		)
 		select root_id, document_id, entity_kind, book_id, relative_path, display_name,
 		       size, modified_at, title, authors, compact_authors, series, narrators,
-		       genres, compact_genres, review_state, publication_year, created_at,
+		       genres, compact_genres, review_state, review_reason, publication_year, created_at,
 		       recently_scanned_at, filenames, duration_ms, duplicate_group_id,
 		       duplicate_count, compact_name, compact_path, compact_metadata,
 		       search_compact, search_terms, search_grams,
@@ -460,7 +462,7 @@ func buildAudiobookSearchStatement(
 			",compact_name,relative_path,entity_kind,root_id,document_id"
 		baseColumns := `root_id, document_id, entity_kind, book_id, relative_path, display_name,
 		       size, modified_at, title, authors, compact_authors, series, narrators,
-		       genres, compact_genres, review_state, publication_year, created_at,
+		       genres, compact_genres, review_state, review_reason, publication_year, created_at,
 		       recently_scanned_at, filenames, duration_ms, duplicate_group_id,
 		       duplicate_count, compact_name, compact_path, compact_metadata,
 		       search_compact, search_terms, search_grams`
@@ -512,7 +514,7 @@ func buildAudiobookSearchStatement(
 			)
 			select root_id, document_id, entity_kind, book_id, relative_path, display_name,
 			       size, modified_at, title, authors, compact_authors, series, narrators,
-			       genres, compact_genres, coalesce(review_state,''), publication_year, created_at,
+			       genres, compact_genres, coalesce(review_state,''), coalesce(review_reason,''), publication_year, created_at,
 			       recently_scanned_at, filenames, duration_ms, duplicate_group_id,
 			       duplicate_count, compact_name, compact_path, compact_metadata,
 			       search_compact, search_terms, search_grams,
@@ -525,7 +527,8 @@ func buildAudiobookSearchStatement(
 		with matched as (
 		select root_id, document_id, entity_kind, book_id, relative_path, display_name,
 		       size, modified_at, title, authors, compact_authors, series, narrators,
-		       genres, compact_genres, coalesce(review_state,'') as review_state, publication_year, created_at,
+		       genres, compact_genres, coalesce(review_state,'') as review_state,
+		       coalesce(review_reason,'') as review_reason, publication_year, created_at,
 		       recently_scanned_at, filenames, duration_ms, duplicate_group_id,
 		       duplicate_count, compact_name, compact_path, compact_metadata,
 		       search_compact, search_terms, search_grams,
@@ -544,7 +547,7 @@ func buildAudiobookSearchStatement(
 		)
 		select root_id, document_id, entity_kind, book_id, relative_path, display_name,
 		       size, modified_at, title, authors, compact_authors, series, narrators,
-		       genres, compact_genres, coalesce(review_state,''), publication_year, created_at,
+		       genres, compact_genres, coalesce(review_state,''), coalesce(review_reason,''), publication_year, created_at,
 		       recently_scanned_at, filenames, duration_ms, duplicate_group_id,
 		       duplicate_count, compact_name, compact_path, compact_metadata,
 		       search_compact, search_terms, search_grams,
@@ -623,7 +626,7 @@ func searchAudiobookGroupsTx(
 		select d.root_id, d.document_id, d.entity_kind, d.book_id,
 		       d.relative_path, d.display_name, d.size, d.modified_at, d.title,
 		       d.authors, d.compact_authors, d.series, d.narrators, d.genres,
-		       d.compact_genres, coalesce(d.review_state,''), d.publication_year,
+		       d.compact_genres, coalesce(d.review_state,''), coalesce(d.review_reason,''), d.publication_year,
 		       d.created_at, d.recently_scanned_at, d.filenames, d.duration_ms,
 		       d.duplicate_group_id, d.duplicate_count, d.compact_name,
 		       d.compact_path, d.compact_metadata, d.search_compact,
@@ -1034,7 +1037,8 @@ func scanSearchDocumentWithExtras(row scanner, extras ...any) (SearchDocument, e
 		&document.RelativePath, &document.DisplayName, &document.Size, &document.ModifiedAt,
 		&document.Title, &document.Authors, &document.CompactAuthors, &document.Series,
 		&document.Narrators, &document.Genres, &document.CompactGenres, &document.ReviewState,
-		&document.PublicationYear, &document.CreatedAt, &document.RecentlyScannedAt,
+		&document.ReviewReason, &document.PublicationYear, &document.CreatedAt,
+		&document.RecentlyScannedAt,
 		&document.Filenames, &document.DurationMS, &duplicateGroupID, &document.DuplicateCount,
 		&document.CompactName, &document.CompactPath, &document.CompactMetadata,
 		&document.SearchCompact, &document.SearchTerms, &document.SearchGrams,
@@ -1175,7 +1179,15 @@ func loadSearchProjectionInputTx(
 	input := SearchProjectionInput{
 		RootID: rootID, ScanRunID: scanID, CompletedAt: completedAt,
 		Assignments: make(map[uuid.UUID][]uuid.UUID),
+		Evidence:    make(map[uuid.UUID]GroupingEvidence),
 	}
+	if err := transaction.QueryRow(ctx, `
+		select generation, updated_at
+		from catalog_generations where root_id=$1
+	`, rootID).Scan(&input.Generation.Value, &input.Generation.UpdatedAt); err != nil {
+		return input, mapNotFound(err, "load search catalog generation")
+	}
+	input.Generation.RootID = rootID
 	bookRows, err := transaction.Query(ctx, `
 		select `+bookColumns("b")+`
 		from books b
@@ -1247,6 +1259,40 @@ func loadSearchProjectionInputTx(
 		return input, fmt.Errorf("iterate active search assignments: %w", err)
 	}
 	assignmentRows.Close()
+
+	evidenceRows, err := transaction.Query(ctx, `
+		select evidence.book_id, evidence.reason_code, b.confidence::float8,
+		       b.review_state, evidence.evidence
+		from book_grouping_evidence evidence
+		join books b on b.id=evidence.book_id and b.root_id=evidence.root_id
+		where evidence.root_id=$1 and b.missing_at is null
+		order by evidence.book_id
+	`, rootID)
+	if err != nil {
+		return input, fmt.Errorf("load search grouping evidence: %w", err)
+	}
+	for evidenceRows.Next() {
+		var bookID uuid.UUID
+		var evidence GroupingEvidence
+		var values []byte
+		if err := evidenceRows.Scan(
+			&bookID, &evidence.ReasonCode, &evidence.Confidence,
+			&evidence.ReviewState, &values,
+		); err != nil {
+			evidenceRows.Close()
+			return input, fmt.Errorf("scan search grouping evidence: %w", err)
+		}
+		if err := json.Unmarshal(values, &evidence.Values); err != nil {
+			evidenceRows.Close()
+			return input, fmt.Errorf("decode search grouping evidence: %w", err)
+		}
+		input.Evidence[bookID] = evidence
+	}
+	if err := evidenceRows.Err(); err != nil {
+		evidenceRows.Close()
+		return input, fmt.Errorf("iterate search grouping evidence: %w", err)
+	}
+	evidenceRows.Close()
 	return input, nil
 }
 
@@ -1266,20 +1312,21 @@ func publishSearchProjectionTx(
 			insert into library_search_documents(
 				root_id, document_id, entity_kind, book_id, relative_path, display_name,
 				size, modified_at, title, authors, compact_authors, series, narrators,
-				genres, compact_genres, review_state, publication_year, created_at,
+				genres, compact_genres, review_state, review_reason, publication_year, created_at,
 				recently_scanned_at, filenames, duration_ms, duplicate_group_id,
 				duplicate_count, compact_name, compact_path, compact_metadata,
 				search_compact, search_terms, search_grams
 			) values (
 				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-				$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29
+				$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30
 			)
 		`, document.RootID, document.ID, document.EntityKind,
 			nullableUUID(document.BookID), document.RelativePath, document.DisplayName,
 			document.Size, document.ModifiedAt, document.Title, nonNilStrings(document.Authors),
 			nonNilStrings(document.CompactAuthors), document.Series,
 			nonNilStrings(document.Narrators), nonNilStrings(document.Genres),
-			nonNilStrings(document.CompactGenres), nullableText(document.ReviewState), document.PublicationYear,
+			nonNilStrings(document.CompactGenres), nullableText(document.ReviewState),
+			nullableText(document.ReviewReason), document.PublicationYear,
 			document.CreatedAt, document.RecentlyScannedAt, nonNilStrings(document.Filenames),
 			document.DurationMS, nullableUUID(document.DuplicateGroupID), document.DuplicateCount,
 			document.CompactName, document.CompactPath, document.CompactMetadata,
@@ -1290,14 +1337,16 @@ func publishSearchProjectionTx(
 	}
 	if _, err := transaction.Exec(ctx, `
 		insert into library_search_snapshots(
-			root_id, scan_run_id, completed_at, document_count
-		) values ($1,$2,$3,$4)
+			root_id, scan_run_id, completed_at, document_count, catalog_generation
+		) values ($1,$2,$3,$4,$5)
 		on conflict (root_id) do update
 		set scan_run_id=excluded.scan_run_id,
 		    completed_at=excluded.completed_at,
-		    document_count=excluded.document_count
+		    document_count=excluded.document_count,
+		    catalog_generation=excluded.catalog_generation
 	`, projection.Snapshot.RootID, projection.Snapshot.ScanRunID,
-		projection.Snapshot.CompletedAt, projection.Snapshot.DocumentCount); err != nil {
+		projection.Snapshot.CompletedAt, projection.Snapshot.DocumentCount,
+		projection.Snapshot.CatalogGeneration); err != nil {
 		return classifyConstraint(err, "publish search snapshot")
 	}
 	return nil

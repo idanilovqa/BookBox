@@ -25,16 +25,19 @@ type SearchProjectionInput struct {
 	RootID      string
 	ScanRunID   uuid.UUID
 	CompletedAt time.Time
+	Generation  CatalogGeneration
 	Books       []Book
 	Files       []SourceFile
 	Assignments map[uuid.UUID][]uuid.UUID
+	Evidence    map[uuid.UUID]GroupingEvidence
 }
 
 type SearchSnapshot struct {
-	RootID        string
-	ScanRunID     uuid.UUID
-	CompletedAt   time.Time
-	DocumentCount int
+	RootID            string
+	ScanRunID         uuid.UUID
+	CompletedAt       time.Time
+	DocumentCount     int
+	CatalogGeneration int64
 }
 
 type SearchProjection struct {
@@ -57,6 +60,7 @@ type SearchDocument struct {
 	Narrators         []string
 	Genres            []string
 	ReviewState       string
+	ReviewReason      string
 	PublicationYear   *int
 	CreatedAt         *time.Time
 	RecentlyScannedAt *time.Time
@@ -72,6 +76,21 @@ type SearchDocument struct {
 	SearchCompact     string
 	SearchTerms       string
 	SearchGrams       []string
+}
+
+type InventoryFinalization struct {
+	ScanRunID uuid.UUID
+	RootID    string
+	Books     []InferredBook
+	Evidence  map[string]GroupingEvidence
+}
+
+type GroupingRefinement struct {
+	RootID             string
+	ScopePath          string
+	ExpectedGeneration int64
+	Books              []InferredBook
+	Evidence           map[string]GroupingEvidence
 }
 
 type SearchGroup struct {

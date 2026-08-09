@@ -34,6 +34,9 @@ type Repository interface {
 	IncrementCatalogGeneration(context.Context, string) (CatalogGeneration, error)
 	ReplaceInferredBooks(context.Context, string, []InferredBook) error
 	FinalizeSuccessfulScan(context.Context, uuid.UUID, []InferredBook) error
+	PublishSearchProjection(context.Context, SearchProjection) error
+	FinalizeInventoryAndPublish(context.Context, InventoryFinalization) (CatalogGeneration, error)
+	ApplyGroupingRefinement(context.Context, GroupingRefinement) (CatalogGeneration, error)
 	SearchLibrary(context.Context, SearchQuery) (SearchPage, error)
 	ListBooks(context.Context, BookQuery) (Page[Book], error)
 	ListCatalogFilters(context.Context) (FilterSnapshot, error)

@@ -25,7 +25,8 @@ type projectionFileInfo struct {
 
 func BuildSearchProjection(input SearchProjectionInput) (SearchProjection, error) {
 	if !rootIDPattern.MatchString(input.RootID) || input.ScanRunID == uuid.Nil ||
-		input.CompletedAt.IsZero() {
+		input.CompletedAt.IsZero() || input.Generation.Value < 0 ||
+		(input.Generation.Value > 0 && input.Generation.RootID != input.RootID) {
 		return SearchProjection{}, ErrInvalidData
 	}
 
@@ -100,6 +101,10 @@ func BuildSearchProjection(input SearchProjectionInput) (SearchProjection, error
 	bookIDs := sortedUUIDKeys(books)
 	for _, bookID := range bookIDs {
 		book := books[bookID]
+		reviewReason := ""
+		if evidence, exists := input.Evidence[bookID]; exists {
+			reviewReason = evidence.ReasonCode
+		}
 		duration, known, filenames, _, err := audiobookMedia(assignments[bookID], files)
 		if err != nil {
 			return SearchProjection{}, err
@@ -111,8 +116,9 @@ func BuildSearchProjection(input SearchProjectionInput) (SearchProjection, error
 			RelativePath: book.SourceFolder, DisplayName: book.Title,
 			Title: book.Title, Authors: cleanStrings(book.Authors), Series: strings.TrimSpace(book.Series),
 			Narrators: cleanStrings(book.Narrators), Genres: cleanStrings(book.Genres),
-			ReviewState: book.ReviewState, PublicationYear: copyInt(book.PublicationYear),
-			CreatedAt: timePointer(book.CreatedAt), RecentlyScannedAt: recentlyScanned,
+			ReviewState: book.ReviewState, ReviewReason: reviewReason,
+			PublicationYear: copyInt(book.PublicationYear),
+			CreatedAt:       timePointer(book.CreatedAt), RecentlyScannedAt: recentlyScanned,
 			Filenames: filenames, DuplicateCount: 1,
 		}
 		if known {
@@ -190,6 +196,7 @@ func BuildSearchProjection(input SearchProjectionInput) (SearchProjection, error
 		Snapshot: SearchSnapshot{
 			RootID: input.RootID, ScanRunID: input.ScanRunID,
 			CompletedAt: input.CompletedAt.UTC(), DocumentCount: len(documents),
+			CatalogGeneration: input.Generation.Value,
 		},
 		Documents: documents,
 	}, nil
