@@ -1,7 +1,7 @@
 # Windows Hybrid Catalog Worker Design
 
-**Date:** 2026-08-08  
-**Status:** Approved design  
+**Date:** 2026-08-08
+**Status:** Approved design
 **Scope:** Windows-hosted BookBox installations using local drives
 
 ## Decision
@@ -30,17 +30,17 @@ This also matches the intended future product boundary: a Windows installer or t
 
 The existing Go worker gains Windows Service lifecycle support while preserving normal console execution and the Linux container build.
 
-This is the selected approach because it provides native filesystem behavior, controlled recovery, and a clean future installer boundary without adding a third-party service wrapper.
+BookBox selects this approach because it provides native filesystem behavior, controlled recovery, and a clean future installer boundary without adding a third-party service wrapper.
 
 ### 2. WinSW or NSSM wrapper
 
 Wrapping the existing executable would reduce initial service-host code, but it would add an external executable and make installation, upgrades, logging, and recovery depend on wrapper-specific configuration.
 
-This is not selected because BookBox already owns the Go worker and benefits from a first-class service lifecycle.
+BookBox rejects this approach because it already owns the Go worker and benefits from a first-class service lifecycle.
 
 ### 3. Tray application and supervisor now
 
-A tray application could manage configuration, Docker, and the worker. This is deferred because it would expand the current work into user interface design, updates, process supervision, and installer behavior before the service boundary is proven.
+A tray application could manage configuration, Docker, and the worker. This phase defers that application because it would add user interface design, updates, process supervision, and installer behavior before tests prove the service boundary.
 
 ## Runtime Topology
 
@@ -93,7 +93,7 @@ BookBox retains two supported modes:
 - Native Windows catalog-worker service
 - Library stored on an approved local Windows drive
 
-The container worker becomes an explicit Compose profile. The hybrid Compose override disables that profile and publishes PostgreSQL on a configurable loopback-only host port. The base Compose network still exposes PostgreSQL internally to the API.
+Compose requires an explicit profile for the container worker. The hybrid Compose override leaves that profile disabled and publishes PostgreSQL on a configurable loopback-only host port. The base Compose network still exposes PostgreSQL to the API.
 
 The Windows service does not start, stop, install, or update Docker Desktop. If Docker or PostgreSQL is unavailable, the service remains alive and waits for the database.
 
@@ -113,7 +113,7 @@ deploy/config.yml
 
 Both configurations use the same stable root IDs and display names. Root IDs, not absolute paths, remain the database identity and cross-process contract.
 
-`path` becomes the canonical root-path configuration field. The existing `container_path` field remains accepted as a compatibility alias during migration. Each process validates its selected path with the native operating-system path rules.
+Configuration uses `path` as the canonical root-path field. The loader accepts the existing `container_path` field as a compatibility alias during migration. Each process validates its selected path with the native operating-system path rules.
 
 The future Windows configuration UI or installer may generate both runtime configurations from one logical root selection. That UI is outside this phase.
 
@@ -167,9 +167,9 @@ Interactive execution is the diagnostics and E2E surface. Service execution uses
 2. Cancel pending noncommitted work.
 3. Allow the active transaction to finish or roll back within the service stop bound.
 4. Close database connections.
-5. report a clean stop to the Service Control Manager.
+5. Report a clean stop to the Service Control Manager.
 
-Lifecycle failures are written to Windows Event Log. Detailed sanitized diagnostics use bounded rotating files under `%ProgramData%\BookBox\logs`.
+The service writes lifecycle failures to Windows Event Log and detailed sanitized diagnostics to bounded rotating files under `%ProgramData%\BookBox\logs`.
 
 ## Catalog Update Flow
 
