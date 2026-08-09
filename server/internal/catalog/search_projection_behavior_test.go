@@ -50,6 +50,22 @@ func TestBuildSearchProjectionRejectsInvalidActiveRecords(t *testing.T) {
 	}
 }
 
+func TestBuildSearchProjectionUsesStagedFileClassificationWithoutProbeMedia(t *testing.T) {
+	input := oneBookProjectionInput(1_000)
+	cover := projectionFile(uuid.New(), "Needlebox Nested/Needlebox Assets/cover.jpg", FileRoleCover, 0)
+	cover.FileKind = FileKindCover
+	cover.Media = map[string]any{}
+	input.Files = append(input.Files, cover)
+
+	projection, err := BuildSearchProjection(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findSearchDocument(t, projection, SearchEntityFile, cover.RelativePath)
+	findSearchDocument(t, projection, SearchEntityFolder, "Needlebox Nested/Needlebox Assets")
+	findSearchDocument(t, projection, SearchEntityFolder, "Needlebox Nested")
+}
+
 func TestBuildSearchProjectionRequiresEveryAudioDurationForBookTotal(t *testing.T) {
 	input := oneBookProjectionInput(1_000)
 	secondID := uuid.New()

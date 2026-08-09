@@ -63,7 +63,7 @@ func BuildSearchProjection(input SearchProjectionInput) (SearchProjection, error
 		if _, exists := paths[file.RelativePath]; exists {
 			return SearchProjection{}, ErrInvalidData
 		}
-		role, duration, known, err := projectionMedia(file.Media)
+		role, duration, known, err := projectionSourceFileMedia(file)
 		if err != nil {
 			return SearchProjection{}, err
 		}
@@ -214,6 +214,36 @@ func projectionMedia(media map[string]any) (string, int64, bool, error) {
 	if role != FileRoleAudio {
 		return role, 0, false, nil
 	}
+	return projectionDuration(media, role)
+}
+
+func projectionSourceFileMedia(file SourceFile) (string, int64, bool, error) {
+	legacyRole, duration, known, err := projectionMedia(file.Media)
+	if err != nil {
+		return "", 0, false, err
+	}
+
+	var stagedRole string
+	switch file.FileKind {
+	case FileKindAudio:
+		stagedRole = FileRoleAudio
+	case FileKindCover:
+		stagedRole = FileRoleCover
+	case FileKindCompanion:
+		stagedRole = FileRoleSidecar
+	default:
+		return legacyRole, duration, known, nil
+	}
+	if legacyRole != "" && legacyRole != stagedRole {
+		return "", 0, false, ErrInvalidData
+	}
+	if stagedRole == FileRoleAudio {
+		return projectionDuration(file.Media, stagedRole)
+	}
+	return stagedRole, 0, false, nil
+}
+
+func projectionDuration(media map[string]any, role string) (string, int64, bool, error) {
 	value, exists := media["durationMs"]
 	if !exists || value == nil {
 		return role, 0, false, nil

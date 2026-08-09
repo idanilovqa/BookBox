@@ -1213,7 +1213,8 @@ func loadSearchProjectionInputTx(
 
 	fileRows, err := transaction.Query(ctx, `
 		select id, root_id, relative_path, size, modified_at,
-		       coalesce(sha256,''), media, scan_run_id, missing_at
+		       coalesce(sha256,''), media, scan_run_id, missing_at,
+		       file_kind, coalesce(companion_kind,'')
 		from source_files
 		where root_id=$1 and missing_at is null
 		order by id
@@ -1222,7 +1223,7 @@ func loadSearchProjectionInputTx(
 		return input, fmt.Errorf("load active search files: %w", err)
 	}
 	for fileRows.Next() {
-		file, scanErr := scanSourceFile(fileRows)
+		file, scanErr := scanSearchSourceFile(fileRows)
 		if scanErr != nil {
 			fileRows.Close()
 			return input, fmt.Errorf("scan active search file: %w", scanErr)
@@ -1294,6 +1295,22 @@ func loadSearchProjectionInputTx(
 	}
 	evidenceRows.Close()
 	return input, nil
+}
+
+func scanSearchSourceFile(row scanner) (SourceFile, error) {
+	var file SourceFile
+	var media []byte
+	if err := row.Scan(
+		&file.ID, &file.RootID, &file.RelativePath, &file.Size, &file.ModifiedAt,
+		&file.SHA256, &media, &file.ScanRunID, &file.MissingAt,
+		&file.FileKind, &file.CompanionKind,
+	); err != nil {
+		return SourceFile{}, err
+	}
+	if err := json.Unmarshal(media, &file.Media); err != nil {
+		return SourceFile{}, fmt.Errorf("decode search source media: %w", err)
+	}
+	return file, nil
 }
 
 func publishSearchProjectionTx(
