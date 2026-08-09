@@ -77,6 +77,29 @@ function Get-BookBoxComposeStatePath {
     Join-Path ([IO.Path]::GetFullPath($StateDirectory)) 'compose-startup.json'
 }
 
+function New-BookBoxComposeStateRecord {
+    param(
+        [Parameter(Mandatory)][object] $Scope,
+        [Parameter(Mandatory)][string] $Address,
+        [Parameter(Mandatory)][ValidateRange(1, 65535)][int] $Port,
+        [AllowNull()][string] $EnvironmentFile
+    )
+
+    [ordered]@{
+        SchemaVersion = 1
+        DeploymentMode = [string]$Scope.DeploymentMode
+        ComposeFiles = @($Scope.ComposeFiles | ForEach-Object { [IO.Path]::GetFullPath([string]$_) })
+        Profiles = @($Scope.Profiles | ForEach-Object { [string]$_ })
+        EnvironmentFile = if ([string]::IsNullOrWhiteSpace($EnvironmentFile)) {
+            $null
+        } else {
+            [IO.Path]::GetFullPath($EnvironmentFile)
+        }
+        Address = $Address
+        Port = $Port
+    }
+}
+
 function Write-BookBoxComposeState {
     [CmdletBinding()]
     param(
@@ -94,24 +117,97 @@ function Write-BookBoxComposeState {
     }
     $null = New-Item -ItemType Directory -Path $directory -Force
     $temporary = Join-Path $directory ".compose-startup-$([Guid]::NewGuid().ToString('N')).tmp"
-    $record = [ordered]@{
-        SchemaVersion = 1
-        DeploymentMode = [string]$Scope.DeploymentMode
-        ComposeFiles = @($Scope.ComposeFiles | ForEach-Object { [IO.Path]::GetFullPath([string]$_) })
-        Profiles = @($Scope.Profiles | ForEach-Object { [string]$_ })
-        EnvironmentFile = if ([string]::IsNullOrWhiteSpace($EnvironmentFile)) {
-            $null
-        } else {
-            [IO.Path]::GetFullPath($EnvironmentFile)
-        }
-        Address = $Address
-        Port = $Port
-    }
+    $record = New-BookBoxComposeStateRecord `
+        -Scope $Scope `
+        -Address $Address `
+        -Port $Port `
+        -EnvironmentFile $EnvironmentFile
     try {
         $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporary -Encoding UTF8
         Move-Item -LiteralPath $temporary -Destination $statePath
     } finally {
         Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Ensure-BookBoxComposeState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $StateDirectory,
+        [Parameter(Mandatory)][object] $Scope,
+        [Parameter(Mandatory)][string] $Address,
+        [Parameter(Mandatory)][ValidateRange(1, 65535)][int] $Port,
+        [AllowNull()][string] $EnvironmentFile
+    )
+
+    $statePath = Get-BookBoxComposeStatePath -StateDirectory $StateDirectory
+    if (-not (Test-Path -LiteralPath $statePath)) {
+        Write-BookBoxComposeState `
+            -StateDirectory $StateDirectory `
+            -Scope $Scope `
+            -Address $Address `
+            -Port $Port `
+            -EnvironmentFile $EnvironmentFile
+        $created = $true
+    } else {
+        $created = $false
+    }
+
+    try {
+        $record = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
+        $expected = [pscustomobject](New-BookBoxComposeStateRecord `
+            -Scope $Scope `
+            -Address $Address `
+            -Port $Port `
+            -EnvironmentFile $EnvironmentFile)
+        $actualFiles = @($record.ComposeFiles | ForEach-Object { [IO.Path]::GetFullPath([string]$_) })
+        $actualProfiles = @($record.Profiles | ForEach-Object { [string]$_ })
+    } catch {
+        throw "Refusing malformed Compose startup state: $statePath"
+    }
+
+    if ([int]$record.SchemaVersion -ne [int]$expected.SchemaVersion -or
+        [string]$record.DeploymentMode -cne [string]$expected.DeploymentMode -or
+        $actualFiles.Count -ne @($expected.ComposeFiles).Count -or
+        $actualProfiles.Count -ne @($expected.Profiles).Count -or
+        [string]$record.Address -cne [string]$expected.Address -or
+        [int]$record.Port -ne [int]$expected.Port -or
+        -not $record.PSObject.Properties['EnvironmentFile']) {
+        throw 'Refusing Compose startup state that does not match the requested deployment.'
+    }
+    for ($index = 0; $index -lt $actualFiles.Count; $index++) {
+        if (-not [string]::Equals(
+                $actualFiles[$index],
+                [string]$expected.ComposeFiles[$index],
+                [StringComparison]::OrdinalIgnoreCase
+            )) {
+            throw 'Refusing Compose startup state that does not match the requested deployment.'
+        }
+    }
+    for ($index = 0; $index -lt $actualProfiles.Count; $index++) {
+        if ($actualProfiles[$index] -cne [string]$expected.Profiles[$index]) {
+            throw 'Refusing Compose startup state that does not match the requested deployment.'
+        }
+    }
+    $actualEnvironment = if ([string]::IsNullOrWhiteSpace([string]$record.EnvironmentFile)) {
+        $null
+    } else {
+        [IO.Path]::GetFullPath([string]$record.EnvironmentFile)
+    }
+    if (-not [string]::Equals(
+            [string]$actualEnvironment,
+            [string]$expected.EnvironmentFile,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw 'Refusing Compose startup state that does not match the requested deployment.'
+    }
+
+    $record.ComposeFiles = $actualFiles
+    $record.Profiles = $actualProfiles
+    $record.EnvironmentFile = $actualEnvironment
+    [pscustomobject]@{
+        Created = $created
+        Record = $record
     }
 }
 

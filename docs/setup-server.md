@@ -70,10 +70,12 @@ $env:BOOKBOX_BIND_ADDRESS = '192.168.1.25'
 $env:BOOKBOX_HOST_PORT = '8787'
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File deploy\scripts\install-bookbox-discovery.ps1 `
-  -SourceExecutable artifacts\bookbox-discovery.exe
+  -SourceExecutable artifacts\bookbox-discovery.exe `
+  -DeploymentMode Hybrid `
+  -HybridComposeFile deploy\compose.hybrid.yml
 ```
 
-The installer copies the executable to `%LOCALAPPDATA%\BookBox\bin\bookbox-discovery.exe`, copies managed scripts under `%LOCALAPPDATA%\BookBox\scripts`, writes `bookbox-install.json`, registers `\BookBox\BookBox Discovery` for logon, and installs these inbound firewall rules:
+The installer copies the executable to `%LOCALAPPDATA%\BookBox\bin\bookbox-discovery.exe`, copies managed scripts under `%LOCALAPPDATA%\BookBox\scripts`, writes `bookbox-install.json`, and registers `\BookBox\BookBox Discovery` for logon with the exact Hybrid mode and overlay. Repeated logon triggers reconcile that owned scope without starting a second discovery process. A mismatched or tampered state is refused before Docker runs. The installer also creates these inbound firewall rules:
 
 | Name | Protocol | Port | Profile | Remote scope |
 |---|---:|---:|---|---|
@@ -89,7 +91,10 @@ Set the environment in the PowerShell session used to start BookBox:
 ```powershell
 $env:BOOKBOX_BIND_ADDRESS = '192.168.1.25'
 $env:BOOKBOX_HOST_PORT = '8787'
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\start-bookbox.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\start-bookbox.ps1 `
+  -DeploymentMode Hybrid `
+  -HybridComposeFile deploy\compose.hybrid.yml
 ```
 
 The script starts Compose, waits up to two minutes for `http://192.168.1.25:8787/v1/ready`, starts discovery, and verifies `bookbox.local`.

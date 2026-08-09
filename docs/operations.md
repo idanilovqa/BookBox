@@ -26,7 +26,8 @@ remains the only BookBox endpoint exposed to Android.
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File deploy\scripts\start-bookbox.ps1 `
-  -DeploymentMode Hybrid
+  -DeploymentMode Hybrid `
+  -HybridComposeFile deploy\compose.hybrid.yml
 ```
 
 The stop script reads the owned startup state and uses the same Compose files,
@@ -36,7 +37,7 @@ profile, address, port, and environment file:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\stop-bookbox.ps1
 ```
 
-The start script verifies the selected address, Windows Private profile, firewall rules, API readiness, discovery process, and `bookbox.local` resolution. The stop script stops its owned discovery process and runs Compose `down --remove-orphans`. Named PostgreSQL and cover volumes remain.
+The start script verifies the selected address, Windows Private profile, firewall rules, API readiness, discovery process, and `bookbox.local` resolution. An identical repeated start reconciles the same Compose scope and reuses the exact owned discovery process. It refuses mismatched or tampered startup state before invoking Docker. The stop script stops its owned discovery process and runs Compose `down --remove-orphans`. Named PostgreSQL and cover volumes remain.
 
 If the logon task started discovery from its installed copy, stop it with the installed state directory:
 

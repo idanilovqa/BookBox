@@ -20,12 +20,21 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
 }
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
 if (
-    [int]$manifest.SchemaVersion -ne 1 -or
+    [int]$manifest.SchemaVersion -ne 2 -or
     [string]$manifest.Owner -cne $identity.Name -or
     [string]$manifest.TaskName -cne $TaskName -or
     [string]$manifest.TaskPath -cne $TaskPath
 ) {
     throw 'Refusing to remove an installation whose ownership manifest does not match.'
+}
+$deploymentMode = [string]$manifest.DeploymentMode
+$composeFile = [IO.Path]::GetFullPath([string]$manifest.ComposeFile)
+$hybridComposeFile = [IO.Path]::GetFullPath([string]$manifest.HybridComposeFile)
+if ($deploymentMode -notin @('Container', 'Hybrid') -or
+    -not (Test-Path -LiteralPath $composeFile -PathType Leaf) -or
+    ($deploymentMode -eq 'Hybrid' -and
+        -not (Test-Path -LiteralPath $hybridComposeFile -PathType Leaf))) {
+    throw 'Refusing to remove an installation with invalid deployment scope.'
 }
 $stateDirectory = [IO.Path]::GetFullPath([string]$manifest.StateDirectory)
 $expectedStateDirectory = Join-Path $installRoot 'state'
@@ -59,7 +68,7 @@ if ($existingTask) {
     $actions = @($existingTask.Actions)
     $triggers = @($existingTask.Triggers)
     if (
-        $existingTask.Description -cne 'BookBox managed discovery version 1' -or
+        $existingTask.Description -cne 'BookBox managed discovery version 2' -or
         $actions.Count -ne 1 -or
         [string]$actions[0].Execute -notmatch '(?i)(^|\\)powershell\.exe$' -or
         [string]$actions[0].WorkingDirectory -cne (Join-Path $installRoot 'scripts') -or
@@ -67,6 +76,7 @@ if ($existingTask) {
         [string]$existingTask.Principal.UserId -cne $identity.Name -or
         [string]$existingTask.Principal.RunLevel -cne 'Limited' -or
         [string]$existingTask.Principal.LogonType -notmatch '^Interactive' -or
+        [string]$existingTask.Settings.MultipleInstances -cne 'IgnoreNew' -or
         $triggers.Count -ne 1 -or
         $triggers[0].CimClass.CimClassName -cne 'MSFT_TaskLogonTrigger' -or
         [string]$triggers[0].UserId -cne $identity.Name
@@ -106,9 +116,40 @@ foreach ($definition in $firewallDefinitions) {
 }
 
 $processScript = Join-Path $installRoot 'scripts\discovery-process.ps1'
-if (Test-Path -LiteralPath $processScript -PathType Leaf) {
-    . $processScript
-    Stop-BookBoxDiscovery -StateDirectory $stateDirectory
+$stopScript = Join-Path $installRoot 'scripts\stop-bookbox.ps1'
+$taskWasEnabled = [bool]($existingTask -and [bool]$existingTask.Settings.Enabled)
+try {
+    if ($existingTask) {
+        Disable-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath | Out-Null
+        $taskAfterDisable = Get-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath
+        if ([string]$taskAfterDisable.State -eq 'Running') {
+            Stop-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath
+            $taskDeadline = [DateTime]::UtcNow.AddSeconds(30)
+            do {
+                Start-Sleep -Milliseconds 200
+                $taskState = (Get-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath).State
+            } while ([string]$taskState -eq 'Running' -and [DateTime]::UtcNow -lt $taskDeadline)
+            if ([string]$taskState -eq 'Running') {
+                throw 'BookBox scheduled startup task did not stop within 30 seconds.'
+            }
+        }
+    }
+    $composeStatePath = Join-Path $stateDirectory 'compose-startup.json'
+    if (Test-Path -LiteralPath $composeStatePath -PathType Leaf) {
+        & $stopScript `
+            -StateDirectory $stateDirectory `
+            -ComposeFile $composeFile `
+            -HybridComposeFile ([string]$manifest.HybridComposeFile) `
+            -DeploymentMode ([string]$manifest.DeploymentMode)
+    } elseif (Test-Path -LiteralPath $processScript -PathType Leaf) {
+        . $processScript
+        Stop-BookBoxDiscovery -StateDirectory $stateDirectory
+    }
+} catch {
+    if ($taskWasEnabled) {
+        Enable-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath | Out-Null
+    }
+    throw
 }
 if ($existingTask) {
     Unregister-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath -Confirm:$false

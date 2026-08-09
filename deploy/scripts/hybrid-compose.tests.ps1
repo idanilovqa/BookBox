@@ -191,11 +191,14 @@ if ($hybrid.services.PSObject.Properties['bookbox-catalog-worker']) {
 
 $stateRoot = Join-Path ([IO.Path]::GetTempPath()) "bookbox-compose-state-$([Guid]::NewGuid().ToString('N'))"
 try {
-    Write-BookBoxComposeState `
+    $createdState = Ensure-BookBoxComposeState `
         -StateDirectory $stateRoot `
         -Scope $hybridScope `
         -Address '192.168.1.25' `
         -Port 8787
+    if (-not $createdState.Created -or $createdState.Record.DeploymentMode -cne 'Hybrid') {
+        throw 'First Hybrid reconciliation did not create validated owned state.'
+    }
     $record = Read-BookBoxComposeState `
         -StateDirectory $stateRoot `
         -ComposeFile $baseCompose `
@@ -204,6 +207,47 @@ try {
         @($record.Profiles).Count -ne 0 -or
         -not $record.PSObject.Properties['EnvironmentFile']) {
         throw 'Owned startup state did not preserve the exact hybrid scope.'
+    }
+    $reconciled = Ensure-BookBoxComposeState `
+        -StateDirectory $stateRoot `
+        -Scope $hybridScope `
+        -Address '192.168.1.25' `
+        -Port 8787
+    if ($reconciled.Created -or $reconciled.Record.DeploymentMode -cne 'Hybrid') {
+        throw 'Identical Hybrid state was not reconciled as an existing owned deployment.'
+    }
+
+    $differentMode = [pscustomobject]@{
+        DeploymentMode = 'Container'
+        ComposeFiles = @($hybridScope.ComposeFiles)
+        Profiles = @($hybridScope.Profiles)
+    }
+    $differentFiles = [pscustomobject]@{
+        DeploymentMode = 'Hybrid'
+        ComposeFiles = @($hybridScope.ComposeFiles[0])
+        Profiles = @()
+    }
+    $differentProfiles = [pscustomobject]@{
+        DeploymentMode = 'Hybrid'
+        ComposeFiles = @($hybridScope.ComposeFiles)
+        Profiles = @('container-worker')
+    }
+    foreach ($changed in @(
+            @{ Scope = $differentMode; EnvironmentFile = $null; Address = '192.168.1.25'; Port = 8787 },
+            @{ Scope = $differentFiles; EnvironmentFile = $null; Address = '192.168.1.25'; Port = 8787 },
+            @{ Scope = $differentProfiles; EnvironmentFile = $null; Address = '192.168.1.25'; Port = 8787 },
+            @{ Scope = $hybridScope; EnvironmentFile = $environment; Address = '192.168.1.25'; Port = 8787 },
+            @{ Scope = $hybridScope; EnvironmentFile = $null; Address = '192.168.1.26'; Port = 8787 },
+            @{ Scope = $hybridScope; EnvironmentFile = $null; Address = '192.168.1.25'; Port = 8788 }
+        )) {
+        Assert-ThrowsLike -Pattern 'Refusing|mismatch|state' -Action {
+            Ensure-BookBoxComposeState `
+                -StateDirectory $stateRoot `
+                -Scope $changed.Scope `
+                -Address $changed.Address `
+                -Port $changed.Port `
+                -EnvironmentFile $changed.EnvironmentFile
+        }
     }
     Assert-ThrowsLike -Pattern 'already exists|active deployment' -Action {
         Write-BookBoxComposeState `
@@ -251,9 +295,13 @@ if ($stopText -notmatch 'Read-BookBoxComposeState' -or
     $stopText -match '(?m)^\s*& docker compose -f \$composeFile') {
     throw 'Stop must consume validated owned Compose state instead of reconstructing scope.'
 }
-if ($startText -notmatch 'Write-BookBoxComposeState' -or
+if ($startText -notmatch 'Ensure-BookBoxComposeState' -or
     $startText -notmatch 'Remove-BookBoxComposeState') {
     throw 'Start must persist exact Compose state and retire it only after scoped rollback.'
+}
+if ($startText -notmatch "-Command\s+@\('up',\s*'-d',\s*'--remove-orphans'\)" -or
+    $startText -notmatch 'if \(\$composeStateCreated\)') {
+    throw 'Start must reconcile the exact scope and roll back only state created by this invocation.'
 }
 if ($stopText -notmatch 'composeState\.EnvironmentFile') {
     throw 'Stop must use the env-file choice recorded at startup.'

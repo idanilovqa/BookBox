@@ -163,6 +163,23 @@ function Start-BookBoxDiscovery {
     }
     $existing = Get-BookBoxDiscoveryRecord -StateDirectory $paths.Directory
     if ($existing) {
+        $existingChild = Assert-BookBoxDiscoveryOwnership -Record $existing
+        $existingSupervisor = Assert-BookBoxDiscoverySupervisorOwnership -Record $existing
+        if ($existingChild -and $existingSupervisor) {
+            if (
+                -not [string]::Equals(
+                    [System.IO.Path]::GetFullPath([string]$existing.Executable),
+                    [System.IO.Path]::GetFullPath($resolvedExecutable),
+                    [System.StringComparison]::OrdinalIgnoreCase
+                ) -or
+                [string]$existing.Address -cne $Address -or
+                [int]$existing.Port -ne $Port
+            ) {
+                throw 'Refusing to reuse a discovery process with a different executable or endpoint.'
+            }
+            $existing | Add-Member -NotePropertyName Created -NotePropertyValue $false -Force
+            return $existing
+        }
         Retire-BookBoxStaleDiscovery -Record $existing -Paths $paths
     }
 
@@ -242,6 +259,7 @@ function Start-BookBoxDiscovery {
         $null = Assert-BookBoxDiscoverySupervisorOwnership -Record $record
         $record | ConvertTo-Json | Set-Content -LiteralPath $paths.Record -Encoding UTF8
         $null = New-Item -ItemType File -Path $paths.Accepted -Force
+        $record | Add-Member -NotePropertyName Created -NotePropertyValue $true -Force
         $record
     } catch {
         $launchFailure = $_

@@ -53,7 +53,9 @@ $env:BOOKBOX_BIND_ADDRESS = '192.168.1.25'
 $env:BOOKBOX_HOST_PORT = '8787'
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File deploy\scripts\install-bookbox-discovery.ps1 `
-  -SourceExecutable artifacts\bookbox-discovery.exe
+  -SourceExecutable artifacts\bookbox-discovery.exe `
+  -DeploymentMode Hybrid `
+  -HybridComposeFile deploy\compose.hybrid.yml
 ```
 
 The installer creates two inbound Windows Firewall rules:
@@ -61,7 +63,7 @@ The installer creates two inbound Windows Firewall rules:
 - TCP 8787 for BookBox HTTP
 - UDP 5353 for mDNS
 
-Both rules use the Private profile, the selected local address, and `LocalSubnet` as the remote scope. The installer copies the executable and managed scripts under `%LOCALAPPDATA%\BookBox`, writes an ownership manifest, and registers `\BookBox\BookBox Discovery` for logon. The process has no tray window.
+Both rules use the Private profile, the selected local address, and `LocalSubnet` as the remote scope. The installer copies the executable and managed scripts under `%LOCALAPPDATA%\BookBox`, writes an ownership manifest, and registers `\BookBox\BookBox Discovery` for logon with the exact Hybrid deployment arguments and `IgnoreNew` multiple-instance behavior. The process has no tray window.
 
 ## Start and verify
 
@@ -70,10 +72,13 @@ Start the Docker deployment and discovery process:
 ```powershell
 $env:BOOKBOX_BIND_ADDRESS = '192.168.1.25'
 $env:BOOKBOX_HOST_PORT = '8787'
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\start-bookbox.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\start-bookbox.ps1 `
+  -DeploymentMode Hybrid `
+  -HybridComposeFile deploy\compose.hybrid.yml
 ```
 
-The start script waits for the API, starts discovery, checks process ownership, and confirms that `bookbox.local` resolves to the selected address.
+The start script waits for the API, starts discovery, checks process ownership, and confirms that `bookbox.local` resolves to the selected address. Repeating the same exact start reconciles Compose and reuses the owned discovery process; changed or tampered scope is refused before Docker runs.
 
 Run these checks on Windows:
 

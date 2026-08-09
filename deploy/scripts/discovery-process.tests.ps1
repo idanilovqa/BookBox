@@ -119,6 +119,25 @@ try {
     if (-not (Test-BookBoxDiscovery -StateDirectory $taskState)) {
         throw 'Discovery process ownership validation failed.'
     }
+    try {
+        $sameRecord = Start-BookBoxDiscovery `
+            -Executable $fakeExecutable `
+            -Address '192.168.1.25' `
+            -Port 8787 `
+            -StateDirectory $taskState `
+            -Arguments $arguments
+    } catch {
+        $startupFailure = $_
+        $null = Stop-BookBoxDiscovery -StateDirectory $taskState
+        $record = $null
+        throw $startupFailure
+    }
+    if (
+        [int]$sameRecord.ProcessId -ne [int]$record.ProcessId -or
+        [int]$sameRecord.SupervisorProcessId -ne [int]$record.SupervisorProcessId
+    ) {
+        throw 'Repeated startup launched a second discovery process instead of reusing exact owned state.'
+    }
     $stdoutPath = Join-Path $taskState 'discovery.stdout.log'
     $stderrPath = Join-Path $taskState 'discovery.stderr.log'
     $logDeadline = [DateTime]::UtcNow.AddSeconds(3)

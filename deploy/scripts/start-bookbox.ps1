@@ -66,7 +66,7 @@ $composeEnvironment = if (Test-Path -LiteralPath $composeEnvironment -PathType L
 $composeUpArguments = Get-BookBoxComposeArguments `
     -Scope $composeScope `
     -EnvironmentFile $composeEnvironment `
-    -Command @('up', '-d')
+    -Command @('up', '-d', '--remove-orphans')
 $composeDownArguments = Get-BookBoxComposeArguments `
     -Scope $composeScope `
     -EnvironmentFile $composeEnvironment `
@@ -137,15 +137,15 @@ $env:BOOKBOX_BIND_ADDRESS = $Address
 $env:BOOKBOX_HOST_PORT = [string]$Port
 $composeStarted = $false
 $discoveryStarted = $false
-$composeStateWritten = $false
+$composeStateCreated = $false
 try {
-    Write-BookBoxComposeState `
+    $composeState = Ensure-BookBoxComposeState `
         -StateDirectory $StateDirectory `
         -Scope $composeScope `
         -Address $Address `
         -Port $Port `
         -EnvironmentFile $composeEnvironment
-    $composeStateWritten = $true
+    $composeStateCreated = [bool]$composeState.Created
     & docker @composeUpArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Docker Compose start failed with exit code $LASTEXITCODE."
@@ -172,7 +172,7 @@ try {
         -Address $Address `
         -Port $Port `
         -StateDirectory $StateDirectory
-    $discoveryStarted = $true
+    $discoveryStarted = [bool]$record.Created
     if (-not (Test-BookBoxDiscovery -StateDirectory $StateDirectory)) {
         throw 'BookBox discovery process failed its ownership check.'
     }
@@ -202,7 +202,7 @@ try {
     if ($discoveryStarted) {
         Stop-BookBoxDiscovery -StateDirectory $StateDirectory
     }
-    if ($composeStateWritten) {
+    if ($composeStateCreated) {
         & docker @composeDownArguments
         if ($LASTEXITCODE -eq 0) {
             Remove-BookBoxComposeState -StateDirectory $StateDirectory

@@ -5,6 +5,9 @@ param(
 
     [string] $InstallDirectory = (Join-Path $env:LOCALAPPDATA 'BookBox'),
     [string] $ComposeFile = (Join-Path $PSScriptRoot '..\compose.yml'),
+    [string] $HybridComposeFile = (Join-Path $PSScriptRoot '..\compose.hybrid.yml'),
+    [ValidateSet('Container', 'Hybrid')]
+    [string] $DeploymentMode = 'Container',
     [string] $TaskName = 'BookBox Discovery',
     [string] $TaskPath = '\BookBox\',
     [string] $Address = $env:BOOKBOX_BIND_ADDRESS,
@@ -44,6 +47,10 @@ if ((Get-NetConnectionProfile -InterfaceIndex $assigned.InterfaceIndex).NetworkC
 
 $source = (Resolve-Path -LiteralPath $SourceExecutable -ErrorAction Stop).Path
 $compose = (Resolve-Path -LiteralPath $ComposeFile -ErrorAction Stop).Path
+$hybridCompose = [IO.Path]::GetFullPath($HybridComposeFile)
+if ($DeploymentMode -eq 'Hybrid') {
+    $hybridCompose = (Resolve-Path -LiteralPath $hybridCompose -ErrorAction Stop).Path
+}
 $installRoot = [IO.Path]::GetFullPath($InstallDirectory)
 $binDirectory = Join-Path $installRoot 'bin'
 $scriptsDirectory = Join-Path $installRoot 'scripts'
@@ -60,11 +67,26 @@ $managedScripts = @(
     'discovery-supervisor.ps1',
     'remove-bookbox-discovery.ps1'
 )
+foreach ($actionValue in @(
+        $installedStartScript,
+        $destination,
+        $Address,
+        $stateDirectory,
+        $compose,
+        $DeploymentMode,
+        $hybridCompose
+    )) {
+    if ([string]$actionValue -match '["\r\n]') {
+        throw 'Scheduled-task arguments must not contain quotes or line breaks.'
+    }
+}
 $actionArguments = (
     '-NoProfile -ExecutionPolicy Bypass -File "{0}" ' +
     '-DiscoveryExecutable "{1}" -Address "{2}" -Port {3} ' +
-    '-StateDirectory "{4}" -ComposeFile "{5}"'
-) -f $installedStartScript, $destination, $Address, $Port, $stateDirectory, $compose
+    '-StateDirectory "{4}" -ComposeFile "{5}" ' +
+    '-DeploymentMode "{6}" -HybridComposeFile "{7}"'
+) -f $installedStartScript, $destination, $Address, $Port, $stateDirectory, $compose,
+    $DeploymentMode, $hybridCompose
 
 function Assert-OwnedFirewallRule {
     param(
@@ -97,13 +119,14 @@ if ($existingTask) {
     $existingActions = @($existingTask.Actions)
     $existingTriggers = @($existingTask.Triggers)
     if (
-        $existingTask.Description -cne 'BookBox managed discovery version 1' -or
+        $existingTask.Description -cne 'BookBox managed discovery version 2' -or
         $existingActions.Count -ne 1 -or
         [string]$existingActions[0].Execute -notmatch '(?i)(^|\\)powershell\.exe$' -or
         [string]$existingActions[0].Arguments -cne $actionArguments -or
         [string]$existingTask.Principal.UserId -cne $identity.Name -or
         [string]$existingTask.Principal.RunLevel -cne 'Limited' -or
         [string]$existingTask.Principal.LogonType -notmatch '^Interactive' -or
+        [string]$existingTask.Settings.MultipleInstances -cne 'IgnoreNew' -or
         $existingTriggers.Count -ne 1 -or
         $existingTriggers[0].CimClass.CimClassName -cne 'MSFT_TaskLogonTrigger' -or
         [string]$existingTriggers[0].UserId -cne $identity.Name
@@ -139,10 +162,22 @@ if (Test-Path -LiteralPath $installRoot -PathType Container) {
     } else {
         $oldManifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
         if (
-            [int]$oldManifest.SchemaVersion -ne 1 -or
+            [int]$oldManifest.SchemaVersion -ne 2 -or
             [string]$oldManifest.TaskName -cne $TaskName -or
             [string]$oldManifest.TaskPath -cne $TaskPath -or
-            [string]$oldManifest.Owner -cne $identity.Name
+            [string]$oldManifest.Owner -cne $identity.Name -or
+            [string]$oldManifest.DeploymentMode -cne $DeploymentMode -or
+            -not [string]::Equals(
+                [string]$oldManifest.ComposeFile,
+                $compose,
+                [StringComparison]::OrdinalIgnoreCase
+            ) -or
+            -not [string]::Equals(
+                [string]$oldManifest.HybridComposeFile,
+                $hybridCompose,
+                [StringComparison]::OrdinalIgnoreCase
+            ) -or
+            [string]$oldManifest.ExpectedActionArguments -cne $actionArguments
         ) {
             throw "Refusing to overwrite an unowned BookBox installation: $installRoot"
         }
@@ -190,13 +225,16 @@ Invoke-BookBoxInstallTransaction `
             }
         )
         $manifest = [ordered]@{
-            SchemaVersion = 1
+            SchemaVersion = 2
             Owner = $identity.Name
             TaskName = $TaskName
             TaskPath = $TaskPath
             Address = $Address
             Port = $Port
             StateDirectory = $stateDirectory
+            DeploymentMode = $DeploymentMode
+            ComposeFile = $compose
+            HybridComposeFile = $hybridCompose
             ExpectedActionArguments = $actionArguments
             Files = @($stageFiles | ForEach-Object {
                 [ordered]@{
@@ -247,13 +285,14 @@ Invoke-BookBoxInstallTransaction `
             $settings = New-ScheduledTaskSettingsSet `
                 -AllowStartIfOnBatteries `
                 -DontStopIfGoingOnBatteries `
-                -ExecutionTimeLimit ([TimeSpan]::Zero)
+                -ExecutionTimeLimit ([TimeSpan]::Zero) `
+                -MultipleInstances IgnoreNew
             $task = New-ScheduledTask `
                 -Action $action `
                 -Trigger $trigger `
                 -Principal $taskPrincipal `
                 -Settings $settings `
-                -Description 'BookBox managed discovery version 1'
+                -Description 'BookBox managed discovery version 2'
             Register-ScheduledTask `
                 -TaskName $TaskName `
                 -TaskPath $TaskPath `
