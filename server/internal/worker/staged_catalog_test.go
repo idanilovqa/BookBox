@@ -296,6 +296,43 @@ func TestRegroupScopeRequeuesStaleScopeAtCurrentGeneration(t *testing.T) {
 	}
 }
 
+func TestRegroupRootScopePreservesFullInventoryPartitions(t *testing.T) {
+	repository := &stagedRepositoryFake{
+		generation: catalog.CatalogGeneration{RootID: "audiobooks", Value: 7},
+		tree: grouping.Tree{RootID: "audiobooks", Files: []catalog.SourceFile{
+			inventoryGroupingAudio("Disc Saga/Disc 1/chapter01.mp3"),
+			inventoryGroupingAudio("Disc Saga/Disc 2/chapter02.mp3"),
+			inventoryGroupingAudio("Mixed Shelf/Alpha.mp3"),
+			inventoryGroupingAudio("Mixed Shelf/Beta.mp3"),
+			func() catalog.SourceFile {
+				file := inventoryGroupingAudio("broken.mp3")
+				file.ProbeStatus = catalog.ProbeFailed
+				file.ProbeError = "probe_failed"
+				return file
+			}(),
+		}},
+	}
+	repository.tree.Files[0].Media = map[string]any{"title": "Disc Saga"}
+	repository.tree.Files[1].Media = map[string]any{"title": "Disc Saga"}
+	repository.tree.Files[2].Media = map[string]any{"title": "Alpha"}
+	repository.tree.Files[3].Media = map[string]any{"title": "Beta"}
+	handler := RegroupScopeHandler{Repo: repository}
+	job := catalog.WorkerJob{Kind: catalog.JobRegroupScope, Payload: map[string]any{
+		"rootId": "audiobooks", "scopePath": "", "catalogGeneration": float64(7),
+	}}
+
+	if err := handler.Handle(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, book := range repository.lastRefinement.Books {
+		counts[book.SourceFolder]++
+	}
+	if counts["Disc Saga"] != 1 || counts["Mixed Shelf"] != 2 || counts[""] != 1 {
+		t.Fatalf("root refinement scopes = %#v", counts)
+	}
+}
+
 func stagedScanHandler(repository *stagedRepositoryFake, result scanner.InventoryResult) *ScanRootHandler {
 	return &ScanRootHandler{
 		Repo:         repository,
@@ -349,6 +386,7 @@ type stagedRepositoryFake struct {
 	probeStoreErr     error
 	companionChanged  bool
 	refinementErr     error
+	lastRefinement    catalog.GroupingRefinement
 	publishErr        error
 	savedProbeFailure string
 	savedCompanion    map[string]any
@@ -426,9 +464,10 @@ func (fake *stagedRepositoryFake) FinishScopedInventory(
 
 func (fake *stagedRepositoryFake) ApplyGroupingRefinement(
 	_ context.Context,
-	_ catalog.GroupingRefinement,
+	refinement catalog.GroupingRefinement,
 ) (catalog.CatalogGeneration, error) {
 	fake.refinements++
+	fake.lastRefinement = refinement
 	return fake.generation, fake.refinementErr
 }
 

@@ -523,6 +523,9 @@ func (handler RegroupScopeHandler) Handle(ctx context.Context, job catalog.Worke
 		infer = grouping.InferTree
 	}
 	result := infer(tree)
+	if scope == "" {
+		result = inferFullInventoryTree(tree, infer)
+	}
 	generation, err := handler.Repo.ApplyGroupingRefinement(ctx, catalog.GroupingRefinement{
 		RootID: rootID, ScopePath: scope, ExpectedGeneration: expected,
 		Books: result.Books, Evidence: result.Evidence,
