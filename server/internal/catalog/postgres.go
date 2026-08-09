@@ -38,7 +38,9 @@ var (
 		ReviewUnreviewed: true, ReviewNeedsReview: true, ReviewConfirmed: true,
 	}
 	jobKinds = map[string]bool{
-		JobScanRoot: true, JobEnrichBook: true, JobPublishCover: true,
+		JobScanRoot: true, JobProbeFile: true, JobInspectCompanion: true,
+		JobRegroupScope: true, JobPublishSearch: true, JobEnrichBook: true,
+		JobPublishCover: true, JobReorganizeFiles: true,
 	}
 )
 
@@ -88,6 +90,13 @@ func (repository *PostgresRepository) SyncRoots(
 			    updated_at=now()
 		`, root.ID, root.DisplayName, root.ScannedAt); err != nil {
 			return fmt.Errorf("sync root %q: %w", root.ID, err)
+		}
+		if _, err := transaction.Exec(ctx, `
+			insert into catalog_generations(root_id, generation)
+			values ($1, 1)
+			on conflict (root_id) do nothing
+		`, root.ID); err != nil {
+			return fmt.Errorf("initialize catalog generation %q: %w", root.ID, err)
 		}
 	}
 	if err := transaction.Commit(ctx); err != nil {

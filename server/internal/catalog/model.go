@@ -22,9 +22,30 @@ const (
 	FileRoleCover   = "cover"
 	FileRoleSidecar = "sidecar"
 
-	JobScanRoot     = "scan_root"
-	JobEnrichBook   = "enrich_book"
-	JobPublishCover = "publish_cover"
+	FileKindAudio     = "audio"
+	FileKindCover     = "cover"
+	FileKindCompanion = "companion"
+
+	CompanionCue      = "cue"
+	CompanionNFO      = "nfo"
+	CompanionOPF      = "opf"
+	CompanionPlaylist = "playlist"
+	CompanionEbook    = "ebook"
+	CompanionOther    = "other"
+
+	ProbeNotApplicable = "not_applicable"
+	ProbePending       = "pending"
+	ProbeSucceeded     = "succeeded"
+	ProbeFailed        = "failed"
+
+	JobScanRoot         = "scan_root"
+	JobProbeFile        = "probe_file"
+	JobInspectCompanion = "inspect_companion"
+	JobRegroupScope     = "regroup_scope"
+	JobPublishSearch    = "publish_search"
+	JobEnrichBook       = "enrich_book"
+	JobPublishCover     = "publish_cover"
+	JobReorganizeFiles  = "reorganize_files"
 
 	JobQueued    = "queued"
 	JobRunning   = "running"
@@ -60,15 +81,60 @@ type ScanResult struct {
 }
 
 type SourceFile struct {
-	ID           uuid.UUID
-	RootID       string
-	RelativePath string
-	Size         int64
-	ModifiedAt   time.Time
-	SHA256       string
-	Media        map[string]any
-	ScanRunID    *uuid.UUID
-	MissingAt    *time.Time
+	ID            uuid.UUID
+	RootID        string
+	RelativePath  string
+	Size          int64
+	ModifiedAt    time.Time
+	SHA256        string
+	Media         map[string]any
+	ScanRunID     *uuid.UUID
+	MissingAt     *time.Time
+	FileKind      string
+	CompanionKind string
+	ProbeStatus   string
+	ProbeVersion  int
+	ProbeError    string
+	ProbedAt      *time.Time
+}
+
+type CatalogGeneration struct {
+	RootID    string
+	Value     int64
+	UpdatedAt time.Time
+}
+
+type GroupingEvidence struct {
+	ReasonCode  string
+	Confidence  float64
+	ReviewState string
+	Values      map[string][]string
+}
+
+type InventoryFile struct {
+	ID            uuid.UUID
+	RootID        string
+	RelativePath  string
+	FileKind      string
+	CompanionKind string
+	Size          int64
+	ModifiedAt    time.Time
+}
+
+type InventoryUpdate struct {
+	ScanRunID uuid.UUID
+	RootID    string
+	ScopePath string
+	Complete  bool
+	Files     []InventoryFile
+}
+
+type InventoryDelta struct {
+	ProbeFiles        []SourceFile
+	InspectCompanions []SourceFile
+	RegroupScopes     []string
+	UnchangedFiles    []SourceFile
+	MissingFileIDs    []uuid.UUID
 }
 
 type Book struct {
