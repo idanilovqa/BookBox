@@ -9,8 +9,30 @@ $env:BOOKBOX_HOST_PORT = '8787'
 
 ## Start and stop
 
+Choose one deployment mode. Linux and NAS installations use Container mode,
+which enables the `container-worker` profile from `deploy\compose.yml`:
+
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\start-bookbox.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\start-bookbox.ps1 `
+  -DeploymentMode Container
+```
+
+Windows installations with local NTFS libraries use Hybrid mode. The start
+script adds `deploy\compose.hybrid.yml`, leaves the container worker disabled,
+and publishes PostgreSQL at `127.0.0.1:55432`. The private-LAN API address
+remains the only BookBox endpoint exposed to Android.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\start-bookbox.ps1 `
+  -DeploymentMode Hybrid
+```
+
+The stop script reads the owned startup state and uses the same Compose files,
+profile, address, port, and environment file:
+
+```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\stop-bookbox.ps1
 ```
 
@@ -26,6 +48,54 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 ```
 
 Do not run `docker compose down --volumes` against `bookbox-prod`.
+
+## Install and operate the Windows catalog service
+
+Build the release artifacts before installing the service. Copy and edit the
+worker example so its root IDs match `deploy\config.yml`, its paths point to the
+Windows host, and its database password file exists under ProgramData. Supply an
+external ffprobe executable; the installer records its hash and grants the
+service read-and-execute access without copying it.
+
+```powershell
+New-Item -ItemType Directory -Force "$env:ProgramData\BookBox" | Out-Null
+Copy-Item deploy\windows\catalog-worker.example.yml `
+  "$env:ProgramData\BookBox\catalog-worker.yml"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\install-catalog-worker-service.ps1 `
+  -SourceExecutable artifacts\bookbox-catalog-worker.exe `
+  -ConfigFile "$env:ProgramData\BookBox\catalog-worker.yml" `
+  -FFProbeExecutable 'C:\Tools\ffmpeg\bin\ffprobe.exe' `
+  -LibraryRoot 'H:\Audiobooks'
+```
+
+The installer creates the delayed-start `BookBoxCatalogWorker` service. It
+accepts local fixed and removable drives and rejects mapped drives and UNC
+paths. Use the exact service name for routine operations:
+
+```powershell
+Get-Service -Name BookBoxCatalogWorker
+Start-Service -Name BookBoxCatalogWorker
+Restart-Service -Name BookBoxCatalogWorker
+Stop-Service -Name BookBoxCatalogWorker
+```
+
+The service waits for Docker and PostgreSQL with capped retry delays, so you do
+not need to restart it after Docker becomes ready. A missing drive prevents that
+root's scan and retains the prior catalog. Other roots continue to run, and the
+six-hour scan remains the fallback for missed filesystem events.
+
+Remove the owned service from an elevated PowerShell window:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\remove-catalog-worker-service.ps1
+```
+
+Removal preserves the external ffprobe, configuration, secrets, logs, and
+backups unless you pass `-RemoveData`. The ownership manifest guards the service,
+managed executable, Event Log source, and exact ACL entries.
 
 ## Check service and discovery status
 
@@ -47,9 +117,12 @@ docker compose --env-file deploy\.env -f deploy\compose.yml logs --tail 200 book
 docker compose --env-file deploy\.env -f deploy\compose.yml logs --tail 100 postgres
 Get-Content deploy\.state\discovery.stderr.log -Tail 100
 Get-Content "$env:LOCALAPPDATA\BookBox\state\discovery.stderr.log" -Tail 100
+Get-Content "$env:ProgramData\BookBox\logs\catalog-worker.log" -Tail 200
 ```
 
 Logs should contain no passwords, tokens, provider keys, Android document URIs, or private source paths.
+The Windows service rotates `catalog-worker.log` at 10 MiB and retains four
+backups. Cover backups live under `%ProgramData%\BookBox\backups`.
 
 ## Firewall boundary
 
@@ -112,23 +185,82 @@ Use `deploy\scripts\rotate-password.ps1` only with the parameters required by it
 
 ## Update BookBox
 
-Stop BookBox, verify a recovery plan, then update and rebuild:
+Keep the current deployment mode during an update. Confirm that backups and the
+Windows source library are available before changing the installation.
+
+For a Container deployment, rebuild the release artifacts and the Compose
+services with the `container-worker` profile:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\stop-bookbox.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\stop-bookbox.ps1 `
+  -DeploymentMode Container
 git status --short
 git pull --ff-only
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\audit-compose.ps1
-docker compose --env-file deploy\.env -f deploy\compose.yml build
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\start-bookbox.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\build-release.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\audit-compose.ps1 `
+  -DeploymentMode Container
+docker compose --env-file deploy\.env -f deploy\compose.yml `
+  --profile container-worker build
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\start-bookbox.ps1 `
+  -DeploymentMode Container
 ```
 
-Preserve the Windows source library. An update must not replace the source path or delete its contents.
+For a Hybrid deployment, record the installed `BookBoxCatalogWorker` config
+path, external ffprobe path, and library roots. Run the build steps from the
+repository root:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\stop-bookbox.ps1 `
+  -DeploymentMode Hybrid
+git status --short
+git pull --ff-only
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\build-release.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\audit-compose.ps1 `
+  -DeploymentMode Hybrid
+docker compose --env-file deploy\.env `
+  -f deploy\compose.yml `
+  -f deploy\compose.hybrid.yml build
+```
+
+Open elevated PowerShell in the repository root. Replace only the owned service,
+then restart Compose in Hybrid mode and start the new worker:
+
+```powershell
+$workerConfig = "$env:ProgramData\BookBox\catalog-worker.yml"
+$ffprobeExecutable = 'C:\Tools\ffmpeg\bin\ffprobe.exe'
+$libraryRoots = @('H:\Audiobooks')
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\remove-catalog-worker-service.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\install-catalog-worker-service.ps1 `
+  -SourceExecutable artifacts\bookbox-catalog-worker.exe `
+  -ConfigFile $workerConfig `
+  -FFProbeExecutable $ffprobeExecutable `
+  -LibraryRoot $libraryRoots
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File deploy\scripts\start-bookbox.ps1 `
+  -DeploymentMode Hybrid
+Start-Service -Name BookBoxCatalogWorker
+```
+
+The removal command preserves config, secrets, logs, backups, and the external
+ffprobe by default. Do not pass `-RemoveData` during an update. Preserve the
+Windows source library; an update must not replace its path or delete its
+contents.
 
 ## Release artifacts
 
-`deploy\scripts\build-release.ps1` writes APKs and
-`bookbox-discovery.exe` under `artifacts\`. `verify-release.ps1` checks the
+`deploy\scripts\build-release.ps1` writes APKs, `bookbox-discovery.exe`, and
+`bookbox-catalog-worker.exe` under `artifacts\`. `verify-release.ps1` checks the
 `com.rendref.bookbox` application ID, API 36 SDK levels, permissions, signatures,
-release debuggable state, and the discovery executable's Windows AMD64 PE identity.
+release debuggable state, and both executables' Windows AMD64 PE identity. It
+also runs the worker's side-effect-free `help` command before publication.
 Compare every artifact digest with `artifacts\SHA256SUMS.txt` before installing it.

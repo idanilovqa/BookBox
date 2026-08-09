@@ -6,6 +6,24 @@ Open Library (and optionally Google Books), and publishes a confirmed cover only
 when it is a material improvement. PostgreSQL stores the catalog, jobs, review
 decisions, and cover audit events.
 
+## Container and Windows hybrid workers
+
+Linux and NAS deployments start the worker through the `container-worker`
+Compose profile. Windows hybrid deployments use `deploy\compose.hybrid.yml`,
+leave that profile disabled, and run the native `BookBoxCatalogWorker` service.
+The hybrid overlay publishes PostgreSQL at `127.0.0.1:55432`; the API keeps its
+private-LAN address, and the Windows worker opens no inbound port.
+
+The Windows worker accepts roots on local fixed and removable drives. It rejects
+mapped drives and UNC paths. Configure an external ffprobe executable in
+`%ProgramData%\BookBox\catalog-worker.yml`; BookBox does not bundle ffprobe.
+Worker logs and cover backups belong under `%ProgramData%\BookBox`.
+
+The worker validates a root before it starts missing-file reconciliation. If a
+drive is missing, the worker records a failed attempt and retains the prior
+catalog and search projection. Filesystem events speed up indexing, while the
+six-hour full-root scan remains the authoritative fallback.
+
 ## Indexed library search
 
 After a successful scan, the worker atomically publishes one PostgreSQL search

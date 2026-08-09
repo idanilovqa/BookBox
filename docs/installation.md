@@ -38,8 +38,9 @@ docker compose --env-file deploy\.env -f deploy\compose.yml build
 
 ## Build and install discovery
 
-Build the verified release artifacts. This produces both the Android package and
-`artifacts\bookbox-discovery.exe`:
+Build the verified release artifacts. This produces the Android packages,
+`artifacts\bookbox-discovery.exe`, and
+`artifacts\bookbox-catalog-worker.exe`:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\build-release.ps1
@@ -109,8 +110,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 ## Install Android
 
 The release build above produces `artifacts\BookBox-v1.0.0-debug.apk`,
-`artifacts\bookbox-discovery.exe`, their metadata, and a shared
-`artifacts\SHA256SUMS.txt`. Compare both artifact digests with that file. Copy the
+`artifacts\bookbox-discovery.exe`, `artifacts\bookbox-catalog-worker.exe`, their
+metadata, and a shared `artifacts\SHA256SUMS.txt`. Compare each artifact digest
+with that file. Copy the
 APK to the phone and install it. If Android asks for permission to install unknown
 apps, grant permission to the file manager used for this installation and revoke
 it afterward.

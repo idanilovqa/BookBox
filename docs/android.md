@@ -18,6 +18,18 @@ Use the private-IP URL if the phone cannot resolve `bookbox.local`. A `.local` f
 
 BookBox v1 uses unencrypted HTTP. Another device on the LAN can capture the username, password, session tokens, catalog requests, and audiobook traffic. Do not connect through guest Wi-Fi, a public network, WAN access, or router port forwarding.
 
+## Windows hybrid connection behavior
+
+Android uses the same private-LAN API in Container and Hybrid deployments. In
+Hybrid mode, PostgreSQL listens on `127.0.0.1` for the native
+`BookBoxCatalogWorker`; Android does not connect to PostgreSQL and does not
+connect to the worker. The API remains the phone's only BookBox endpoint.
+
+The Windows worker reacts to local filesystem events and runs a six-hour
+full-root fallback. If a configured drive is missing, the server retains the
+prior catalog. Android can continue to browse and search that snapshot, marked
+stale when appropriate, until the drive returns and a scan succeeds.
+
 ## Choose the Android destination
 
 Before the first copy, tap **Choose Android folder**. In Android's system folder picker:

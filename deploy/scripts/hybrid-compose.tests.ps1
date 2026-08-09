@@ -9,13 +9,116 @@ $baseCompose = Join-Path $deployRoot 'compose.yml'
 $hybridCompose = Join-Path $deployRoot 'compose.hybrid.yml'
 $environment = Join-Path $deployRoot '.env.example'
 $lifecycleModule = Join-Path $PSScriptRoot 'compose-lifecycle.ps1'
+$repoRoot = Split-Path -Parent $deployRoot
+$catalogDocumentation = Join-Path $repoRoot 'docs\catalog.md'
+$operationsDocumentation = Join-Path $repoRoot 'docs\operations.md'
+$androidDocumentation = Join-Path $repoRoot 'docs\android.md'
 
-foreach ($required in @($baseCompose, $hybridCompose, $environment, $lifecycleModule)) {
+foreach ($required in @(
+        $baseCompose,
+        $hybridCompose,
+        $environment,
+        $lifecycleModule,
+        $catalogDocumentation,
+        $operationsDocumentation,
+        $androidDocumentation
+    )) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Required hybrid deployment file is missing: $required"
     }
 }
 . $lifecycleModule
+
+function Assert-DocumentationSemantics {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][string[]] $Patterns
+    )
+
+    $text = Get-Content -Raw -LiteralPath $Path
+    foreach ($pattern in $Patterns) {
+        if ($text -notmatch $pattern) {
+            throw "Documentation '$Path' is missing required hybrid-worker semantics matching: $pattern"
+        }
+    }
+}
+
+Assert-DocumentationSemantics -Path $catalogDocumentation -Patterns @(
+    'container-worker',
+    'compose\.hybrid\.yml',
+    '127\.0\.0\.1',
+    'BookBoxCatalogWorker',
+    '%ProgramData%\\BookBox',
+    'six-hour',
+    'fixed',
+    'removable',
+    'mapped',
+    'UNC',
+    'external ffprobe',
+    'prior\s+catalog'
+)
+Assert-DocumentationSemantics -Path $operationsDocumentation -Patterns @(
+    '-DeploymentMode Container',
+    '-DeploymentMode Hybrid',
+    'container-worker',
+    'compose\.hybrid\.yml',
+    '127\.0\.0\.1',
+    'private-LAN API',
+    'BookBoxCatalogWorker',
+    'install-catalog-worker-service\.ps1',
+    'remove-catalog-worker-service\.ps1',
+    '%ProgramData%\\BookBox',
+    'logs',
+    'backups',
+    'Docker.*wait|wait.*Docker',
+    'missing drive',
+    'prior catalog',
+    'external ffprobe',
+    'fixed',
+    'removable',
+    'mapped',
+    'UNC',
+    'bookbox-catalog-worker\.exe',
+    'SHA256SUMS\.txt',
+    'PE',
+    'side-effect-free.*help|help.*side-effect-free'
+)
+Assert-DocumentationSemantics -Path $androidDocumentation -Patterns @(
+    'private-LAN API',
+    '127\.0\.0\.1',
+    'PostgreSQL',
+    'BookBoxCatalogWorker',
+    'six-hour',
+    'missing\s+drive|drive\s+is\s+missing',
+    'prior catalog',
+    'does not connect.*PostgreSQL|never connects.*PostgreSQL',
+    'does not\s+connect.*worker|never\s+connects.*worker'
+)
+
+$operationsText = Get-Content -Raw -LiteralPath $operationsDocumentation
+$updateSectionMatch = [regex]::Match(
+    $operationsText,
+    '(?ms)^## Update BookBox\s*(?<body>.*?)(?=^## |\z)'
+)
+if (-not $updateSectionMatch.Success) {
+    throw 'Operations documentation is missing the Update BookBox section.'
+}
+$updateSection = $updateSectionMatch.Groups['body'].Value
+foreach ($pattern in @(
+        '-DeploymentMode Container',
+        '-DeploymentMode Hybrid',
+        'build-release\.ps1',
+        'BookBoxCatalogWorker',
+        'remove-catalog-worker-service\.ps1',
+        'install-catalog-worker-service\.ps1'
+    )) {
+    if ($updateSection -notmatch $pattern) {
+        throw "The Update BookBox procedure is missing required mode-aware semantics matching: $pattern"
+    }
+}
+if ($updateSection -match '(?m)^docker compose .* -f deploy\\compose\.yml build\s*$') {
+    throw 'The Update BookBox procedure must not use a raw base-Compose-only build.'
+}
 
 function Assert-ThrowsLike {
     param([scriptblock] $Action, [string] $Pattern)
