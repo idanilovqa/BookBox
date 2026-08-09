@@ -21,8 +21,9 @@ import (
 type FileKind string
 
 const (
-	KindAudio FileKind = "audio"
-	KindCover FileKind = "cover"
+	KindAudio     FileKind = "audio"
+	KindCover     FileKind = "cover"
+	KindCompanion FileKind = "companion"
 )
 
 type File struct {
@@ -66,15 +67,7 @@ type Scanner struct {
 }
 
 func New(probe media.Probe, options Options) *Scanner {
-	exclusions := make([]string, 0, len(options.Exclusions))
-	for _, exclusion := range options.Exclusions {
-		cleaned := strings.Trim(strings.ReplaceAll(exclusion, `\`, "/"), "/")
-		if cleaned != "" {
-			exclusions = append(exclusions, cleaned)
-		}
-	}
-	sort.Strings(exclusions)
-	return &Scanner{probe: probe, exclusions: exclusions}
+	return &Scanner{probe: probe, exclusions: normalizeExclusions(options.Exclusions)}
 }
 
 func (s *Scanner) Scan(ctx context.Context, root config.Root) (Result, error) {
@@ -209,25 +202,62 @@ func (s *Scanner) Scan(ctx context.Context, root config.Root) (Result, error) {
 }
 
 func classify(name string) (FileKind, bool) {
+	kind, _, recognized := classifyInventoryFile(name)
+	if kind == KindCompanion {
+		return "", false
+	}
+	return kind, recognized
+}
+
+func classifyInventoryFile(name string) (FileKind, string, bool) {
 	lower := strings.ToLower(name)
 	extension := strings.ToLower(filepath.Ext(lower))
 	if extension == ".part" || extension == ".tmp" {
-		return "", false
+		return "", "", false
 	}
 	switch extension {
 	case ".m4b", ".m4a", ".mp3", ".aac", ".flac", ".ogg", ".opus", ".wav":
-		return KindAudio, true
+		return KindAudio, "", true
 	case ".jpg", ".jpeg", ".png", ".webp":
 		stem := strings.TrimSuffix(lower, extension)
 		if stem == "cover" || stem == "folder" || stem == "front" {
-			return KindCover, true
+			return KindCover, "", true
 		}
+	case ".cue":
+		return KindCompanion, "cue", true
+	case ".nfo":
+		return KindCompanion, "nfo", true
+	case ".opf":
+		return KindCompanion, "opf", true
+	case ".m3u", ".m3u8":
+		return KindCompanion, "playlist", true
+	case ".epub", ".fb2", ".pdf", ".mobi", ".azw", ".azw3":
+		return KindCompanion, "ebook", true
 	}
-	return "", false
+	return "", "", false
 }
 
 func (s *Scanner) isExcluded(relative string) bool {
-	for _, exclusion := range s.exclusions {
+	if s == nil {
+		return false
+	}
+	return isExcludedPath(relative, s.exclusions)
+}
+
+func normalizeExclusions(values []string) []string {
+	exclusions := make([]string, 0, len(values))
+	for _, exclusion := range values {
+		cleaned := strings.Trim(strings.ReplaceAll(exclusion, `\`, "/"), "/")
+		if cleaned != "" {
+			exclusions = append(exclusions, cleaned)
+		}
+	}
+	sort.Strings(exclusions)
+	return exclusions
+}
+
+func isExcludedPath(relative string, exclusions []string) bool {
+	for _, exclusion := range exclusions {
 		if relative == exclusion || strings.HasPrefix(relative, exclusion+"/") {
 			return true
 		}

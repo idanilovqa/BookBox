@@ -22,6 +22,27 @@ func (staticProbe) Probe(context.Context, string) (media.Metadata, error) {
 	return media.Metadata{Title: "Book", Author: "Author", AudioCodec: "aac"}, nil
 }
 
+type panicProbe struct{}
+
+func (panicProbe) Probe(context.Context, string) (media.Metadata, error) {
+	panic("inventory called the legacy media probe")
+}
+
+func TestLegacyScannerCompatibilityStillProbesAudio(t *testing.T) {
+	root := createTree(t, "Book/chapter.mp3")
+	result, err := New(staticProbe{}, Options{}).Scan(
+		context.Background(),
+		config.Root{ID: "audiobooks", ContainerPath: root},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Files) != 1 || result.Files[0].Metadata.Title != "Book" ||
+		result.Files[0].Metadata.AudioCodec != "aac" {
+		t.Fatalf("legacy scanner result = %#v", result.Files)
+	}
+}
+
 func TestScanIncludesSupportedAudioAndRecognizedCovers(t *testing.T) {
 	root := createTree(t,
 		"Book/a.m4b", "Book/b.MP3", "Book/c.m4a", "Book/d.aac",
