@@ -9,6 +9,8 @@ import com.rendref.bookbox.core.model.GroupingContextDto
 import com.rendref.bookbox.core.model.GroupingFileDto
 import com.rendref.bookbox.core.model.MatchSearchDto
 import com.rendref.bookbox.core.model.MetadataCandidateDto
+import com.rendref.bookbox.core.model.ReorganizationMoveDto
+import com.rendref.bookbox.core.model.ReorganizationPreviewDto
 import com.rendref.bookbox.core.repository.GroupingDecision
 import com.rendref.bookbox.core.repository.ReviewSource
 import kotlinx.coroutines.CompletableDeferred
@@ -255,6 +257,102 @@ class BookDetailViewModelTest {
         }
 
     @Test
+    fun `reorganization preview requires capability generation valid grouping and safe targets`() =
+        runTest(dispatcher) {
+            val source = FakeReviewSource(groupingContext = reorganizableGroupingContext())
+            val viewModel = BookDetailViewModel(BOOK_ID, source)
+            advanceUntilIdle()
+            viewModel.openGrouping()
+            advanceUntilIdle()
+
+            val (first, second) = viewModel.state.value.groups
+            viewModel.previewReorganization()
+            advanceUntilIdle()
+            assertTrue(source.previewRequests.isEmpty())
+
+            viewModel.updateTargetFolder(first.id, "Frank Herbert/First")
+            viewModel.updateTargetFolder(second.id, "../Outside")
+            viewModel.previewReorganization()
+            advanceUntilIdle()
+            assertTrue(source.previewRequests.isEmpty())
+
+            viewModel.updateTargetFolder(second.id, "Frank Herbert/Second")
+            viewModel.previewReorganization()
+            advanceUntilIdle()
+
+            val request = source.previewRequests.single()
+            assertEquals(8L, request.catalogGeneration)
+            assertEquals(
+                listOf("book-one", "book-two"),
+                request.groups.map(GroupingDecision::groupingKey),
+            )
+            assertEquals(
+                mapOf(
+                    "book-one" to "Frank Herbert/First",
+                    "book-two" to "Frank Herbert/Second",
+                ),
+                request.targetFolders,
+            )
+            assertEquals(OPERATION_ID, viewModel.state.value.pendingOperationId)
+            assertEquals(OPERATION_ID, viewModel.state.value.reorganizationPreview?.operationId)
+        }
+
+    @Test
+    fun `reorganization confirmation prevents double submission and remains under review`() =
+        runTest(dispatcher) {
+            val confirmation = CompletableDeferred<AcceptedJobDto>()
+            val source = FakeReviewSource(
+                groupingContext = reorganizableGroupingContext(),
+                detail = defaultBookDetail().copy(
+                    reviewState = "needs_review",
+                    reviewReason = "probe_failed",
+                ),
+                queuedReorganizationConfirmation = confirmation,
+            )
+            val viewModel = BookDetailViewModel(BOOK_ID, source)
+            advanceUntilIdle()
+            viewModel.state.value.groups.forEachIndexed { index, group ->
+                viewModel.updateTargetFolder(group.id, "Frank Herbert/Book ${index + 1}")
+            }
+            viewModel.previewReorganization()
+            advanceUntilIdle()
+
+            viewModel.confirmReorganization()
+            viewModel.confirmReorganization()
+            runCurrent()
+            assertEquals(listOf(BOOK_ID to OPERATION_ID), source.confirmedReorganizations)
+            assertTrue(viewModel.state.value.isSaving)
+
+            confirmation.complete(AcceptedJobDto(JOB_ID, "pending"))
+            advanceUntilIdle()
+            assertEquals("File reorganization queued", viewModel.state.value.message)
+            assertEquals(ReviewPane.GROUPING, viewModel.state.value.pane)
+            assertEquals("needs_review", viewModel.state.value.detail?.reviewState)
+
+            viewModel.cancelReorganization()
+            assertEquals(null, viewModel.state.value.pendingOperationId)
+            assertEquals(null, viewModel.state.value.reorganizationPreview)
+        }
+
+    @Test
+    fun `catalog only grouping remains available when reorganization is denied`() =
+        runTest(dispatcher) {
+            val source = FakeReviewSource(groupingContext = expandedGroupingContext())
+            val viewModel = BookDetailViewModel(BOOK_ID, source)
+            advanceUntilIdle()
+            viewModel.openGrouping()
+            advanceUntilIdle()
+
+            viewModel.previewReorganization()
+            advanceUntilIdle()
+            assertTrue(source.previewRequests.isEmpty())
+
+            viewModel.saveGrouping()
+            advanceUntilIdle()
+            assertEquals(1, source.savedGroupings.size)
+        }
+
+    @Test
     fun `pane switches ignore deferred results from the previous review operation`() =
         runTest(dispatcher) {
             val firstSearch = CompletableDeferred<MatchSearchDto>()
@@ -313,12 +411,16 @@ private class FakeReviewSource(
     private val queuedGroupingContext: CompletableDeferred<GroupingContextDto>? = null,
     private val detail: BookDetailDto = defaultBookDetail(),
     private val savedGeneration: Long = 1,
+    private val reorganizationPreview: ReorganizationPreviewDto = testReorganizationPreview(),
+    private val queuedReorganizationConfirmation: CompletableDeferred<AcceptedJobDto>? = null,
 ) : ReviewSource {
     val searches = mutableListOf<Triple<String, String, String>>()
     val groupingRequests = mutableListOf<String>()
     val confirmedMatches = mutableListOf<Pair<String, String>>()
     val savedGroupings = mutableListOf<List<GroupingDecision>>()
     val savedExpectedFiles = mutableListOf<List<GroupingFileDto>>()
+    val previewRequests = mutableListOf<ReorganizationRequestCapture>()
+    val confirmedReorganizations = mutableListOf<Pair<String, String>>()
 
     override suspend fun bookDetail(bookId: String) = detail.copy(id = bookId)
 
@@ -363,7 +465,38 @@ private class FakeReviewSource(
         return savedGeneration
     }
 
+    override suspend fun previewReorganization(
+        bookId: String,
+        catalogGeneration: Long,
+        groups: List<GroupingDecision>,
+        targetFolders: Map<String, String>,
+    ): ReorganizationPreviewDto {
+        previewRequests += ReorganizationRequestCapture(
+            bookId,
+            catalogGeneration,
+            groups,
+            targetFolders,
+        )
+        return reorganizationPreview
+    }
+
+    override suspend fun confirmReorganization(
+        bookId: String,
+        operationId: String,
+    ): AcceptedJobDto {
+        confirmedReorganizations += bookId to operationId
+        return queuedReorganizationConfirmation?.await()
+            ?: AcceptedJobDto(JOB_ID, "pending")
+    }
+
 }
+
+private data class ReorganizationRequestCapture(
+    val bookId: String,
+    val catalogGeneration: Long,
+    val groups: List<GroupingDecision>,
+    val targetFolders: Map<String, String>,
+)
 
 private fun defaultBookDetail() = BookDetailDto(
     id = BOOK_ID,
@@ -405,6 +538,51 @@ private fun expandedGroupingContext() = GroupingContextDto(
             SIBLING_BOOK_ID,
             "Second",
             listOf(FILE_TWO_ID, COVER_ID),
+        ),
+    ),
+)
+
+private fun reorganizableGroupingContext() = expandedGroupingContext().copy(
+    catalogGeneration = 8,
+    canReorganize = true,
+    books = listOf(
+        GroupingContextBookDto(
+            BOOK_ID,
+            "First",
+            listOf(FILE_ONE_ID, COMPANION_ID, COVER_ID),
+            groupingKey = "book-one",
+        ),
+        GroupingContextBookDto(
+            SIBLING_BOOK_ID,
+            "Second",
+            listOf(FILE_TWO_ID, COVER_ID),
+            groupingKey = "book-two",
+        ),
+    ),
+)
+
+private fun testReorganizationPreview() = ReorganizationPreviewDto(
+    operationId = OPERATION_ID,
+    rootId = "audiobooks",
+    catalogGeneration = 8,
+    moves = listOf(
+        ReorganizationMoveDto(
+            order = 1,
+            fileId = FILE_ONE_ID,
+            sourcePath = "Omnibus/Disc 1/First.m4b",
+            destinationPath = "Frank Herbert/First/First.m4b",
+            role = "audio",
+            expectedSize = 100,
+            expectedModifiedAt = "2026-07-26T00:00:00Z",
+        ),
+        ReorganizationMoveDto(
+            order = 2,
+            fileId = COMPANION_ID,
+            sourcePath = "Omnibus/book.cue",
+            destinationPath = "Frank Herbert/First/book.cue",
+            role = "sidecar",
+            expectedSize = 100,
+            expectedModifiedAt = "2026-07-26T00:00:00Z",
         ),
     ),
 )
@@ -477,3 +655,4 @@ private const val LOOSE_FILE_ID = "12121212-1212-4121-8121-121212121212"
 private const val SIBLING_BOOK_ID = "13131313-1313-4131-8131-131313131313"
 private const val COMPANION_ID = "14141414-1414-4141-8141-141414141414"
 private const val COVER_ID = "15151515-1515-4151-8151-151515151515"
+private const val OPERATION_ID = "16161616-1616-4161-8161-161616161616"

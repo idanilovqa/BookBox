@@ -223,6 +223,7 @@ private fun JourneyHarness() {
                             is LibraryAction.ToggleSelected -> selected = !selected
                             is LibraryAction.ViewRawFiles -> route = AppRoute.Folders
                             is LibraryAction.OpenBook -> route = AppRoute.BookDetail
+							is LibraryAction.ReviewGrouping -> route = AppRoute.BookDetail
                         }
                     },
                     onAuthorChange = {},
@@ -317,6 +318,7 @@ private fun DuplicateRawJourneyHarness() {
 					is LibraryAction.ToggleSelected -> selected = selected + action.bookId
 					is LibraryAction.ViewRawFiles -> route = AppRoute.Folders
 					is LibraryAction.OpenBook -> Unit
+					is LibraryAction.ReviewGrouping -> Unit
 				}
 			},
 			onAuthorChange = {}, onGenreChange = {}, onYearChange = {}, onRootChange = {},

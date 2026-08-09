@@ -52,6 +52,14 @@ sealed interface BookReviewAction {
 
     data class MergeGroups(val sourceId: Int, val targetId: Int) : BookReviewAction
 
+    data class UpdateTargetFolder(val groupId: Int, val targetFolder: String) : BookReviewAction
+
+    data object PreviewReorganization : BookReviewAction
+
+    data object ConfirmReorganization : BookReviewAction
+
+    data object CancelReorganization : BookReviewAction
+
     data object SaveGrouping : BookReviewAction
 }
 

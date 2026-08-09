@@ -6,6 +6,7 @@ import com.rendref.bookbox.core.model.BookDetailDto
 import com.rendref.bookbox.core.model.BookFileDto
 import com.rendref.bookbox.core.model.GroupingFileDto
 import com.rendref.bookbox.core.model.MetadataCandidateDto
+import com.rendref.bookbox.core.model.ReorganizationPreviewDto
 import com.rendref.bookbox.core.repository.GroupingDecision
 import com.rendref.bookbox.core.repository.ReviewSource
 import kotlinx.coroutines.CancellationException
@@ -27,6 +28,8 @@ data class GroupingDraft(
     val fileIds: Set<String>,
     val title: String? = null,
     val companionFileIds: Set<String> = emptySet(),
+    val groupingKey: String = bookId.orEmpty().ifEmpty { "group-$localId" },
+    val targetFolder: String = "",
 ) {
     val id: Int get() = localId
 }
@@ -41,6 +44,8 @@ data class BookReviewState(
     val groupingEvidence: Map<String, List<String>> = emptyMap(),
     val canReorganize: Boolean = false,
     val catalogGeneration: Long = 0,
+    val reorganizationPreview: ReorganizationPreviewDto? = null,
+    val pendingOperationId: String? = null,
     val matches: List<MetadataCandidateDto> = emptyList(),
     val searchTitle: String = "",
     val searchAuthor: String = "",
@@ -211,6 +216,9 @@ class BookDetailViewModel(
             groupingReviewReason = null,
             groupingEvidence = emptyMap(),
             canReorganize = false,
+            catalogGeneration = 0,
+            reorganizationPreview = null,
+            pendingOperationId = null,
             groups = emptyList(),
             canSaveGrouping = false,
             isLoading = true,
@@ -236,6 +244,7 @@ class BookDetailViewModel(
                         fileIds = audioIds,
                         title = book.title,
                         companionFileIds = companionIds + sharedCompanions,
+                        groupingKey = book.groupingKey,
                     )
                 }.toMutableList()
                 if (groups.size == 1) {
@@ -244,6 +253,7 @@ class BookDetailViewModel(
                         null,
                         emptySet(),
                         companionFileIds = sharedCompanions,
+                        groupingKey = "new-2",
                     )
                 }
                 nextGroupId = (groups.maxOfOrNull { it.id } ?: 0) + 1
@@ -259,6 +269,7 @@ class BookDetailViewModel(
                     groupingReviewReason = context.reviewReason,
                     groupingEvidence = context.evidence,
                     canReorganize = context.canReorganize,
+                    catalogGeneration = context.catalogGeneration,
                     groups = groups,
                     canSaveGrouping = validGrouping(groups, context.files),
                     isLoading = false,
@@ -282,14 +293,16 @@ class BookDetailViewModel(
 
     fun addGroup() {
         if (mutableState.value.groups.size >= MAX_GROUPS) return
+        val groupId = nextGroupId++
         updateGroups(
             mutableState.value.groups + GroupingDraft(
-                nextGroupId++,
+                groupId,
                 null,
                 emptySet(),
                 companionFileIds = companionFiles()
                     .filter { it.shared }
                     .mapTo(mutableSetOf()) { it.id },
+                groupingKey = "new-$groupId",
             ),
         )
     }
@@ -364,6 +377,7 @@ class BookDetailViewModel(
                             it.bookId,
                             it.fileIds.sorted(),
                             it.companionFileIds.toSortedSet(),
+                            it.groupingKey,
                         )
                     },
                     expectedFiles,
@@ -384,10 +398,110 @@ class BookDetailViewModel(
         }
     }
 
+    fun updateTargetFolder(groupId: Int, targetFolder: String) {
+        if (mutableState.value.groups.none { it.id == groupId }) return
+        updateGroups(
+            mutableState.value.groups.map { group ->
+                if (group.id == groupId) group.copy(targetFolder = targetFolder) else group
+            },
+        )
+    }
+
+    fun previewReorganization() {
+        val snapshot = mutableState.value
+        if (
+            !snapshot.canReorganize ||
+            snapshot.catalogGeneration <= 0 ||
+            !validGrouping(snapshot.groups, snapshot.groupingFiles) ||
+            snapshot.groups.any { !validReorganizationTargetFolder(it.targetFolder) } ||
+            snapshot.groups.map { it.groupingKey }.distinct().size != snapshot.groups.size ||
+            snapshot.isSaving
+        ) {
+            return
+        }
+        mutableState.value = snapshot.copy(
+            isSaving = true,
+            errorMessage = null,
+            reorganizationPreview = null,
+            pendingOperationId = null,
+        )
+        viewModelScope.launch {
+            try {
+                val preview = reviews.previewReorganization(
+                    bookId,
+                    snapshot.catalogGeneration,
+                    snapshot.groups.map { group ->
+                        GroupingDecision(
+                            group.bookId,
+                            group.fileIds.sorted(),
+                            group.companionFileIds.toSortedSet(),
+                            group.groupingKey,
+                        )
+                    },
+                    snapshot.groups.associate {
+                        it.groupingKey to normalizeReorganizationTargetFolder(it.targetFolder)
+                    },
+                )
+                mutableState.value = mutableState.value.copy(
+                    isSaving = false,
+                    reorganizationPreview = preview,
+                    pendingOperationId = preview.operationId,
+                )
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                mutableState.value = mutableState.value.copy(
+                    isSaving = false,
+                    errorMessage = "Unable to preview file reorganization",
+                )
+            }
+        }
+    }
+
+    fun confirmReorganization() {
+        val snapshot = mutableState.value
+        val operationId = snapshot.pendingOperationId ?: return
+        if (
+            snapshot.isSaving ||
+            snapshot.reorganizationPreview?.operationId != operationId
+        ) {
+            return
+        }
+        mutableState.value = snapshot.copy(isSaving = true, errorMessage = null)
+        viewModelScope.launch {
+            try {
+                reviews.confirmReorganization(bookId, operationId)
+                mutableState.value = mutableState.value.copy(
+                    isSaving = false,
+                    reorganizationPreview = null,
+                    pendingOperationId = null,
+                    message = "File reorganization queued",
+                )
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                mutableState.value = mutableState.value.copy(
+                    isSaving = false,
+                    errorMessage = "Unable to queue file reorganization",
+                )
+            }
+        }
+    }
+
+    fun cancelReorganization() {
+        if (mutableState.value.isSaving) return
+        mutableState.value = mutableState.value.copy(
+            reorganizationPreview = null,
+            pendingOperationId = null,
+        )
+    }
+
     private fun updateGroups(groups: List<GroupingDraft>) {
         mutableState.value = mutableState.value.copy(
             groups = groups,
             canSaveGrouping = validGrouping(groups, mutableState.value.groupingFiles),
+            reorganizationPreview = null,
+            pendingOperationId = null,
         )
     }
 
@@ -410,6 +524,25 @@ class BookDetailViewModel(
         mutableState.value.groupingFiles.filter { it.role != "audio" }
 }
 
+internal fun validReorganizationTargetFolder(value: String): Boolean {
+    val normalized = normalizeReorganizationTargetFolder(value)
+    if (
+        normalized.isEmpty() ||
+        normalized.startsWith('/') ||
+        WINDOWS_ABSOLUTE.containsMatchIn(normalized) ||
+        normalized.any(Char::isISOControl) ||
+        normalized.any { it in INVALID_TARGET_CHARACTERS }
+    ) {
+        return false
+    }
+    return normalized.split('/').none {
+        it.isBlank() || it == "." || it == ".." || it.endsWith('.')
+    }
+}
+
+private fun normalizeReorganizationTargetFolder(value: String): String =
+    value.trim().replace('\\', '/')
+
 private fun validGrouping(
     groups: List<GroupingDraft>,
     files: List<GroupingFileDto>,
@@ -426,3 +559,5 @@ private fun validGrouping(
     }
 }
 private const val MAX_GROUPS = 100
+private val WINDOWS_ABSOLUTE = Regex("^[A-Za-z]:/")
+private val INVALID_TARGET_CHARACTERS = setOf('<', '>', ':', '"', '|', '?', '*')

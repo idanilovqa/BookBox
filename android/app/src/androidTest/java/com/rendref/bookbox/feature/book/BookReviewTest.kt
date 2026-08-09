@@ -15,11 +15,14 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performTextReplacement
 import com.rendref.bookbox.core.model.BookDetailDto
 import com.rendref.bookbox.core.model.BookFileDto
 import com.rendref.bookbox.core.model.GroupingFileDto
 import com.rendref.bookbox.core.model.MetadataAttributionDto
 import com.rendref.bookbox.core.model.MetadataCandidateDto
+import com.rendref.bookbox.core.model.ReorganizationMoveDto
+import com.rendref.bookbox.core.model.ReorganizationPreviewDto
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -298,6 +301,129 @@ class BookReviewTest {
         assertNoMutationActions()
     }
 
+    @Test
+    fun groupingOffersReorganizationOnlyWithCapabilityAndCollectsTargetFolders() {
+        val actions = mutableListOf<BookReviewAction>()
+        val reorganizable = reviewState.copy(
+            pane = ReviewPane.GROUPING,
+            canReorganize = true,
+            catalogGeneration = 8,
+            groups = listOf(
+                GroupingDraft(
+                    1,
+                    BOOK_ID,
+                    setOf(FILE_ONE_ID),
+                    title = "Dune",
+                    groupingKey = "book-one",
+                    targetFolder = "Frank Herbert/Dune",
+                ),
+                GroupingDraft(
+                    2,
+                    null,
+                    setOf(FILE_TWO_ID),
+                    title = "Dune Messiah",
+                    groupingKey = "book-two",
+                    targetFolder = "Frank Herbert/Dune Messiah",
+                ),
+            ),
+            canSaveGrouping = true,
+        )
+        var renderedState by mutableStateOf(reorganizable)
+        composeRule.setContent {
+            MaterialTheme {
+                GroupingScreen(renderedState, onAction = actions::add)
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Target folder for logical book 1")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("Frank Herbert/Dune")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Target folder for logical book 1")
+            .performTextReplacement("Frank Herbert/Dune Revised")
+        assertEquals(
+            BookReviewAction.UpdateTargetFolder(1, "Frank Herbert/Dune Revised"),
+            actions.last(),
+        )
+        composeRule.onNodeWithText("Confirm and reorganize files")
+            .performScrollTo()
+            .performClick()
+        assertEquals(BookReviewAction.PreviewReorganization, actions.last())
+
+        composeRule.runOnIdle {
+            renderedState = reorganizable.copy(canReorganize = false)
+        }
+        composeRule.onAllNodesWithText("Confirm and reorganize files")
+            .assertCountEquals(0)
+        composeRule.onNodeWithText("Confirm grouping").performScrollTo().performClick()
+        assertEquals(BookReviewAction.SaveGrouping, actions.last())
+    }
+
+    @Test
+    fun reorganizationPreviewShowsRelativeMovesRolesAndRequiresSecondConfirmation() {
+        val actions = mutableListOf<BookReviewAction>()
+        composeRule.setContent {
+            MaterialTheme {
+                GroupingScreen(
+                    reviewState.copy(
+                        pane = ReviewPane.GROUPING,
+                        canReorganize = true,
+                        catalogGeneration = 8,
+                        reorganizationPreview = reorganizationPreview,
+                        pendingOperationId = OPERATION_ID,
+                    ),
+                    onAction = actions::add,
+                )
+            }
+        }
+
+        listOf(
+            "Omnibus/Disc 1/First.m4b",
+            "Frank Herbert/First/First.m4b",
+            "Omnibus/book.cue",
+            "Frank Herbert/First/book.cue",
+            "Audio",
+            "Sidecar",
+        ).forEach { label ->
+            composeRule.onNodeWithText(label, substring = true)
+                .performScrollTo()
+                .assertIsDisplayed()
+        }
+        composeRule.onNodeWithText("Confirm file reorganization")
+            .performScrollTo()
+            .performClick()
+        assertEquals(BookReviewAction.ConfirmReorganization, actions.last())
+        composeRule.onNodeWithText("Cancel reorganization")
+            .performScrollTo()
+            .performClick()
+        assertEquals(BookReviewAction.CancelReorganization, actions.last())
+        assertNoMutationActions()
+    }
+
+    @Test
+    fun reorganizationConflictIsVisibleWithoutExposingAbsolutePaths() {
+        composeRule.setContent {
+            MaterialTheme {
+                GroupingScreen(
+                    reviewState.copy(
+                        pane = ReviewPane.GROUPING,
+                        canReorganize = true,
+                        errorMessage = "Destination conflict. Choose another target folder.",
+                    ),
+                    onAction = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Destination conflict", substring = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onAllNodesWithText("C:\\", substring = true).assertCountEquals(0)
+        composeRule.onAllNodesWithText("/srv/", substring = true).assertCountEquals(0)
+    }
+
     private fun assertNoMutationActions() {
         listOf("Rename", "Move", "Delete", "Upload", "Edit tags", "New folder")
             .forEach {
@@ -377,9 +503,36 @@ private fun groupingFile(
     shared = shared,
 )
 
+private val reorganizationPreview = ReorganizationPreviewDto(
+    operationId = OPERATION_ID,
+    rootId = "audiobooks",
+    catalogGeneration = 8,
+    moves = listOf(
+        ReorganizationMoveDto(
+            order = 1,
+            fileId = FILE_ONE_ID,
+            sourcePath = "Omnibus/Disc 1/First.m4b",
+            destinationPath = "Frank Herbert/First/First.m4b",
+            role = "audio",
+            expectedSize = 100,
+            expectedModifiedAt = "2026-07-26T00:00:00Z",
+        ),
+        ReorganizationMoveDto(
+            order = 2,
+            fileId = COMPANION_ID,
+            sourcePath = "Omnibus/book.cue",
+            destinationPath = "Frank Herbert/First/book.cue",
+            role = "sidecar",
+            expectedSize = 10,
+            expectedModifiedAt = "2026-07-26T00:00:00Z",
+        ),
+    ),
+)
+
 private const val BOOK_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 private const val MATCH_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 private const val FILE_ONE_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 private const val FILE_TWO_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 private const val COMPANION_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 private const val COVER_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+private const val OPERATION_ID = "abababab-abab-4bab-8bab-abababababab"

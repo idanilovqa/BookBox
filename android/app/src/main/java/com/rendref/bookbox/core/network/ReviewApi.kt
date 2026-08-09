@@ -8,6 +8,7 @@ import com.rendref.bookbox.core.model.GroupingContextDto
 import com.rendref.bookbox.core.model.GroupingFileDto
 import com.rendref.bookbox.core.model.MatchSearchDto
 import com.rendref.bookbox.core.model.MetadataCandidateDto
+import com.rendref.bookbox.core.model.ReorganizationPreviewDto
 import java.io.IOException
 import java.time.Instant
 import java.time.format.DateTimeParseException
@@ -156,6 +157,8 @@ class ReviewApi(
                 response.books.none { it.bookId == bookId } ||
                 response.books.any { book ->
                     !UUID.matches(book.bookId) ||
+                        book.groupingKey.isBlank() ||
+                        !book.groupingKey.isSafeDisplayText() ||
                         book.title.isBlank() ||
                         !book.title.isSafeDisplayText() ||
                         book.fileIds.distinct().size != book.fileIds.size ||
@@ -166,7 +169,9 @@ class ReviewApi(
                 response.files.any { file ->
                     val count = assignmentCounts[file.id] ?: 0
                     !file.shared && count > 1
-                }
+                } ||
+                response.books.distinctBy { it.groupingKey }.size != response.books.size ||
+                response.canReorganize && response.catalogGeneration <= 0
             ) {
                 throw IOException("Server returned invalid grouping context")
             }
@@ -288,6 +293,86 @@ class ReviewApi(
         }
     }
 
+    suspend fun previewReorganization(
+        bookId: String,
+        catalogGeneration: Long,
+        groups: List<ReviewGroupingRequest>,
+        targetFolders: Map<String, String>,
+    ): ReorganizationPreviewDto {
+        requireUuid(bookId)
+        require(catalogGeneration > 0 && groups.isNotEmpty() && groups.size <= MAX_GROUPS)
+        val groupingKeys = groups.mapNotNull { it.groupingKey }
+        require(
+            groupingKeys.size == groups.size &&
+                groupingKeys.distinct().size == groupingKeys.size &&
+                targetFolders.keys == groupingKeys.toSet() &&
+                groups.all { group ->
+                    group.groupingKey?.let(::validGroupingKey) == true &&
+                        (group.bookId == null || UUID.matches(group.bookId)) &&
+                        group.fileIds.isNotEmpty() &&
+                        group.fileIds.distinct().size == group.fileIds.size &&
+                        group.fileIds.all(UUID::matches)
+                } &&
+                targetFolders.all { (key, folder) ->
+                    validGroupingKey(key) && validReorganizationTargetFolder(folder)
+                },
+        )
+        val request = jsonRequest(
+            bookUrl(bookId).newBuilder()
+                .addPathSegments("reorganization/preview")
+                .build(),
+            "POST",
+            ApiJson.encodeToString(
+                ReorganizationPreviewRequest(catalogGeneration, groups, targetFolders),
+            ),
+        )
+        return executeJson<ReorganizationPreviewDto>(request).also { preview ->
+            val destinations = preview.moves.map { it.destinationPath.lowercase() }
+            val orders = preview.moves.map { it.order }.sorted()
+            if (
+                !UUID.matches(preview.operationId) ||
+                !ROOT_ID.matches(preview.rootId) ||
+                preview.catalogGeneration <= 0 ||
+                preview.catalogGeneration != catalogGeneration ||
+                preview.moves.isEmpty() ||
+                preview.moves.distinctBy { it.fileId }.size != preview.moves.size ||
+                destinations.distinct().size != destinations.size ||
+                orders != (1..preview.moves.size).toList() ||
+                preview.moves.any { move ->
+                    move.order <= 0 ||
+                        !UUID.matches(move.fileId) ||
+                        !validRelativePath(move.sourcePath, allowEmpty = false) ||
+                        !validRelativePath(move.destinationPath, allowEmpty = false) ||
+                        move.role !in GROUPING_ROLES ||
+                        move.expectedSize < 0 ||
+                        !validInstant(move.expectedModifiedAt)
+                }
+            ) {
+                throw IOException("Server returned an invalid reorganization preview")
+            }
+        }
+    }
+
+    suspend fun confirmReorganization(
+        bookId: String,
+        operationId: String,
+    ): AcceptedJobDto {
+        requireUuid(bookId)
+        requireUuid(operationId)
+        val request = jsonRequest(
+            bookUrl(bookId).newBuilder()
+                .addPathSegments("reorganization/confirm")
+                .build(),
+            "POST",
+            ApiJson.encodeToString(ReorganizationConfirmRequest(operationId)),
+        )
+        return executeJson<AcceptedJobDto>(request).also {
+            if (!UUID.matches(it.jobId) || it.status.isBlank() || it.status.hasUnsafeText()) {
+                throw IOException("Server returned an invalid reorganization job")
+            }
+        }
+    }
+
     private fun bookUrl(bookId: String): HttpUrl = baseUrl.newBuilder()
         .addPathSegments("v1/books")
         .addPathSegment(bookId)
@@ -355,8 +440,19 @@ private data class ConfirmMatchRequest(val matchId: String)
 @Serializable
 data class ReviewGroupingRequest(
     val bookId: String? = null,
+    val groupingKey: String? = null,
     val fileIds: List<String>,
 )
+
+@Serializable
+private data class ReorganizationPreviewRequest(
+    val catalogGeneration: Long,
+    val groups: List<ReviewGroupingRequest>,
+    val targetFolders: Map<String, String>,
+)
+
+@Serializable
+private data class ReorganizationConfirmRequest(val operationId: String)
 
 @Serializable
 private data class GroupingExpectedFileRequest(
@@ -457,6 +553,15 @@ private fun validGroupingFile(file: GroupingFileDto): Boolean = when (file.role)
     else -> false
 }
 
+private fun validGroupingKey(value: String): Boolean =
+    value.isNotBlank() && value.length <= MAX_TEXT_LENGTH && value.isSafeDisplayText()
+
+private fun validReorganizationTargetFolder(value: String): Boolean =
+    value == value.trim() &&
+        validRelativePath(value, allowEmpty = false) &&
+        value.none { it in INVALID_TARGET_CHARACTERS } &&
+        value.split('/').none { it.endsWith('.') }
+
 private fun validReviewPair(state: String, reason: String?): Boolean = when (state) {
     "needs_review" -> !reason.isNullOrBlank() && reason.isSafeDisplayText()
     "confirmed", "unreviewed" -> reason == null
@@ -490,3 +595,4 @@ private val AUDIO_SUFFIXES = setOf(
 )
 private val GROUPING_ROLES = setOf("audio", "cover", "sidecar")
 private val COMPANION_KINDS = setOf("cue", "nfo", "opf", "playlist", "ebook", "other")
+private val INVALID_TARGET_CHARACTERS = setOf('<', '>', ':', '"', '|', '?', '*')

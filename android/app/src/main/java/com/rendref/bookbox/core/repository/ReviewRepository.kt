@@ -6,6 +6,7 @@ import com.rendref.bookbox.core.model.BookFilesDto
 import com.rendref.bookbox.core.model.GroupingContextDto
 import com.rendref.bookbox.core.model.GroupingFileDto
 import com.rendref.bookbox.core.model.MatchSearchDto
+import com.rendref.bookbox.core.model.ReorganizationPreviewDto
 import com.rendref.bookbox.core.network.ReviewApi
 import com.rendref.bookbox.core.network.ReviewGroupingRequest
 
@@ -13,6 +14,7 @@ data class GroupingDecision(
     val bookId: String?,
     val fileIds: List<String>,
     val companionFileIds: Collection<String> = emptyList(),
+    val groupingKey: String = bookId.orEmpty(),
 )
 
 interface ReviewSource {
@@ -44,6 +46,22 @@ interface ReviewSource {
     ): Long {
         saveGrouping(bookId, groups)
         return 1
+    }
+
+    suspend fun previewReorganization(
+        bookId: String,
+        catalogGeneration: Long,
+        groups: List<GroupingDecision>,
+        targetFolders: Map<String, String>,
+    ): ReorganizationPreviewDto {
+        throw UnsupportedOperationException("Reorganization preview is not implemented")
+    }
+
+    suspend fun confirmReorganization(
+        bookId: String,
+        operationId: String,
+    ): AcceptedJobDto {
+        throw UnsupportedOperationException("Reorganization confirmation is not implemented")
     }
 }
 
@@ -83,9 +101,28 @@ class ReviewRepository(
         groups.map { it.toRequest() },
         expectedFiles,
     )
+
+    override suspend fun previewReorganization(
+        bookId: String,
+        catalogGeneration: Long,
+        groups: List<GroupingDecision>,
+        targetFolders: Map<String, String>,
+    ) = api.previewReorganization(
+        bookId,
+        catalogGeneration,
+        groups.map { it.toRequest(includeGroupingKey = true) },
+        targetFolders,
+    )
+
+    override suspend fun confirmReorganization(
+        bookId: String,
+        operationId: String,
+    ) = api.confirmReorganization(bookId, operationId)
 }
 
-private fun GroupingDecision.toRequest() = ReviewGroupingRequest(
-    bookId,
-    fileIds + companionFileIds,
-)
+private fun GroupingDecision.toRequest(includeGroupingKey: Boolean = false) =
+    ReviewGroupingRequest(
+        bookId = bookId,
+        groupingKey = groupingKey.takeIf { includeGroupingKey },
+        fileIds = fileIds + companionFileIds,
+    )

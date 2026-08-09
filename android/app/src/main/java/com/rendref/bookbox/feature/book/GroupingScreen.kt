@@ -17,6 +17,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -88,6 +89,24 @@ fun GroupingScreen(
                     )
                     group.title?.let {
                         Text(it, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (state.canReorganize) {
+                        OutlinedTextField(
+                            value = group.targetFolder,
+                            onValueChange = {
+                                onAction(
+                                    BookReviewAction.UpdateTargetFolder(group.id, it),
+                                )
+                            },
+                            label = { Text("Target folder") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics {
+                                    contentDescription =
+                                        "Target folder for logical book $groupNumber"
+                                },
+                        )
                     }
                     audioFiles.forEach { file ->
                         val displayPath = if (
@@ -193,6 +212,45 @@ fun GroupingScreen(
                 }
             }
         }
+        state.reorganizationPreview?.let { preview ->
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            "Reorganization preview",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text("Review every source-relative path before confirming.")
+                        preview.moves.sortedBy { it.order }.forEach { move ->
+                            Text("${move.role.displayLabel()}: ${move.sourcePath}")
+                            Text("Destination: ${move.destinationPath}")
+                        }
+                        Button(
+                            onClick = {
+                                onAction(BookReviewAction.ConfirmReorganization)
+                            },
+                            enabled = !state.isSaving,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Confirm file reorganization")
+                        }
+                        TextButton(
+                            onClick = {
+                                onAction(BookReviewAction.CancelReorganization)
+                            },
+                            enabled = !state.isSaving,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Cancel reorganization")
+                        }
+                    }
+                }
+            }
+        }
         item {
             TextButton(
                 onClick = { onAction(BookReviewAction.AddGroup) },
@@ -200,14 +258,34 @@ fun GroupingScreen(
             ) {
                 Text("Add logical book")
             }
-            Button(
-                onClick = { onAction(BookReviewAction.SaveGrouping) },
-                enabled = state.canSaveGrouping && !state.isSaving,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 24.dp),
-            ) {
-                Text("Confirm grouping")
+            if (state.canReorganize) {
+                if (state.reorganizationPreview == null) {
+                    Button(
+                        onClick = {
+                            onAction(BookReviewAction.PreviewReorganization)
+                        },
+                        enabled = state.canSaveGrouping &&
+                            state.groups.all {
+                                validReorganizationTargetFolder(it.targetFolder)
+                            } &&
+                            !state.isSaving,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 24.dp),
+                    ) {
+                        Text("Confirm and reorganize files")
+                    }
+                }
+            } else {
+                Button(
+                    onClick = { onAction(BookReviewAction.SaveGrouping) },
+                    enabled = state.canSaveGrouping && !state.isSaving,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 24.dp),
+                ) {
+                    Text("Confirm grouping")
+                }
             }
         }
     }

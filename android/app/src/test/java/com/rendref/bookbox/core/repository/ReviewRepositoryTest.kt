@@ -173,6 +173,7 @@ class ReviewRepositoryTest {
                               "bookId":"$BOOK_ID",
                               "rootId":"audiobooks",
                               "scopePath":"Omnibus",
+                              "catalogGeneration":8,
                               "reviewReason":"probe_failed",
                               "evidence":{
                                 "audio":["Omnibus/Disc 1/First.m4b"],
@@ -186,8 +187,8 @@ class ReviewRepositoryTest {
                                 {"id":"$COVER_ID","relativePath":"Omnibus/cover.jpg","name":"cover.jpg","size":22,"modifiedAt":"2026-07-26T12:34:56Z","role":"cover","companionKind":"","shared":true}
                               ],
                               "books":[
-                                {"bookId":"$BOOK_ID","title":"First","fileIds":["$FILE_ONE_ID","$COMPANION_ID","$COVER_ID"]},
-                                {"bookId":"$SIBLING_BOOK_ID","title":"Second","fileIds":["$FILE_TWO_ID","$COVER_ID"]}
+                                {"bookId":"$BOOK_ID","title":"First","groupingKey":"book-one","fileIds":["$FILE_ONE_ID","$COMPANION_ID","$COVER_ID"]},
+                                {"bookId":"$SIBLING_BOOK_ID","title":"Second","groupingKey":"book-two","fileIds":["$FILE_TWO_ID","$COVER_ID"]}
                               ]
                             }
                         """.trimIndent(),
@@ -197,12 +198,17 @@ class ReviewRepositoryTest {
                 val context = repository.groupingContext(BOOK_ID)
 
                 assertEquals("Omnibus", context.scopePath)
+                assertEquals(8L, context.catalogGeneration)
                 assertEquals("probe_failed", context.reviewReason)
                 assertEquals(listOf("Omnibus/book.cue"), context.evidence["sidecar"])
                 assertFalse(context.canReorganize)
                 assertEquals("audio", context.files.first().role)
                 assertEquals("cue", context.files[2].companionKind)
                 assertTrue(context.files.last().shared)
+                assertEquals(
+                    listOf("book-one", "book-two"),
+                    context.books.map { it.groupingKey },
+                )
                 assertEquals("/v1/books/$BOOK_ID/grouping", server.takeRequest().target)
 
                 server.enqueue(MockResponse(body = """{"catalogGeneration":8}"""))
@@ -287,6 +293,151 @@ class ReviewRepositoryTest {
         }
 
     @Test
+    fun `reorganization preview sends generation assignments companions and target folders`() =
+        runTest {
+            withRepository { server, repository ->
+                server.enqueue(
+                    MockResponse(
+                        body = """
+                            {
+                              "operationId":"$OPERATION_ID",
+                              "rootId":"audiobooks",
+                              "catalogGeneration":8,
+                              "moves":[{
+                                "order":1,
+                                "fileId":"$FILE_ONE_ID",
+                                "sourcePath":"Omnibus/Disc 1/First.m4b",
+                                "destinationPath":"Frank Herbert/First/First.m4b",
+                                "role":"audio",
+                                "expectedSize":101,
+                                "expectedModifiedAt":"2026-07-26T12:34:56Z"
+                              }]
+                            }
+                        """.trimIndent(),
+                    ),
+                )
+
+                val preview = repository.previewReorganization(
+                    bookId = BOOK_ID,
+                    catalogGeneration = 8,
+                    groups = listOf(
+                        GroupingDecision(
+                            bookId = BOOK_ID,
+                            fileIds = listOf(FILE_ONE_ID),
+                            companionFileIds = listOf(COMPANION_ID),
+                            groupingKey = "book-one",
+                        ),
+                        GroupingDecision(
+                            bookId = SIBLING_BOOK_ID,
+                            fileIds = listOf(FILE_TWO_ID),
+                            groupingKey = "book-two",
+                        ),
+                    ),
+                    targetFolders = mapOf(
+                        "book-one" to "Frank Herbert/First",
+                        "book-two" to "Frank Herbert/Second",
+                    ),
+                )
+
+                assertEquals(OPERATION_ID, preview.operationId)
+                assertEquals(8L, preview.catalogGeneration)
+                assertEquals("audio", preview.moves.single().role)
+                val request = server.takeRequest()
+                assertEquals("POST", request.method)
+                assertEquals(
+                    "/v1/books/$BOOK_ID/reorganization/preview",
+                    request.target,
+                )
+                val body = Json.parseToJsonElement(request.body!!.utf8()).jsonObject
+                assertEquals(
+                    setOf("catalogGeneration", "groups", "targetFolders"),
+                    body.keys,
+                )
+                assertEquals(8L, body.getValue("catalogGeneration").jsonPrimitive.content.toLong())
+                val groups = body.getValue("groups").jsonArray
+                assertEquals("book-one", groups[0].jsonObject.getValue("groupingKey").jsonPrimitive.content)
+                assertEquals(
+                    listOf(FILE_ONE_ID, COMPANION_ID),
+                    groups[0].jsonObject.getValue("fileIds").jsonArray.map {
+                        it.jsonPrimitive.content
+                    },
+                )
+                assertEquals(
+                    "Frank Herbert/Second",
+                    body.getValue("targetFolders").jsonObject
+                        .getValue("book-two").jsonPrimitive.content,
+                )
+            }
+        }
+
+    @Test
+    fun `reorganization preview rejects unsafe or internally inconsistent responses`() =
+        runTest {
+            val invalidBodies = listOf(
+                reorganizationPreviewJson(operationId = "not-a-uuid"),
+                reorganizationPreviewJson(rootId = "C:/audiobooks"),
+                reorganizationPreviewJson(catalogGeneration = 0),
+                reorganizationPreviewJson(catalogGeneration = 7),
+                reorganizationPreviewJson(sourcePath = "C:/Audiobooks/First.m4b"),
+                reorganizationPreviewJson(destinationPath = "/srv/audio/First.m4b"),
+                reorganizationPreviewJson(expectedSize = -1),
+                reorganizationPreviewJson(role = "metadata"),
+                reorganizationPreviewJson(firstOrder = 2),
+                reorganizationPreviewJson(duplicateDestination = true),
+            )
+            invalidBodies.forEach { responseBody ->
+                withRepository { server, repository ->
+                    server.enqueue(MockResponse(body = responseBody))
+                    assertThrows(IOException::class.java) {
+                        kotlinx.coroutines.runBlocking {
+                            repository.previewReorganization(
+                                BOOK_ID,
+                                8,
+                                listOf(
+                                    GroupingDecision(
+                                        BOOK_ID,
+                                        listOf(FILE_ONE_ID),
+                                        groupingKey = "book-one",
+                                    ),
+                                ),
+                                mapOf("book-one" to "First"),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    @Test
+    fun `reorganization confirmation sends only the current operation id`() = runTest {
+        withRepository { server, repository ->
+            server.enqueue(
+                MockResponse(
+                    code = 202,
+                    body = """{"jobId":"$JOB_ID","status":"pending"}""",
+                ),
+            )
+
+            repository.confirmReorganization(BOOK_ID, OPERATION_ID)
+
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals(
+                "/v1/books/$BOOK_ID/reorganization/confirm",
+                request.target,
+            )
+            val body = Json.parseToJsonElement(request.body!!.utf8()).jsonObject
+            assertEquals(setOf("operationId"), body.keys)
+            assertEquals(OPERATION_ID, body.getValue("operationId").jsonPrimitive.content)
+            assertThrows(IllegalArgumentException::class.java) {
+                kotlinx.coroutines.runBlocking {
+                    repository.confirmReorganization(BOOK_ID, "not-an-operation")
+                }
+            }
+        }
+    }
+
+    @Test
     fun `detail rejects absolute source folders before UI`() = runTest {
         withRepository { server, repository ->
             server.enqueue(
@@ -345,6 +496,35 @@ private fun assertNoSourceMutationFields(body: String) {
     }
 }
 
+private fun reorganizationPreviewJson(
+    operationId: String = OPERATION_ID,
+    rootId: String = "audiobooks",
+    catalogGeneration: Long = 8,
+    sourcePath: String = "First.m4b",
+    destinationPath: String = "First/First.m4b",
+    role: String = "audio",
+    expectedSize: Long = 1,
+    firstOrder: Int = 1,
+    duplicateDestination: Boolean = false,
+): String {
+    val secondMove = if (duplicateDestination) {
+        """,
+          {"order":2,"fileId":"$FILE_TWO_ID","sourcePath":"Second.m4b","destinationPath":"$destinationPath","role":"audio","expectedSize":1,"expectedModifiedAt":"2026-07-26T12:34:56Z"}"""
+    } else {
+        ""
+    }
+    return """
+        {
+          "operationId":"$operationId",
+          "rootId":"$rootId",
+          "catalogGeneration":$catalogGeneration,
+          "moves":[
+            {"order":$firstOrder,"fileId":"$FILE_ONE_ID","sourcePath":"$sourcePath","destinationPath":"$destinationPath","role":"$role","expectedSize":$expectedSize,"expectedModifiedAt":"2026-07-26T12:34:56Z"}$secondMove
+          ]
+        }
+    """.trimIndent()
+}
+
 private object ReviewTokenSession : TokenSession {
     override val accessToken = "access"
 
@@ -360,3 +540,4 @@ private const val LOOSE_FILE_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 private const val SIBLING_BOOK_ID = "11111111-1111-4111-8111-111111111111"
 private const val COMPANION_ID = "22222222-2222-4222-8222-222222222222"
 private const val COVER_ID = "33333333-3333-4333-8333-333333333333"
+private const val OPERATION_ID = "44444444-4444-4444-8444-444444444444"

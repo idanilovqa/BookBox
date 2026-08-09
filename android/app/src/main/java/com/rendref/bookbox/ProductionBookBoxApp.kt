@@ -631,6 +631,11 @@ private fun handleBookReviewAction(
             viewModel.toggleCompanionForGroup(action.fileId, action.groupId)
         is BookReviewAction.MergeGroups ->
             viewModel.mergeGroups(action.sourceId, action.targetId)
+        is BookReviewAction.UpdateTargetFolder ->
+            viewModel.updateTargetFolder(action.groupId, action.targetFolder)
+        BookReviewAction.PreviewReorganization -> viewModel.previewReorganization()
+        BookReviewAction.ConfirmReorganization -> viewModel.confirmReorganization()
+        BookReviewAction.CancelReorganization -> viewModel.cancelReorganization()
         BookReviewAction.SaveGrouping -> viewModel.saveGrouping()
     }
 }

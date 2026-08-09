@@ -98,12 +98,14 @@ data class GroupingContextBookDto(
     val bookId: String,
     val title: String,
     val fileIds: List<String>,
+    val groupingKey: String = bookId,
 )
 
 @Serializable
 data class GroupingContextDto(
     val bookId: String,
     val rootId: String,
+    val catalogGeneration: Long = 0,
     val sourceFolder: String = "",
     val scopePath: String = sourceFolder,
     val reviewReason: String? = null,
@@ -111,6 +113,25 @@ data class GroupingContextDto(
     val files: List<GroupingFileDto>,
     val books: List<GroupingContextBookDto>,
     val canReorganize: Boolean = false,
+)
+
+@Serializable
+data class ReorganizationMoveDto(
+    val order: Int,
+    val fileId: String,
+    val sourcePath: String,
+    val destinationPath: String,
+    val role: String,
+    val expectedSize: Long,
+    val expectedModifiedAt: String,
+)
+
+@Serializable
+data class ReorganizationPreviewDto(
+    val operationId: String,
+    val rootId: String,
+    val catalogGeneration: Long,
+    val moves: List<ReorganizationMoveDto>,
 )
 
 @Serializable
