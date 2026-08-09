@@ -45,7 +45,20 @@ func run(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	cfg, err := config.LoadWorker(*configPath)
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stop()
+	return runProgram(ctx, *configPath, log.Default())
+}
+
+func runProgram(ctx context.Context, configPath string, logger *log.Logger) error {
+	if logger == nil {
+		return errors.New("catalog worker logger is required")
+	}
+	cfg, err := config.LoadWorker(configPath)
 	if err != nil {
 		return err
 	}
@@ -57,17 +70,21 @@ func run(args []string) error {
 		return errors.New("catalog worker requires PostgreSQL configuration")
 	}
 
-	startupCtx, cancelStartup := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelStartup()
-	pool, err := pgxpool.New(startupCtx, dsn)
+	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return fmt.Errorf("configure catalog database: %w", err)
 	}
 	defer pool.Close()
-	if err := pool.Ping(startupCtx); err != nil {
-		return fmt.Errorf("connect to catalog database: %w", err)
+	if err := retryUntilReady(ctx, retryPolicy{
+		Initial:        time.Second,
+		Maximum:        time.Minute,
+		AttemptTimeout: 10 * time.Second,
+	}, pool.Ping, func(class string) {
+		logger.Printf("warning: catalog database %s", class)
+	}); err != nil {
+		return err
 	}
-	if err := database.Migrate(startupCtx, pool); err != nil {
+	if err := database.Migrate(ctx, pool); err != nil {
 		return fmt.Errorf("migrate catalog database: %w", err)
 	}
 	repository := catalog.NewPostgresRepository(pool)
@@ -79,7 +96,7 @@ func run(args []string) error {
 		})
 		rootByID[root.ID] = root
 	}
-	if err := repository.SyncRoots(startupCtx, roots); err != nil {
+	if err := repository.SyncRoots(ctx, roots); err != nil {
 		return fmt.Errorf("sync catalog roots: %w", err)
 	}
 
@@ -127,19 +144,13 @@ func run(args []string) error {
 			catalog.JobPublishCover: publishHandler,
 		},
 	}
-	ctx, stop := signal.NotifyContext(
-		context.Background(),
-		os.Interrupt,
-		syscall.SIGTERM,
-	)
-	defer stop()
 	supervisors := newRootSupervisors(cfg.Roots, func(root config.Root) monitor.Runner {
 		return monitor.New(repository, []config.Root{root})
 	}, func(err error) {
-		log.Printf("warning: root monitor unavailable: %v", err)
+		logger.Printf("warning: root monitor unavailable: %v", err)
 	})
 	return runWorkerWithMonitors(ctx, runtime, supervisors, func(err error) {
-		log.Printf("warning: %v", err)
+		logger.Printf("warning: %v", err)
 	})
 }
 
