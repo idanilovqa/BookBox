@@ -111,6 +111,30 @@ func TestReorganizeFilesHandlerRollsBackAndMarksAttentionWhenNecessary(t *testin
 	}
 }
 
+func TestReorganizeFilesHandlerDoesNotRetryTerminalOperations(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []string{"rolled_back", "needs_attention", "succeeded"} {
+		t.Run(status, func(t *testing.T) {
+			operation := testReorganizationOperation()
+			operation.Status = status
+			repository := &reorganizationRepositoryFake{operation: operation}
+			mover := &confinedMoverFake{}
+			handler := ReorganizeFilesHandler{Repository: repository, Mover: mover}
+
+			err := handler.Handle(context.Background(), catalog.WorkerJob{Payload: map[string]any{
+				"operationId": operation.ID.String(), "actor": operation.Actor,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(repository.events) != 0 || len(mover.moves) != 0 || len(mover.rollbacks) != 0 {
+				t.Fatalf("terminal operation was retried: events=%q moves=%q rollbacks=%q", repository.events, mover.moves, mover.rollbacks)
+			}
+		})
+	}
+}
+
 func testReorganizationOperation() catalog.ReorganizationOperation {
 	bookID := uuid.New()
 	return catalog.ReorganizationOperation{

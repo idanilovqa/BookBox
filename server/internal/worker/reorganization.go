@@ -45,6 +45,10 @@ func (handler ReorganizeFilesHandler) Handle(ctx context.Context, job catalog.Wo
 	if err != nil {
 		return err
 	}
+	switch operation.Status {
+	case "rolled_back", "needs_attention", "succeeded":
+		return nil
+	}
 	if err := handler.Repository.SetReorganizationStatus(ctx, operation.ID, "running", ""); err != nil {
 		return err
 	}
