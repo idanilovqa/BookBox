@@ -95,6 +95,7 @@ $ownedImages = @(
 )
 $cleanupRequired = $false
 $primaryError = $null
+$catalogStatus = $null
 $baselineRunning = @(& docker ps -q)
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to capture the baseline Docker container set.'
@@ -465,6 +466,41 @@ database:
         }
     }
 
+    $statusSql = @'
+select concat_ws('|',
+  (select count(*) from source_files where missing_at is null),
+  (select count(*) from books where missing_at is null),
+  (select coalesce(max(generation),0) from catalog_generations),
+  (select coalesce(max(catalog_generation),0) from library_search_snapshots),
+  (select count(*) from worker_jobs where status='queued'),
+  (select count(*) from worker_jobs where status='dead'),
+  (select coalesce((select status from scan_runs order by started_at desc, id desc limit 1),'none'))
+);
+'@
+    $statusLine = @(Invoke-Docker ($composeArgs + @(
+        'exec', '-T', 'postgres', 'psql', '-U', 'bookbox', '-d', 'bookbox',
+        '-v', 'ON_ERROR_STOP=1', '-At', '-c', $statusSql
+    )) | Where-Object { -not [string]::IsNullOrWhiteSpace("$_") }) | Select-Object -Last 1
+    $statusFields = "$statusLine" -split '\|'
+    if ($statusFields.Count -ne 7) {
+        throw 'Catalog smoke status query returned an invalid sanitized summary.'
+    }
+    $catalogStatus = [pscustomobject][ordered]@{
+        ActiveFiles = [int64]$statusFields[0]
+        ActiveBooks = [int64]$statusFields[1]
+        LatestGeneration = [int64]$statusFields[2]
+        ProjectionGeneration = [int64]$statusFields[3]
+        QueuedJobs = [int64]$statusFields[4]
+        DeadJobs = [int64]$statusFields[5]
+        LastInventoryStatus = "$($statusFields[6])"
+    }
+    if ($catalogStatus.ActiveFiles -lt 1 -or $catalogStatus.ActiveBooks -lt 1 -or
+        $catalogStatus.LatestGeneration -lt 1 -or
+        $catalogStatus.ProjectionGeneration -lt 1 -or
+        $catalogStatus.LastInventoryStatus -ne 'succeeded') {
+        throw 'Catalog smoke status did not reach a completed nonempty inventory and projection.'
+    }
+
     $after = Get-SourceSnapshot $library
     $sourceDifferences = @(Compare-Object $before $after)
     if ($sourceDifferences.Count -ne 0) {
@@ -562,3 +598,4 @@ if ($null -ne $primaryError) {
 }
 
 Write-Host "PASS: $project indexed one real audiobook, preserved its source, and was fully removed."
+$catalogStatus

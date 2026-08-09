@@ -25,7 +25,23 @@ The current implementation candidate does not enable production backup or restor
 
 Keep a separate backup of the Windows audiobook source with your normal Windows backup tool. BookBox does not include source audio in its catalog backup. Android downloads also remain outside the server backup.
 
+The PostgreSQL backup must retain staged catalog state and audit history. Check
+that it includes `source_files`, `books`, `book_files`, `scan_runs`,
+`worker_jobs`, `catalog_generations`, `book_grouping_evidence`,
+`grouping_corrections`, `library_search_snapshots`,
+`library_search_documents`, `reorganization_operations`, and
+`reorganization_moves`. Restore these tables as one database snapshot so file
+fingerprints, grouping decisions, projection generations, and move journals
+refer to the same point in time.
+
 If the catalog database becomes unavailable and no approved production restore exists, preserve the Windows source library, create new BookBox secrets and empty BookBox volumes, then let the worker rebuild the catalog. Review decisions, worker jobs, and cover audit history do not survive a clean catalog rebuild.
+
+After a database restore, keep the worker stopped while you compare the latest
+reorganization journal with the source backup. A `running` operation at backup
+time may have moved files after PostgreSQL wrote the dump. Treat it as
+`needs_attention`: verify each journaled fingerprint and relative path, restore
+the source layout from backup when needed, then start the worker and request a
+full inventory. Do not replay a confirmation from the restored database.
 
 ## Secret handling
 

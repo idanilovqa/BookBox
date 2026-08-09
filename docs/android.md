@@ -1,6 +1,10 @@
 # Use BookBox on Android 16
 
-BookBox copies selected audiobooks from the Windows server to an Android folder. The Android copy remains independent from the Windows source. The app has no source upload, rename, move, delete, tag-edit, or folder-creation action.
+BookBox copies selected audiobooks from the Windows server to an Android folder.
+The Android copy remains independent from the Windows source. The app has no
+source upload, delete, or tag-edit action. An operator can enable a separate,
+audited grouping workflow that previews confined source moves before the user
+confirms them.
 
 ## Connect and sign in
 
@@ -62,6 +66,27 @@ it contains at least two Unicode letters or digits. Existing results stay on
 screen while a replacement query loads. **Search index is building** means that
 the selected root has not completed its first projection; a failed later scan
 leaves the previous results visible as stale data until a successful refresh.
+
+## Review audiobook grouping
+
+A red `!` action marks an audiobook whose folder evidence, media metadata, or
+probe result needs review. Open it to inspect the full grouping scope. The screen
+includes audio, covers, and sidecars such as CUE, NFO, OPF, playlist, and ebook
+files. Assign each file to a proposed book, then confirm the grouping. BookBox
+sends file fingerprints and the catalog generation so the server can reject a
+stale screen instead of saving over a newer inventory.
+
+Most servers allow grouping correction without moving source files. If the
+server grants `canReorganize`, you can enter a relative target folder for each
+group and request a preview. Check every source, destination, role, size, and
+modification time. Confirmation sends the preview operation ID once. The screen
+blocks a second submission while the operation runs. A disabled capability,
+read-only source, stale preview, destination collision, or unsafe path leaves the
+catalog-only correction available.
+
+Reorganization changes the server source. It does not change completed Android
+copies. Contact the operator if an operation reports `needs_attention`; do not
+retry the move from another phone.
 
 To copy:
 

@@ -28,6 +28,10 @@ func TestInferFullInventoryTreePreservesAudiobookFolderScopes(t *testing.T) {
 	assigned := make(map[uuid.UUID]int)
 	for _, book := range result.Books {
 		counts[book.SourceFolder]++
+		if book.SourceFolder == "" &&
+			(book.ReviewState != catalog.ReviewNeedsReview || book.ReviewReason != "weak_loose_files") {
+			t.Fatalf("loose root review = %q/%q", book.ReviewState, book.ReviewReason)
+		}
 		for _, fileID := range book.SourceFileIDs {
 			if book.FileRoles[fileID] == catalog.FileRoleAudio {
 				assigned[fileID]++

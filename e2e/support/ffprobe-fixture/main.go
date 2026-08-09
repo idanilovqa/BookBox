@@ -67,14 +67,18 @@ func main() {
 		clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(entry.Path)))
 		if clean != entry.Path || filepath.IsAbs(entry.Path) || clean == ".." ||
 			strings.HasPrefix(clean, "../") || seen[clean] ||
-			invalidField(entry.Title) || invalidField(entry.Author) ||
-			invalidField(entry.Narrator) || invalidField(entry.Duration) {
+			invalidOptionalField(entry.Title) || invalidOptionalField(entry.Author) ||
+			invalidOptionalField(entry.Narrator) || invalidField(entry.Duration) {
 			fail("fixture manifest entry is invalid")
 		}
 		seen[clean] = true
 	}
-	inputAbsolute, absoluteErr := filepath.Abs(os.Args[7])
-	input, err := confinedPath(root, os.Args[7])
+	inputCandidate := os.Args[7]
+	if inputCandidate == "pipe:0" {
+		inputCandidate = os.Getenv("BOOKBOX_FFPROBE_INPUT_PATH")
+	}
+	inputAbsolute, absoluteErr := filepath.Abs(inputCandidate)
+	input, err := confinedPath(root, inputCandidate)
 	if absoluteErr != nil || err != nil || !samePath(inputAbsolute, input) {
 		fail("ffprobe input is invalid")
 	}
@@ -143,4 +147,8 @@ func samePath(left, right string) bool {
 
 func invalidField(value string) bool {
 	return len(value) == 0 || len(value) > 512 || strings.ContainsAny(value, "\r\n\x00")
+}
+
+func invalidOptionalField(value string) bool {
+	return len(value) > 512 || strings.ContainsAny(value, "\r\n\x00")
 }

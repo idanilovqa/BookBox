@@ -16,7 +16,9 @@ services:
       - type: bind
         source: "${BOOKBOX_TEST_LIBRARY_PATH:?Set a task-scoped BOOKBOX_TEST_LIBRARY_PATH}"
         target: /library/audiobooks
-        read_only: true
+        # The path is always a generated task root. Task 14 explicitly opts
+        # this disposable mount into reorganization preview/write probing.
+        read_only: false
       - type: bind
         source: "${BOOKBOX_TEST_CONFIG_HOST_FILE:?Set BOOKBOX_TEST_CONFIG_HOST_FILE}"
         target: /etc/bookbox/config.yml

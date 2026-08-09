@@ -56,9 +56,26 @@ if ($dockerfileText -match '(?m)^EXPOSE\s') {
 # the audiobook and raw indexed-search response shapes, authentication, and
 # source-path confidentiality. Its finally block removes the exact Compose
 # project, volumes, image, and temporary directory.
-& $serverSmoke
+$smokeOutput = @(& $serverSmoke)
 if (-not $?) {
     throw 'The catalog startup smoke failed.'
 }
+$catalogStatus = @($smokeOutput | Where-Object {
+    $_.PSObject.Properties.Name -contains 'LastInventoryStatus'
+}) | Select-Object -Last 1
+if ($null -eq $catalogStatus) {
+    throw 'The catalog startup smoke returned no sanitized status summary.'
+}
+Write-Host (
+    ('Catalog status: activeFiles={0} activeBooks={1} latestGeneration={2} ' +
+    'projectionGeneration={3} queuedJobs={4} deadJobs={5} lastInventory={6}') -f
+    $catalogStatus.ActiveFiles,
+    $catalogStatus.ActiveBooks,
+    $catalogStatus.LatestGeneration,
+    $catalogStatus.ProjectionGeneration,
+    $catalogStatus.QueuedJobs,
+    $catalogStatus.DeadJobs,
+    $catalogStatus.LastInventoryStatus
+)
 
 Write-Host 'PASS: catalog worker isolation and indexed-search smoke checks passed; startup scan preserved the source tree.'

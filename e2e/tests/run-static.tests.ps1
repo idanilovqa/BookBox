@@ -20,7 +20,9 @@ $hybridComposeText = Get-Content -Raw -LiteralPath $hybridComposePath
 $stopPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'stop.ps1'
 $stopText = Get-Content -Raw -LiteralPath $stopPath
 $catalogPath = Join-Path $PSScriptRoot 'catalog-search.tests.ps1'
-foreach ($powershellPath in @($scriptPath, $stopPath, $catalogPath)) {
+$stagedCatalogPath = Join-Path $PSScriptRoot 'staged-catalog.tests.ps1'
+$stagedCatalogText = Get-Content -Raw -LiteralPath $stagedCatalogPath
+foreach ($powershellPath in @($scriptPath, $stopPath, $catalogPath, $stagedCatalogPath)) {
     $tokens = $null
     $parseErrors = $null
     $null = [Management.Automation.Language.Parser]::ParseFile(
@@ -86,6 +88,11 @@ $requirements = [ordered]@{
         'BookBox E2E passed; owned processes and ports are clean'
     'hybrid deployment parameter' = '(?s)\[ValidateSet\(''Container'', ''Hybrid''\)\].*?\[string\] \$DeploymentMode'
     'hybrid catalog gate' = '(?s)CatalogSearchOnly.*?DeploymentMode.*?Hybrid'
+    'focused staged catalog gate' = '(?s)StagedCatalogOnly.*?staged-catalog\.tests\.ps1'
+    'focused staged hybrid gate' = "(?s)StagedCatalogOnly.*?DeploymentMode -ne 'Hybrid'"
+    'catalog search excludes staged reorganization' = '(?s)if\s*\(-not \$StagedCatalogOnly -and -not \$CatalogSearchOnly\)\s*\{\s*\$stagedCatalog'
+    'staged disposable library argument' = '(?s)staged-catalog\.tests\.ps1.*?-LibraryPath \$library'
+    'disposable reorganization opt-in' = '(?s)bookbox-e2e-\$runID.*?allow_library_reorganization:\s*true'
     'hybrid compose override' = 'compose\.hybrid\.yml'
     'loopback PostgreSQL port' = 'BOOKBOX_POSTGRES_HOST_PORT=55432'
     'native worker build' = 'bookbox-catalog-worker\.exe'
@@ -148,6 +155,22 @@ if ($runText -match '(?i)\badb(?:\.exe)?\s+kill-server\b') {
 }
 if ($runText -match '(?i)\bstart-server\b') {
     throw 'E2E must own an explicit nodaemon adb server instead of a daemon handoff.'
+}
+foreach ($stagedRequirement in ([ordered]@{
+    'bounded staged SQL process' = 'Invoke-BookBoxCapturedProcess'
+    'task-scoped staged library' = 'expectedLibraryPath'
+    'generated temporary task root' = '(?s)expectedTaskParent.*?GetTempPath.*?bookbox-e2e'
+    'task project binding' = 'expectedProjectName\s*=\s*"bookbox-e2e-\$taskLeaf"'
+    'loopback destructive base URL' = "(?s)BaseUrl\.TrimEnd\('/'\).*?http://127\.0\.0\.1:18787"
+    'exact staged Compose binding' = 'expectedComposeFiles'
+    'unchanged fingerprint inventory' = '/v1/catalog/rescan'
+    'physical move manifest' = 'Assert-MovedFileManifest'
+    'physical rollback manifest' = 'Assert-FileManifestUnchanged'
+    'second move failure' = 'new\.move_order=2'
+}).GetEnumerator()) {
+    if ($stagedCatalogText -notmatch $stagedRequirement.Value) {
+        throw "Missing staged-catalog safety requirement: $($stagedRequirement.Key)"
+    }
 }
 if ($composeTestText -notmatch '(?s)provider-fixtures:.*?published:\s*"?\$\{BOOKBOX_TEST_PROVIDER_HOST_PORT:-18080\}"?.*?host_ip:\s*127\.0\.0\.1') {
     throw 'Hybrid E2E provider fixtures must publish a task-scoped loopback port.'

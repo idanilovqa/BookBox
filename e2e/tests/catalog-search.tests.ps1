@@ -248,7 +248,8 @@ foreach ($expected in $nestedRawExpected.GetEnumerator()) {
         $_.relativePath -eq $expected.Key -and $_.kind -eq $expected.Value
     })
     if ($matches.Count -ne 1) {
-        throw 'Raw search did not return the nested cover and every nonempty ancestor folder.'
+        $returned = @($raw.entries | ForEach-Object { "$($_.relativePath):$($_.kind)" }) -join ', '
+        throw "Raw search missed $($expected.Key):$($expected.Value). Returned: $returned"
     }
 }
 $rawIDs = [Collections.Generic.HashSet[string]]::new(

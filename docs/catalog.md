@@ -1,10 +1,20 @@
 # Audiobook catalog
 
-The catalog worker indexes configured roots when it starts, after monitored
-filesystem changes, and every six hours as a fallback. It uses `ffprobe` to read audio metadata, groups audio files into books, queries
-Open Library (and optionally Google Books), and publishes a confirmed cover only
-when it is a material improvement. PostgreSQL stores the catalog, jobs, review
-decisions, and cover audit events.
+The catalog worker inventories configured roots at startup, after monitored
+filesystem changes, and every six hours as a fallback. Inventory records file
+size and modification time, publishes provisional books, and queues later work.
+The API can show those books before `ffprobe` finishes. Probe jobs read audio
+metadata, companion jobs inspect bounded CUE, NFO, OPF, and playlist content,
+and regroup jobs refine book boundaries. A publication job replaces the indexed
+search projection after the catalog generation advances. PostgreSQL stores each
+stage, review decision, and cover audit event.
+
+Worker jobs use these staged kinds: `scan_root`, `probe_file`,
+`inspect_companion`, `regroup_scope`, `publish_search`, `enrich_book`,
+`publish_cover`, and `reorganize_files`. Jobs move through `queued`, `running`,
+`succeeded`, or `dead`. The worker renews leases for long jobs and recovers an
+expired lease before it deduplicates startup scans. An unchanged fingerprint
+does not queue another probe or companion inspection.
 
 ## Container and Windows hybrid workers
 
@@ -46,10 +56,11 @@ by no more than the smaller of five minutes and the larger of two minutes or
 file or ancestor associated with such a recording is marked as duplicate;
 another narrator remains a separate audiobook.
 
-The Android app and API remain source-read-only. They can browse, search,
-download, request a scan, and confirm a metadata match. Only the isolated worker
-publishes recognized cover files (`cover`, `folder`, or `front` with a supported
-image extension). It never edits tags, audio files, names, or directory layout.
+The Android app can browse, search, download, request a scan, and confirm a
+metadata match. The worker publishes recognized cover files (`cover`, `folder`,
+or `front` with a supported image extension). It does not edit audio tags.
+Source reorganization stays disabled unless an operator enables the guarded
+workflow described below.
 
 ## Scan status and manual scans
 
@@ -87,6 +98,38 @@ without clearing the last completed projection.
 Book responses expose `metadataSource`; candidate responses expose their
 provider. Provider-derived titles, authors, dates, genres, subjects, and covers
 retain Open Library or Google Books attribution in PostgreSQL.
+
+Grouping evidence records a reason such as `folder_default`,
+`consistent_subtree`, `distinct_identity`, `conflicting_title`,
+`conflicting_author`, `weak_loose_files`, `probe_failed`, `manual`, or
+`reorganization_incomplete`. Android shows a red `!` action on a book that needs
+grouping review. The grouping screen shows the subtree audio and associated
+companions. A saved correction assigns the complete scope to explicit groups,
+locks the result, advances the catalog generation once, and queues one search
+publication. Later inventories reuse the correction while fingerprints still
+match.
+
+## Optional source reorganization
+
+Keep `allow_library_reorganization: false` for normal and read-only deployments.
+Set it to `true` to opt in. The current server grants the
+`library:reorganize` capability to the configured owner username. Give the API
+write-probe access and the worker confined move access to the selected source
+root. The grouping response sets `canReorganize` only after all checks pass.
+
+Android first submits the complete grouping, current catalog generation, and a
+relative target folder for each group. The server rejects stale generations,
+absolute or traversing paths, symlink ancestors, collisions, and destinations
+outside the configured root. Preview returns relative source and destination
+paths, expected sizes, modification times, and roles. Confirmation queues the
+durable operation by ID.
+
+The worker validates each fingerprint before moving it and records each move in
+`reorganization_operations` and `reorganization_moves`. Success commits the new
+paths and grouping in one catalog generation. A mid-move failure rolls completed
+moves back in reverse order. Failed rollback changes the operation to
+`needs_attention`; stop the worker and follow the recovery procedure in
+`docs/operations.md` before confirming another move in that root.
 
 ## Optional Google Books key
 
@@ -131,13 +174,15 @@ the configured library root are the authority.
 
 The worker publishes no port, runs as UID/GID `10001`, drops every capability,
 uses `no-new-privileges`, and has a read-only container root plus a restricted
-`/tmp` tmpfs. The API library bind remains read-only. Cover cache and backup
-volumes are separate from the source library.
+`/tmp` tmpfs. The default API library bind remains read-only. A deployment that
+enables reorganization must opt that bind into write probing for the selected
+root. Cover cache and backup volumes are separate from the source library.
 
 The worker's library bind is read-write because Docker and NTFS cannot grant
 write access by filename pattern. This gives the worker container mount-level
 ability to modify any library file if it is compromised. The application code
 does not expose a generic write operation and limits publication to validated
 `cover`, `folder`, or `front` image files, but Docker itself cannot enforce that
-filename-only rule. This risk must be accepted before enabling the worker
-service; keep the API bind read-only and never expose a worker port.
+filename-only rule. Accept this risk before enabling the worker service. Keep
+the API bind read-only unless reorganization requires its guarded write probe,
+and do not expose a worker port.

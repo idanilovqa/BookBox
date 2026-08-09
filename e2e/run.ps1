@@ -3,9 +3,14 @@ param(
     [ValidateRange(60, 1800)]
     [int] $TimeoutSeconds = 600,
     [switch] $CatalogSearchOnly,
+    [switch] $StagedCatalogOnly,
     [ValidateSet('Container', 'Hybrid')]
     [string] $DeploymentMode = 'Container'
 )
+
+if ($StagedCatalogOnly -and $DeploymentMode -ne 'Hybrid') {
+    throw 'Focused staged-catalog E2E requires Hybrid mode so refinement can be paused before the only worker starts.'
+}
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -63,6 +68,7 @@ $username = 'owner'
 $password = 'bookbox-e2e-password'
 $primaryFailure = $null
 $focusedCatalogSearchComplete = $false
+$focusedStagedCatalogComplete = $false
 $adbInvocationID = 0
 $nativeWorkerProcess = $null
 
@@ -605,6 +611,8 @@ function Save-FailureDiagnostics {
             Copy-Item -LiteralPath $manifest -Destination $failureRoot -Force
         }
     }
+    Get-ChildItem -LiteralPath $taskRoot -Filter 'reorganization-*.json' -File -ErrorAction SilentlyContinue |
+        Copy-Item -Destination $failureRoot -Force
     try {
         Invoke-DockerChecked ($composeArgs + @('ps', '--all')) |
             Set-Content -LiteralPath (Join-Path $failureRoot 'compose-ps.txt')
@@ -647,11 +655,16 @@ try {
     $otherNarrator = Join-Path $primaryLibrary 'Frank Herbert\Needlebox Other Narrator'
     $longRecording = Join-Path $primaryLibrary 'Frank Herbert\Needlebox Long Recording'
     $nested = Join-Path $primaryLibrary 'Needlebox Nested\Needlebox Assets'
+    $discOne = Join-Path $primaryLibrary 'Disc Saga\Disc 1'
+    $discTwo = Join-Path $primaryLibrary 'Disc Saga\Disc 2'
+    $mixedShelf = Join-Path $primaryLibrary 'Mixed Shelf'
+    $failedProbe = Join-Path $primaryLibrary 'Failed Probe'
     $emptyFolder = Join-Path $primaryLibrary 'Empty Folder'
     $archiveBook = Join-Path $archiveLibrary 'Archive Author\Archive Needlebox'
     $monitorFolder = Join-Path $primaryLibrary 'Monitor Trigger'
     $null = New-Item -ItemType Directory -Path `
         $normal, $shared, $copyOne, $copyTwo, $otherNarrator, $longRecording, $nested,
+        $discOne, $discTwo, $mixedShelf, $failedProbe,
         $emptyFolder, $archiveBook, $monitorFolder -Force
     Write-Utf8 -Path (Join-Path $primaryLibrary 'notes.txt') -Value 'not catalog content'
 
@@ -687,6 +700,7 @@ try {
 
     Write-Utf8 -Path $config -Value @'
 listen: ":8787"
+allow_library_reorganization: true
 roots:
   - id: audiobooks
     name: Audiobooks
@@ -812,6 +826,25 @@ worker:
         '-metadata', 'artist=Author One',
         '/library/audiobooks/primary/Author One/Normal Book/chapter02.mp3'
     )) | Out-Null
+    foreach ($fixture in @(
+        @{ Path = '/library/audiobooks/primary/Disc Saga/Disc 1/chapter01.mp3'; Title = 'Disc Saga'; Author = 'Saga Author'; Narrator = 'Saga Narrator' }
+        @{ Path = '/library/audiobooks/primary/Disc Saga/Disc 2/chapter02.mp3'; Title = 'Disc Saga'; Author = 'Saga Author'; Narrator = 'Saga Narrator' }
+        @{ Path = '/library/audiobooks/primary/Mixed Shelf/Alpha.mp3'; Title = 'Alpha'; Author = 'Alpha Author'; Narrator = 'Alpha Narrator' }
+        @{ Path = '/library/audiobooks/primary/Mixed Shelf/Beta.mp3'; Title = 'Beta'; Author = 'Beta Author'; Narrator = 'Beta Narrator' }
+    )) {
+        Invoke-DockerChecked ($ffmpegBase + @(
+            '-metadata', "title=$($fixture.Title)",
+            '-metadata', "artist=$($fixture.Author)",
+            '-metadata', "narrator=$($fixture.Narrator)",
+            $fixture.Path
+        )) | Out-Null
+    }
+    foreach ($loosePath in @(
+        '/library/audiobooks/primary/loose-weak-01.mp3',
+        '/library/audiobooks/primary/loose-weak-02.mp3'
+    )) {
+        Invoke-DockerChecked ($ffmpegBase + @($loosePath)) | Out-Null
+    }
     Invoke-DockerChecked ($ffmpegBase + @(
         '-c:a', 'aac',
         '-metadata', 'title=Dune',
@@ -872,6 +905,11 @@ worker:
         '-frames:v', '1', '-y',
         '/library/audiobooks/primary/Needlebox Nested/Needlebox Assets/cover.jpg'
     )) | Out-Null
+    Invoke-DockerChecked ($imageBase + @(
+        '-f', 'lavfi', '-i', 'color=c=gold:s=128x128:d=0.1',
+        '-frames:v', '1', '-y',
+        '/library/audiobooks/primary/Disc Saga/cover.jpg'
+    )) | Out-Null
     } else {
         foreach ($audioPath in @(
             (Join-Path $normal 'chapter01.mp3'),
@@ -882,7 +920,14 @@ worker:
             (Join-Path $copyTwo 'Needlebox.m4b'),
             (Join-Path $otherNarrator 'Needlebox.m4b'),
             (Join-Path $longRecording 'Needlebox.m4b'),
-            (Join-Path $archiveBook 'Needlebox Archive.m4b')
+            (Join-Path $archiveBook 'Needlebox Archive.m4b'),
+            (Join-Path $discOne 'chapter01.mp3'),
+            (Join-Path $discTwo 'chapter02.mp3'),
+            (Join-Path $mixedShelf 'Alpha.mp3'),
+            (Join-Path $mixedShelf 'Beta.mp3'),
+            (Join-Path $failedProbe 'broken.mp3'),
+            (Join-Path $primaryLibrary 'loose-weak-01.mp3'),
+            (Join-Path $primaryLibrary 'loose-weak-02.mp3')
         )) {
             Write-Utf8 -Path $audioPath -Value 'task-scoped ffprobe fixture input'
         }
@@ -890,10 +935,25 @@ worker:
         foreach ($coverPath in @(
             (Join-Path $normal 'cover.jpg'),
             (Join-Path $shared 'folder.jpg'),
-            (Join-Path $nested 'cover.jpg')
+            (Join-Path $nested 'cover.jpg'),
+            (Join-Path $primaryLibrary 'Disc Saga\cover.jpg')
         )) {
             [IO.File]::WriteAllBytes($coverPath, $jpeg)
         }
+    }
+
+    # Deliberately invalid media exercises the bounded probe-failure path in
+    # both container and hybrid worker modes.
+    Write-Utf8 -Path (Join-Path $failedProbe 'broken.mp3') -Value 'not an audio stream'
+
+    foreach ($companion in ([ordered]@{
+        (Join-Path $primaryLibrary 'Disc Saga\book.cue') = 'FILE "Disc 1/chapter01.mp3" MP3'
+        (Join-Path $primaryLibrary 'Disc Saga\book.nfo') = 'Title: Disc Saga'
+        (Join-Path $primaryLibrary 'Disc Saga\book.opf') = '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Disc Saga</dc:title><dc:creator>Saga Author</dc:creator></metadata></package>'
+        (Join-Path $primaryLibrary 'Disc Saga\book.m3u') = "Disc 1/chapter01.mp3`nDisc 2/chapter02.mp3"
+        (Join-Path $primaryLibrary 'Disc Saga\book.epub') = 'disposable ebook companion'
+    }).GetEnumerator()) {
+        Write-Utf8 -Path $companion.Key -Value $companion.Value
     }
 
     $providerFixtureText = @(
@@ -912,6 +972,12 @@ worker:
     $probeEntries = @(
         @{ path = 'library/primary/Author One/Normal Book/chapter01.mp3'; title = 'Normal Book'; author = 'Author One'; narrator = 'Narrator One'; duration = '12' }
         @{ path = 'library/primary/Author One/Normal Book/chapter02.mp3'; title = 'Normal Book'; author = 'Author One'; narrator = 'Narrator One'; duration = '12' }
+        @{ path = 'library/primary/Disc Saga/Disc 1/chapter01.mp3'; title = 'Disc Saga'; author = 'Saga Author'; narrator = 'Saga Narrator'; duration = '12' }
+        @{ path = 'library/primary/Disc Saga/Disc 2/chapter02.mp3'; title = 'Disc Saga'; author = 'Saga Author'; narrator = 'Saga Narrator'; duration = '12' }
+        @{ path = 'library/primary/Mixed Shelf/Alpha.mp3'; title = 'Alpha'; author = 'Alpha Author'; narrator = 'Alpha Narrator'; duration = '12' }
+        @{ path = 'library/primary/Mixed Shelf/Beta.mp3'; title = 'Beta'; author = 'Beta Author'; narrator = 'Beta Narrator'; duration = '12' }
+        @{ path = 'library/primary/loose-weak-01.mp3'; title = ''; author = ''; narrator = ''; duration = '12' }
+        @{ path = 'library/primary/loose-weak-02.mp3'; title = ''; author = ''; narrator = ''; duration = '12' }
         @{ path = 'library/primary/Author Two/Shared Folder/Dune.m4b'; title = 'Dune'; author = 'Frank Herbert'; narrator = 'Narrator One'; duration = '12' }
         @{ path = 'library/primary/Author Two/Shared Folder/Dune Messiah.m4b'; title = 'Dune Messiah'; author = 'Frank Herbert'; narrator = 'Narrator One'; duration = '12' }
         @{ path = 'library/primary/Frank Herbert/Needlebox Copy One/Needlebox.m4b'; title = 'Needlebox'; author = 'Frank Herbert'; narrator = 'Shared Narrator'; duration = '12' }
@@ -953,8 +1019,49 @@ worker:
         -BaseUrl 'http://127.0.0.1:18787' `
         -TimeoutSeconds 180
     Assert-ApiVersion
+    if ($StagedCatalogOnly) {
+        $pauseRefinementSql = @'
+create or replace function e2e_pause_catalog_refinement()
+returns trigger language plpgsql as $$
+begin
+  if new.kind in ('probe_file','inspect_companion','regroup_scope') then
+    new.run_after := now() + interval '30 minutes';
+  end if;
+  return new;
+end
+$$;
+drop trigger if exists e2e_pause_catalog_refinement on worker_jobs;
+create trigger e2e_pause_catalog_refinement
+before insert on worker_jobs
+for each row execute function e2e_pause_catalog_refinement();
+'@
+        Invoke-DockerChecked ($composeArgs + @(
+            'exec', '-T', 'postgres', 'psql', '-U', 'bookbox', '-d', 'bookbox',
+            '-v', 'ON_ERROR_STOP=1', '-c', $pauseRefinementSql
+        )) | Out-Null
+    }
     if ($DeploymentMode -eq 'Hybrid') {
         $nativeWorkerProcess = Start-NativeCatalogWorker
+    }
+
+    $stagedCatalogTest = Join-Path $PSScriptRoot 'tests\staged-catalog.tests.ps1'
+    $stagedComposeFiles = @($baseCompose, $testCompose)
+    if ($DeploymentMode -eq 'Hybrid') { $stagedComposeFiles += $hybridCompose }
+    $stagedCatalog = $null
+    if ($StagedCatalogOnly) {
+        $stagedCatalog = @(& $stagedCatalogTest `
+            -HarnessInvocation -ResumeRefinement `
+            -BaseUrl 'http://127.0.0.1:18787' `
+            -Username $username -Password $password `
+            -ProjectName $project -EnvironmentFile $environmentFile `
+            -ComposeFiles $stagedComposeFiles `
+            -LibraryPath $library `
+            -TimeoutSeconds ([Math]::Min($TimeoutSeconds, 180))) |
+            Where-Object { $_.PSObject.Properties.Name -contains 'CatalogGeneration' } |
+            Select-Object -Last 1
+        if ($null -eq $stagedCatalog) {
+            throw 'Staged-catalog E2E did not return its sanitized result summary.'
+        }
     }
 
     $catalogSearchTest = Join-Path $PSScriptRoot 'tests\catalog-search.tests.ps1'
@@ -970,6 +1077,22 @@ worker:
         Select-Object -Last 1
     if ($null -eq $initialSearch) {
         throw 'Initial catalog-search E2E did not return its sanitized result summary.'
+    }
+
+    if (-not $StagedCatalogOnly -and -not $CatalogSearchOnly) {
+        $stagedCatalog = @(& $stagedCatalogTest `
+            -HarnessInvocation `
+            -BaseUrl 'http://127.0.0.1:18787' `
+            -Username $username -Password $password `
+            -ProjectName $project -EnvironmentFile $environmentFile `
+            -ComposeFiles $stagedComposeFiles `
+            -LibraryPath $library `
+            -TimeoutSeconds ([Math]::Min($TimeoutSeconds, 180))) |
+            Where-Object { $_.PSObject.Properties.Name -contains 'CatalogGeneration' } |
+            Select-Object -Last 1
+        if ($null -eq $stagedCatalog) {
+            throw 'Staged-catalog E2E did not return its sanitized result summary.'
+        }
     }
 
     # The watched directory existed before startup. In Hybrid mode, creating
@@ -1036,7 +1159,7 @@ worker:
             }
         }
     }
-    if ($DeploymentMode -eq 'Container' -and -not $CatalogSearchOnly) {
+    if ($DeploymentMode -eq 'Container' -and -not $CatalogSearchOnly -and -not $StagedCatalogOnly) {
         Invoke-DockerChecked ($composeArgs + @(
             'up', '--detach', '--wait', '--wait-timeout', '180',
             'bookbox-catalog-worker'
@@ -1049,7 +1172,12 @@ worker:
         $focusedCatalogSearchComplete = $true
     }
 
-    if (-not $focusedCatalogSearchComplete) {
+    if ($StagedCatalogOnly) {
+        Write-Output 'Focused staged-catalog E2E passed.'
+        $focusedStagedCatalogComplete = $true
+    }
+
+    if (-not $focusedCatalogSearchComplete -and -not $focusedStagedCatalogComplete) {
     $localTooling = Join-Path $repoRoot '.tooling'
     $localJdkRoot = Join-Path $localTooling 'jdk17'
     $localJdk = Get-ChildItem -LiteralPath $localJdkRoot -Directory -ErrorAction SilentlyContinue |
@@ -1267,6 +1395,8 @@ if ($null -ne $primaryFailure) {
 }
 if ($focusedCatalogSearchComplete) {
     Write-Output 'Focused catalog-search E2E passed; owned processes and ports are clean'
+} elseif ($focusedStagedCatalogComplete) {
+    Write-Output 'Focused staged-catalog E2E passed; owned processes and ports are clean'
 } else {
     Write-Output 'BookBox E2E passed; owned processes and ports are clean'
 }

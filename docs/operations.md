@@ -176,7 +176,66 @@ Confirm freshness using the `completedAt` value in `/v1/books` `snapshots` or
 the `/v1/browse/search` `snapshot`. Do not inspect or expose host source paths
 when diagnosing search; use root IDs, scan-run IDs, and worker logs.
 
-Catalog corrections affect grouping and displayed metadata. The Android app cannot edit audio tags or rearrange Windows folders.
+Run this status query inside PostgreSQL to report catalog progress without
+printing a source path:
+
+```sql
+select count(*) active_files from source_files where missing_at is null;
+select count(*) active_books from books where missing_at is null;
+select root_id, generation from catalog_generations order by root_id;
+select root_id, catalog_generation projection_generation
+from library_search_snapshots order by root_id;
+select status, count(*) from worker_jobs
+where status in ('queued','dead') group by status order by status;
+select root_id, status, started_at, finished_at
+from scan_runs
+where id in (select distinct on (root_id) id from scan_runs order by root_id, started_at desc)
+order by root_id;
+```
+
+Active files and books should remain nonzero after a successful inventory. A
+projection generation can trail the catalog generation while publication waits
+in the queue. Inspect dead jobs by ID, kind, attempts, and sanitized error. Do
+not print job payloads because older records may contain relative source paths.
+
+Catalog corrections affect grouping and displayed metadata. The Android app
+cannot edit audio tags. Source moves require the optional capability described
+in `docs/catalog.md`.
+
+## Reorganization operations
+
+Leave `allow_library_reorganization` disabled unless the deployment needs
+physical source moves. Enable it only after the API write probe and worker root
+resolver point to the same confined root. Keep live roots disabled while running
+disposable E2E verification.
+
+Monitor operations without selecting `source_path` or `destination_path`:
+
+```sql
+select id, root_id, book_id, catalog_generation, actor, status,
+       created_at, updated_at
+from reorganization_operations
+order by created_at desc;
+
+select operation_id, state, count(*)
+from reorganization_moves
+group by operation_id, state
+order by operation_id, state;
+```
+
+Treat `reorganization_operations.last_error` as sensitive diagnostic data: a
+rollback failure can include confined relative source or destination paths.
+Inspect it only during an authorized repair, and do not copy it into routine
+monitoring or support output.
+
+For `rolled_back`, verify the source tree with its normal backup or hash tool and
+request a full inventory. For `needs_attention`, stop the catalog worker first.
+Use the move journal and source backup to identify the exact unresolved file.
+Verify its size, modification time, and digest at one confined relative path,
+then restore the planned source location without overwriting another file. Mark
+journal state only through an approved repair procedure, restart the worker, and
+run a full inventory. Compare the catalog and projection generations after the
+publication job succeeds.
 
 The catalog worker can publish a supported cover image after it validates the path and bytes. It saves the replaced cover in the `cover_backups` volume and appends an audit event.
 
