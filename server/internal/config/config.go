@@ -17,9 +17,58 @@ import (
 )
 
 type Root struct {
-	ID            string `yaml:"id"`
-	Name          string `yaml:"name"`
-	ContainerPath string `yaml:"container_path"`
+	ID            string
+	Name          string
+	ContainerPath string
+}
+
+func (root *Root) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return errors.New("root must be a mapping")
+	}
+
+	var path, legacyPath string
+	var pathSet, legacyPathSet bool
+	seen := make(map[string]struct{}, len(node.Content)/2)
+	for index := 0; index < len(node.Content); index += 2 {
+		key := node.Content[index]
+		value := node.Content[index+1]
+		if _, exists := seen[key.Value]; exists {
+			return fmt.Errorf("duplicate root field %q", key.Value)
+		}
+		seen[key.Value] = struct{}{}
+		switch key.Value {
+		case "id":
+			if err := value.Decode(&root.ID); err != nil {
+				return err
+			}
+		case "name":
+			if err := value.Decode(&root.Name); err != nil {
+				return err
+			}
+		case "path":
+			pathSet = true
+			if err := value.Decode(&path); err != nil {
+				return err
+			}
+		case "container_path":
+			legacyPathSet = true
+			if err := value.Decode(&legacyPath); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("field %s not found in type config.Root", key.Value)
+		}
+	}
+	if pathSet && legacyPathSet {
+		return ErrAmbiguousRootPath
+	}
+	if pathSet {
+		root.ContainerPath = path
+	} else {
+		root.ContainerPath = legacyPath
+	}
+	return nil
 }
 
 type Auth struct {
@@ -37,11 +86,19 @@ type Database struct {
 	SSLMode      string `yaml:"ssl_mode"`
 }
 
+type WorkerSettings struct {
+	FFProbePath           string `yaml:"ffprobe_path"`
+	CoverBackupRoot       string `yaml:"cover_backup_root"`
+	LogDirectory          string `yaml:"log_directory"`
+	GoogleBooksAPIKeyFile string `yaml:"google_books_api_key_file"`
+}
+
 type Config struct {
-	Listen   string   `yaml:"listen"`
-	Roots    []Root   `yaml:"roots"`
-	Auth     Auth     `yaml:"auth"`
-	Database Database `yaml:"database"`
+	Listen   string         `yaml:"listen"`
+	Roots    []Root         `yaml:"roots"`
+	Auth     Auth           `yaml:"auth"`
+	Database Database       `yaml:"database"`
+	Worker   WorkerSettings `yaml:"worker"`
 }
 
 type Secrets struct {
@@ -51,6 +108,7 @@ type Secrets struct {
 
 var (
 	ErrDuplicateRootID           = errors.New("duplicate root id")
+	ErrAmbiguousRootPath         = errors.New("root path is ambiguous")
 	ErrInsecureSecretPermissions = errors.New("secret file is group or world accessible")
 	ErrInvalidSecretFile         = errors.New("secret path must be a regular file")
 	ErrInvalidSessionKey         = errors.New("session key must be exactly 32 bytes")
@@ -61,6 +119,14 @@ var safeRootID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 var safeDatabaseName = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 func Load(path string) (Config, error) {
+	return load(path, true)
+}
+
+func LoadWorker(path string) (Config, error) {
+	return load(path, false)
+}
+
+func load(path string, requireAPIFields bool) (Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, err
@@ -72,19 +138,21 @@ func Load(path string) (Config, error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, err
 	}
-	if cfg.Listen == "" || len(cfg.Roots) == 0 {
-		return Config{}, errors.New("listen and roots are required")
+	if len(cfg.Roots) == 0 || (requireAPIFields && cfg.Listen == "") {
+		return Config{}, errors.New("required configuration is missing")
 	}
-	if cfg.Auth.Username == "" || cfg.Auth.PasswordHashFile == "" ||
-		cfg.Auth.SessionKeyFile == "" {
+	if requireAPIFields && (cfg.Auth.Username == "" || cfg.Auth.PasswordHashFile == "" ||
+		cfg.Auth.SessionKeyFile == "") {
 		return Config{}, errors.New("auth configuration is required")
 	}
-	for name, path := range map[string]string{
-		"auth.password_hash_file": cfg.Auth.PasswordHashFile,
-		"auth.session_key_file":   cfg.Auth.SessionKeyFile,
-	} {
-		if !filepath.IsAbs(path) {
-			return Config{}, fmt.Errorf("%s must be absolute", name)
+	if requireAPIFields {
+		for name, path := range map[string]string{
+			"auth.password_hash_file": cfg.Auth.PasswordHashFile,
+			"auth.session_key_file":   cfg.Auth.SessionKeyFile,
+		} {
+			if !filepath.IsAbs(path) {
+				return Config{}, fmt.Errorf("%s must be absolute", name)
+			}
 		}
 	}
 	seen := make(map[string]struct{}, len(cfg.Roots))
@@ -102,6 +170,16 @@ func Load(path string) (Config, error) {
 	}
 	if err := validateDatabase(cfg.Database); err != nil {
 		return Config{}, err
+	}
+	for name, path := range map[string]string{
+		"worker.ffprobe_path":              cfg.Worker.FFProbePath,
+		"worker.cover_backup_root":         cfg.Worker.CoverBackupRoot,
+		"worker.log_directory":             cfg.Worker.LogDirectory,
+		"worker.google_books_api_key_file": cfg.Worker.GoogleBooksAPIKeyFile,
+	} {
+		if path != "" && !filepath.IsAbs(path) {
+			return Config{}, fmt.Errorf("%s must be absolute", name)
+		}
 	}
 
 	return cfg, nil

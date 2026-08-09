@@ -45,7 +45,7 @@ func run(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.LoadWorker(*configPath)
 	if err != nil {
 		return err
 	}
@@ -91,13 +91,10 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	options = applyWorkerSettings(options, cfg.Worker)
 	providers, err := metadataProviders(options)
 	if err != nil {
 		return err
-	}
-	backupRoot := strings.TrimSpace(os.Getenv("BOOKBOX_COVER_BACKUP_ROOT"))
-	if backupRoot == "" {
-		backupRoot = "/var/lib/bookbox/backups"
 	}
 	scanHandler := &worker.ScanRootHandler{
 		Repo: repository,
@@ -113,7 +110,7 @@ func run(args []string) error {
 	publishHandler := &worker.PublishCoverHandler{
 		Repo:       repository,
 		Downloader: covers.NewDownloader(&http.Client{Timeout: 30 * time.Second}),
-		Publisher:  covers.NewPublisher(resolver, repository, backupRoot),
+		Publisher:  covers.NewPublisher(resolver, repository, options.coverBackupRoot),
 	}
 	host, _ := os.Hostname()
 	runtime := &worker.Worker{
@@ -156,16 +153,23 @@ func runWorkerWithMonitor(ctx context.Context, runtime, rootMonitor contextRunne
 }
 
 type workerOptions struct {
-	scanInterval       time.Duration
-	openLibraryBaseURL string
-	googleBooksBaseURL string
+	scanInterval          time.Duration
+	openLibraryBaseURL    string
+	googleBooksBaseURL    string
+	coverBackupRoot       string
+	googleBooksAPIKeyFile string
 }
 
 func workerOptionsFromEnvironment() (workerOptions, error) {
 	options := workerOptions{
-		scanInterval:       worker.ScanInterval,
-		openLibraryBaseURL: strings.TrimSpace(os.Getenv("BOOKBOX_OPENLIBRARY_BASE_URL")),
-		googleBooksBaseURL: strings.TrimSpace(os.Getenv("BOOKBOX_GOOGLE_BOOKS_BASE_URL")),
+		scanInterval:          worker.ScanInterval,
+		openLibraryBaseURL:    strings.TrimSpace(os.Getenv("BOOKBOX_OPENLIBRARY_BASE_URL")),
+		googleBooksBaseURL:    strings.TrimSpace(os.Getenv("BOOKBOX_GOOGLE_BOOKS_BASE_URL")),
+		coverBackupRoot:       strings.TrimSpace(os.Getenv("BOOKBOX_COVER_BACKUP_ROOT")),
+		googleBooksAPIKeyFile: strings.TrimSpace(os.Getenv("BOOKBOX_GOOGLE_BOOKS_API_KEY_FILE")),
+	}
+	if options.coverBackupRoot == "" {
+		options.coverBackupRoot = "/var/lib/bookbox/backups"
 	}
 	if raw := strings.TrimSpace(os.Getenv("BOOKBOX_SCAN_INTERVAL")); raw != "" {
 		interval, err := time.ParseDuration(raw)
@@ -183,6 +187,16 @@ func workerOptionsFromEnvironment() (workerOptions, error) {
 		}
 	}
 	return options, nil
+}
+
+func applyWorkerSettings(options workerOptions, settings config.WorkerSettings) workerOptions {
+	if settings.CoverBackupRoot != "" {
+		options.coverBackupRoot = settings.CoverBackupRoot
+	}
+	if settings.GoogleBooksAPIKeyFile != "" {
+		options.googleBooksAPIKeyFile = settings.GoogleBooksAPIKeyFile
+	}
+	return options
 }
 
 func validateProviderBaseURL(raw string) error {
@@ -204,7 +218,10 @@ func metadataProviders(options workerOptions) ([]metadata.Provider, error) {
 		return nil, err
 	}
 	providers := []metadata.Provider{openLibrary}
-	keyPath := strings.TrimSpace(os.Getenv("BOOKBOX_GOOGLE_BOOKS_API_KEY_FILE"))
+	keyPath := options.googleBooksAPIKeyFile
+	if keyPath == "" {
+		keyPath = strings.TrimSpace(os.Getenv("BOOKBOX_GOOGLE_BOOKS_API_KEY_FILE"))
+	}
 	if keyPath == "" {
 		return providers, nil
 	}

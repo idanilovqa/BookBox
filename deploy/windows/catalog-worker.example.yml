@@ -1,0 +1,16 @@
+roots:
+  - id: audiobooks
+    name: Audiobooks
+    path: 'H:\Audiobooks'
+database:
+  host: 127.0.0.1
+  port: 55432
+  name: bookbox
+  username: bookbox
+  password_file: 'C:\ProgramData\BookBox\secrets\postgres-password'
+  ssl_mode: disable
+worker:
+  ffprobe_path: 'C:\Program Files\ffmpeg\bin\ffprobe.exe'
+  cover_backup_root: 'C:\ProgramData\BookBox\backups'
+  log_directory: 'C:\ProgramData\BookBox\logs'
+  google_books_api_key_file: 'C:\ProgramData\BookBox\secrets\google-books-api-key'

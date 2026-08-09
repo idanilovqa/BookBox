@@ -35,6 +35,121 @@ roots:
 	}
 }
 
+func TestLoadWorkerAcceptsCanonicalPathWithoutAPIFields(t *testing.T) {
+	path := writeConfigRaw(t, `roots:
+  - {id: audiobooks, name: Audiobooks, path: /library/audiobooks}
+database:
+  host: 127.0.0.1
+  port: 55432
+  name: bookbox
+  username: bookbox
+  password_file: /run/secrets/postgres
+  ssl_mode: disable`)
+
+	cfg, err := LoadWorker(path)
+	if err != nil || cfg.Roots[0].ContainerPath != "/library/audiobooks" {
+		t.Fatalf("LoadWorker() = %#v, %v", cfg, err)
+	}
+}
+
+func TestLoadWorkerAcceptsLegacyContainerPath(t *testing.T) {
+	path := writeConfigRaw(t, `roots:
+  - {id: audiobooks, name: Audiobooks, container_path: /library/audiobooks}`)
+
+	cfg, err := LoadWorker(path)
+	if err != nil || cfg.Roots[0].ContainerPath != "/library/audiobooks" {
+		t.Fatalf("LoadWorker() = %#v, %v", cfg, err)
+	}
+}
+
+func TestLoadAcceptsCanonicalRootPath(t *testing.T) {
+	path := writeConfig(t, `
+listen: ":8787"
+roots:
+  - {id: audiobooks, name: Audiobooks, path: /library/audiobooks}
+`)
+
+	cfg, err := Load(path)
+	if err != nil || cfg.Roots[0].ContainerPath != "/library/audiobooks" {
+		t.Fatalf("Load() = %#v, %v", cfg, err)
+	}
+}
+
+func TestLoadWorkerRejectsDuplicateRootFields(t *testing.T) {
+	tests := map[string]string{
+		"id":             "id: first\n    id: second\n    name: Audiobooks\n    path: /library/audiobooks",
+		"name":           "id: audiobooks\n    name: First\n    name: Second\n    path: /library/audiobooks",
+		"path":           "id: audiobooks\n    name: Audiobooks\n    path: /library/first\n    path: /library/second",
+		"container_path": "id: audiobooks\n    name: Audiobooks\n    container_path: /library/first\n    container_path: /library/second",
+	}
+	for field, root := range tests {
+		t.Run(field, func(t *testing.T) {
+			path := writeConfigRaw(t, "roots:\n  - "+root+"\n")
+			if _, err := LoadWorker(path); err == nil {
+				t.Fatalf("LoadWorker() accepted duplicate %s fields", field)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsAmbiguousRootPathFields(t *testing.T) {
+	path := writeConfigRaw(t, `roots:
+  - id: audiobooks
+    name: Audiobooks
+    path: /library/canonical
+    container_path: /library/legacy`)
+
+	_, err := LoadWorker(path)
+	if !errors.Is(err, ErrAmbiguousRootPath) {
+		t.Fatalf("LoadWorker() error = %v, want ErrAmbiguousRootPath", err)
+	}
+}
+
+func TestLoadWorkerPopulatesWorkerSettings(t *testing.T) {
+	path := writeConfigRaw(t, `roots:
+  - {id: audiobooks, name: Audiobooks, path: /library/audiobooks}
+worker:
+  ffprobe_path: /opt/bookbox/ffprobe
+  cover_backup_root: /var/lib/bookbox/backups
+  log_directory: /var/log/bookbox
+  google_books_api_key_file: /run/secrets/google_books`)
+
+	cfg, err := LoadWorker(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := WorkerSettings{
+		FFProbePath:           "/opt/bookbox/ffprobe",
+		CoverBackupRoot:       "/var/lib/bookbox/backups",
+		LogDirectory:          "/var/log/bookbox",
+		GoogleBooksAPIKeyFile: "/run/secrets/google_books",
+	}
+	if cfg.Worker != want {
+		t.Fatalf("Worker = %#v, want %#v", cfg.Worker, want)
+	}
+}
+
+func TestLoadWorkerRejectsRelativeWorkerPaths(t *testing.T) {
+	fields := []string{"ffprobe_path", "cover_backup_root", "log_directory", "google_books_api_key_file"}
+	for _, field := range fields {
+		t.Run(field, func(t *testing.T) {
+			path := writeConfigRaw(t, "roots:\n  - {id: audiobooks, name: Audiobooks, path: /library/audiobooks}\nworker:\n  "+field+": relative/path\n")
+			if _, err := LoadWorker(path); err == nil {
+				t.Fatalf("LoadWorker() accepted relative %s", field)
+			}
+		})
+	}
+}
+
+func TestLoadStillRejectsMissingAPIFields(t *testing.T) {
+	path := writeConfigRaw(t, `roots:
+  - {id: audiobooks, name: Audiobooks, path: /library/audiobooks}`)
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() accepted API configuration without listen/auth")
+	}
+}
+
 func TestLoadAcceptsHTTPConfigurationWithoutTLS(t *testing.T) {
 	path := writeConfigRaw(t, `
 listen: ":8787"

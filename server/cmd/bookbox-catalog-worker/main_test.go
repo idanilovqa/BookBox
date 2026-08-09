@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"bookbox.local/server/internal/config"
 )
 
 type runnerFunc func(context.Context) error
@@ -98,6 +100,27 @@ func TestWorkerEnvironmentOverridesStayBoundedAndUseFixtureProviders(t *testing.
 	}
 	if len(providers) != 2 {
 		t.Fatalf("providers = %d, want deterministic Open Library and Google Books", len(providers))
+	}
+}
+
+func TestWorkerConfigurationOverridesEnvironmentPathFallbacks(t *testing.T) {
+	t.Setenv("BOOKBOX_COVER_BACKUP_ROOT", "/environment/backups")
+	t.Setenv("BOOKBOX_GOOGLE_BOOKS_API_KEY_FILE", "/environment/google-books-key")
+
+	options, err := workerOptionsFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options = applyWorkerSettings(options, config.WorkerSettings{
+		CoverBackupRoot:       "/configured/backups",
+		GoogleBooksAPIKeyFile: "/configured/google-books-key",
+	})
+
+	if options.coverBackupRoot != "/configured/backups" {
+		t.Fatalf("cover backup root = %q", options.coverBackupRoot)
+	}
+	if options.googleBooksAPIKeyFile != "/configured/google-books-key" {
+		t.Fatalf("Google Books API key file = %q", options.googleBooksAPIKeyFile)
 	}
 }
 
