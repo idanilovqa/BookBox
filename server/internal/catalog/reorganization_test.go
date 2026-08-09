@@ -89,6 +89,16 @@ func TestBuildReorganizationPlanRejectsStaleOrUnsafeMoves(t *testing.T) {
 	}
 }
 
+func TestSharedReorganizationFileRequiresOneExplicitOwner(t *testing.T) {
+	file := ReorganizationPlanFile{Shared: true}
+	if sharedFileAssignmentConflicts(file, 2, 1) {
+		t.Fatal("one explicit shared-file owner was rejected")
+	}
+	if !sharedFileAssignmentConflicts(file, 2, 0) || !sharedFileAssignmentConflicts(file, 2, 2) {
+		t.Fatal("ambiguous shared-file ownership was accepted")
+	}
+}
+
 type staticDestinationInspector struct {
 	exists, collision, symlink, outsideRoot bool
 }

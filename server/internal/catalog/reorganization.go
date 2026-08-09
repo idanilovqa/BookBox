@@ -266,7 +266,7 @@ func (repository *PostgresRepository) BuildReorganizationPreview(ctx context.Con
 	}
 	audioFolderGroups := make(map[string]string)
 	for index := range files {
-		if files[index].Shared && len(request.Groups) > 1 {
+		if sharedFileAssignmentConflicts(files[index], len(request.Groups), explicitCounts[files[index].ID]) {
 			return ReorganizationPreview{}, ErrDestinationConflict
 		}
 		if groupingKey, exists := explicitGroups[files[index].ID]; exists {
@@ -335,6 +335,10 @@ func (repository *PostgresRepository) BuildReorganizationPreview(ctx context.Con
 		return ReorganizationPreview{}, fmt.Errorf("commit reorganization preview: %w", err)
 	}
 	return preview, nil
+}
+
+func sharedFileAssignmentConflicts(file ReorganizationPlanFile, groupCount, explicitCount int) bool {
+	return file.Shared && groupCount > 1 && explicitCount != 1
 }
 
 func (repository *PostgresRepository) LoadReorganization(ctx context.Context, id uuid.UUID, actor string) (ReorganizationOperation, error) {
