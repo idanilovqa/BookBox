@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -133,13 +134,14 @@ class AppShellJourneyTest {
 		compose.setContent { MaterialTheme { DuplicateRawJourneyHarness() } }
 
 		compose.onNodeWithText("2 copies").performClick()
-		compose.onNodeWithContentDescription(
+		val archiveSelection = compose.onNodeWithContentDescription(
 			"Select Dune from archive, Alternate/Dune",
-		).performClick()
-		compose.onNodeWithText("1 selected").assertIsDisplayed()
+		)
+		archiveSelection.performScrollTo().performClick()
+		archiveSelection.assertIsOn()
 		compose.onNodeWithContentDescription(
 			"View raw files for Dune from archive, Alternate/Dune",
-		).performClick()
+		).performScrollTo().performClick()
 		compose.onNodeWithText("Loose/Dune-alt.m4b").performClick()
 		compose.onNodeWithContentDescription("Highlighted search result").assertIsDisplayed()
 		compose.onNodeWithText("Opened file").assertIsDisplayed()

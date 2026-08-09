@@ -2,16 +2,24 @@ package com.rendref.bookbox.feature.library
 
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.dp
 import com.rendref.bookbox.core.model.BookCardDto
 import com.rendref.bookbox.core.model.BookSearchGroupDto
@@ -71,14 +79,20 @@ class LibraryScreenTest {
     fun libraryKeepsSearchVisibleAndRoutesCardActions() {
         val searches = mutableListOf<String>()
         val actions = mutableListOf<LibraryAction>()
+        var state by mutableStateOf(
+            LibraryState(
+                books = listOf(dune),
+                groups = listOf(BookSearchGroupDto(dune.id, false, listOf(dune))),
+            ),
+        )
         composeRule.setContent {
             MaterialTheme {
                 LibraryScreen(
-                    state = LibraryState(
-                        books = listOf(dune),
-                        groups = listOf(BookSearchGroupDto(dune.id, false, listOf(dune))),
-                    ),
-                    onSearchTextChange = searches::add,
+                    state = state,
+                    onSearchTextChange = { value ->
+                        searches.add(value)
+                        state = state.copy(query = state.query.copy(text = value))
+                    },
                     onAction = actions::add,
                     onAuthorChange = {},
                     onGenreChange = {},
@@ -94,12 +108,12 @@ class LibraryScreenTest {
 
         composeRule.onNodeWithText("Search audiobooks")
             .assertIsDisplayed()
-            .performTextInput("dune")
+            .performTextReplacement("dune")
         composeRule.onNodeWithText("Filters").assertIsDisplayed()
         composeRule.onNodeWithText("Sort").assertIsDisplayed()
         composeRule.onNodeWithText("Dune").performClick()
 
-        assertTrue(searches.last().contains("dune"))
+        assertEquals("dune", searches.last())
         assertEquals(LibraryAction.OpenBook(dune.id), actions.last())
     }
 
@@ -151,11 +165,13 @@ class LibraryScreenTest {
         composeRule.onNodeWithContentDescription(
             "Select Dune from primary, Frank Herbert/Dune",
         )
+            .performScrollTo()
             .assertIsDisplayed()
             .performClick()
         composeRule.onNodeWithContentDescription(
             "Select Dune from primary, Alternate/Dune",
         )
+            .performScrollTo()
             .assertIsDisplayed()
             .performClick()
 
@@ -194,11 +210,20 @@ class LibraryScreenTest {
             }
         }
 
+        val grid = composeRule.onNode(hasScrollToIndexAction())
+        grid.performScrollToNode(hasText("Library: primary"))
         composeRule.onNodeWithText("Library: primary").assertIsDisplayed()
+        grid.performScrollToNode(hasText("Library: archive"))
         composeRule.onNodeWithText("Library: archive").assertIsDisplayed()
+        grid.performScrollToNode(
+            hasContentDescription("Select Dune from primary, Frank Herbert/Dune"),
+        )
         composeRule.onNodeWithContentDescription(
             "Select Dune from primary, Frank Herbert/Dune",
         ).assertIsDisplayed()
+        grid.performScrollToNode(
+            hasContentDescription("Select Dune from archive, Archive/Dune"),
+        )
         composeRule.onNodeWithContentDescription(
             "Select Dune from archive, Archive/Dune",
         ).assertIsDisplayed()

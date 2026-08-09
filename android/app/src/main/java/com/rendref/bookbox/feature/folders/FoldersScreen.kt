@@ -160,10 +160,7 @@ fun FoldersScreen(
 			onValueChange = { onAction(FolderAction.UpdateSearchQuery(it)) },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 8.dp)
-				.semantics(mergeDescendants = true) {
-                    contentDescription = "Search raw folders"
-                },
+                .padding(top = 8.dp),
         )
 
         Breadcrumbs(

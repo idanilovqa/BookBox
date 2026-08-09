@@ -99,8 +99,17 @@ class RealServerJourneyTest {
             assertEquals(book.sourceFolder, rawFiles.sourceFolder)
             assertTrue(rawFiles.files.isNotEmpty())
         }
-        val normalBook = awaitBooks(catalog, "Normal Book", minimum = 1)
-            .single { it.title == "Normal Book" }
+        val normalBooks = awaitBooks(catalog, "Normal Book", minimum = 1)
+            .filter { book ->
+                book.title == "Normal Book" &&
+                    browse.bookFiles(book.id).files.any { it.name == "chapter01.mp3" }
+            }
+        assertEquals(
+            "Normal Book chapter-one candidates=${normalBooks.map { "${it.id}:${it.rootId}" }}",
+            1,
+            normalBooks.size,
+        )
+        val normalBook = normalBooks.single()
         val duneMessiah = duneBooks.single { it.title == "Dune Messiah" }
         val manifest = TransferManifestApi(authenticated, baseUrl).create(
             listOf(

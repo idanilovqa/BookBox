@@ -11,7 +11,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import com.rendref.bookbox.core.model.BrowseEntryDto
 import com.rendref.bookbox.core.model.RawSearchEntryDto
 import com.rendref.bookbox.core.model.RootDto
@@ -111,7 +111,7 @@ class FoldersScreenTest {
         }
 
         composeRule.onNodeWithContentDescription("Search raw folders")
-            .performTextInput("!")
+            .performTextReplacement("black box!")
         composeRule.onNodeWithText("Author/Black.Box")
             .assertIsDisplayed()
             .performClick()
