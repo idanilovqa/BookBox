@@ -25,6 +25,7 @@ class AppJourneyTest {
     fun `authenticated app journey sends only approved read and derived catalog routes`() =
         runTest {
             val bookId = UUID.randomUUID().toString()
+            val groupId = UUID.randomUUID().toString()
             val matchId = UUID.randomUUID().toString()
             val jobId = UUID.randomUUID().toString()
             withBookBoxServer(
@@ -32,15 +33,27 @@ class AppJourneyTest {
                     MockResponse(
                         body = """
                         {
-                          "items":[{
-                            "id":"$bookId",
-                            "title":"Dune",
-                            "authors":["Frank Herbert"],
-                            "publicationYear":1965,
-                            "genres":["Science Fiction"],
-                            "reviewState":"matched",
-                            "sourceFolder":"Frank Herbert/Dune"
-                          }]
+                          "snapshots":[{
+                            "rootId":"audiobooks",
+                            "scanRunId":"11111111-1111-1111-1111-111111111111",
+                            "completedAt":"2026-08-08T00:00:00Z"
+                          }],
+                          "groups":[{
+                            "groupId":"$groupId",
+                            "duplicate":false,
+                            "books":[{
+                              "id":"$bookId",
+                              "rootId":"audiobooks",
+                              "title":"Dune",
+                              "authors":["Frank Herbert"],
+                              "publicationYear":1965,
+                              "genres":["Science Fiction"],
+                              "narrators":[],
+                              "reviewState":"matched",
+                              "sourceFolder":"Frank Herbert/Dune"
+                            }]
+                          }],
+                          "filters":{}
                         }
                         """.trimIndent(),
                     ),

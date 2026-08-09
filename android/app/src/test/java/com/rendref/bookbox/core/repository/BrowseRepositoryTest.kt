@@ -87,10 +87,15 @@ class BrowseRepositoryTest {
                 """{"rootId":"audiobooks","query":"other","snapshot":$snapshot,"entries":[]}""",
                 """{"rootId":"audiobooks","query":"dune","snapshot":$snapshot,"entries":[{"id":"22222222-2222-2222-2222-222222222222","name":"bad","relativePath":"../bad","kind":"folder"}]}""",
                 """{"rootId":"audiobooks","query":"dune","snapshot":$snapshot,"entries":[{"id":"22222222-2222-2222-2222-222222222222","name":"file","relativePath":"file","kind":"file"}]}""",
-                """{"rootId":"audiobooks","query":"dune","snapshot":$snapshot,"entries":[{"id":"22222222-2222-2222-2222-222222222222","name":"A","relativePath":"A","kind":"folder","duplicateGroupId":"not-a-uuid"}]}""
+                """{"rootId":"audiobooks","query":"dune","snapshot":$snapshot,"entries":[{"id":"22222222-2222-2222-2222-222222222222","name":"A","relativePath":"A","kind":"folder","duplicateGroupId":"not-a-uuid"}]}"""
             )
             invalid.forEach { body -> server.enqueue(MockResponse(body=body)); assertThrows(IOException::class.java){kotlinx.coroutines.runBlocking{repository.searchRaw("audiobooks","dune").first()}} }
-            server.enqueue(MockResponse(code=503,body="""{"error":{"code":"search_index_building","message":"building"}}"""))
+            server.enqueue(
+                MockResponse(
+                    code = 503,
+                    body = "{\"error\":{\"code\":\"search_index_building\",\"message\":\"building\"}}",
+                ),
+            )
             assertThrows(SearchIndexBuilding::class.java){kotlinx.coroutines.runBlocking{repository.searchRaw("audiobooks","dune").first()}}
         }
     }

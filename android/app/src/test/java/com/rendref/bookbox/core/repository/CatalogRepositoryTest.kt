@@ -45,7 +45,7 @@ class CatalogRepositoryTest {
             val repository = CatalogRepository(CatalogApi(AuthenticatedCall(client, FakeTokenSession("access-current")), server.url("/")))
             val page = repository.books(BookQuery(rootIds=listOf("beta", "alpha", "beta"))).first()
             assertEquals("/v1/books?rootId=alpha&rootId=beta&sort=title", server.takeRequest().target)
-            assertEquals(2,page.snapshots.size);assertEquals("Dune",page.groups.single().books.single().title);assertEquals(10,page.groups.single().books.single().durationMs)
+            assertEquals(2,page.snapshots.size);assertEquals("Dune",page.groups.single().books.single().title);assertEquals(10L,page.groups.single().books.single().durationMs)
         }
     }
 
