@@ -491,6 +491,7 @@ func (inspector *ResolverCompanionInspector) InspectCompanion(
 
 type RegroupRepository interface {
 	LoadGroupingTree(context.Context, string, string) (grouping.Tree, error)
+	CurrentCatalogGeneration(context.Context, string) (catalog.CatalogGeneration, error)
 	ApplyGroupingRefinement(
 		context.Context,
 		catalog.GroupingRefinement,
@@ -527,7 +528,11 @@ func (handler RegroupScopeHandler) Handle(ctx context.Context, job catalog.Worke
 		Books: result.Books, Evidence: result.Evidence,
 	})
 	if errors.Is(err, catalog.ErrConflict) {
-		return nil
+		current, currentErr := handler.Repo.CurrentCatalogGeneration(ctx, rootID)
+		if currentErr != nil {
+			return currentErr
+		}
+		return enqueueRegroup(ctx, handler.Repo, rootID, scope, current.Value)
 	} else if err != nil {
 		return err
 	}

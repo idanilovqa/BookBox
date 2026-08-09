@@ -274,6 +274,28 @@ func TestRegroupScopeAppliesRefinementThenCoalescesPublication(t *testing.T) {
 	}
 }
 
+func TestRegroupScopeRequeuesStaleScopeAtCurrentGeneration(t *testing.T) {
+	repository := &stagedRepositoryFake{
+		generation:    catalog.CatalogGeneration{RootID: "audiobooks", Value: 7},
+		refinementErr: catalog.ErrConflict,
+		tree:          grouping.Tree{RootID: "audiobooks", ScopePath: "Broken"},
+	}
+	handler := RegroupScopeHandler{Repo: repository}
+	job := catalog.WorkerJob{
+		Kind: catalog.JobRegroupScope,
+		Payload: map[string]any{
+			"rootId": "audiobooks", "scopePath": "Broken", "catalogGeneration": float64(6),
+		},
+	}
+
+	if err := handler.Handle(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(repository.dedupeKeys, []string{"regroup_scope:audiobooks:Broken:7"}) || len(repository.jobs) != 1 {
+		t.Fatalf("replacement regroup jobs=%#v keys=%v", repository.jobs, repository.dedupeKeys)
+	}
+}
+
 func stagedScanHandler(repository *stagedRepositoryFake, result scanner.InventoryResult) *ScanRootHandler {
 	return &ScanRootHandler{
 		Repo:         repository,
@@ -326,6 +348,7 @@ type stagedRepositoryFake struct {
 	probeChanged      bool
 	probeStoreErr     error
 	companionChanged  bool
+	refinementErr     error
 	publishErr        error
 	savedProbeFailure string
 	savedCompanion    map[string]any
@@ -406,7 +429,7 @@ func (fake *stagedRepositoryFake) ApplyGroupingRefinement(
 	_ catalog.GroupingRefinement,
 ) (catalog.CatalogGeneration, error) {
 	fake.refinements++
-	return fake.generation, nil
+	return fake.generation, fake.refinementErr
 }
 
 func (fake *stagedRepositoryFake) FinishScan(
