@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,16 +112,66 @@ func TestWorkerConfigurationOverridesEnvironmentPathFallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	options = applyWorkerSettings(options, config.WorkerSettings{
+	options, err = applyWorkerSettings(options, config.WorkerSettings{
 		CoverBackupRoot:       "/configured/backups",
 		GoogleBooksAPIKeyFile: "/configured/google-books-key",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if options.coverBackupRoot != "/configured/backups" {
 		t.Fatalf("cover backup root = %q", options.coverBackupRoot)
 	}
 	if options.googleBooksAPIKeyFile != "/configured/google-books-key" {
 		t.Fatalf("Google Books API key file = %q", options.googleBooksAPIKeyFile)
+	}
+}
+
+func TestWorkerFFProbePathUsesEnvironmentFallbackAndConfigurationPrecedence(t *testing.T) {
+	t.Setenv("BOOKBOX_FFPROBE_PATH", `  C:\Tools\ffmpeg\ffprobe.exe  `)
+
+	options, err := workerOptionsFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.ffprobePath != `C:\Tools\ffmpeg\ffprobe.exe` {
+		t.Fatalf("environment ffprobe path = %q", options.ffprobePath)
+	}
+	options, err = applyWorkerSettings(options, config.WorkerSettings{
+		FFProbePath: ` D:\BookBox\ffprobe.exe `,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.ffprobePath != `D:\BookBox\ffprobe.exe` {
+		t.Fatalf("configured ffprobe path = %q", options.ffprobePath)
+	}
+}
+
+func TestWorkerFFProbePathDefaultsAndRejectsLineBreaks(t *testing.T) {
+	options, err := workerOptionsFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.ffprobePath != "ffprobe" {
+		t.Fatalf("default ffprobe path = %q", options.ffprobePath)
+	}
+
+	for _, value := range []string{
+		"ffprobe\n--help", "ffprobe\r--help", "ffprobe\n", "ffprobe\r",
+	} {
+		t.Run(strings.ReplaceAll(value, "\n", "newline"), func(t *testing.T) {
+			t.Setenv("BOOKBOX_FFPROBE_PATH", value)
+			if _, err := workerOptionsFromEnvironment(); err == nil {
+				t.Fatalf("BOOKBOX_FFPROBE_PATH=%q was accepted", value)
+			}
+
+			base := workerOptions{ffprobePath: "ffprobe"}
+			if _, err := applyWorkerSettings(base, config.WorkerSettings{FFProbePath: value}); err == nil {
+				t.Fatalf("configured ffprobe path %q was accepted", value)
+			}
+		})
 	}
 }
 

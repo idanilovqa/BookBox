@@ -91,7 +91,10 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	options = applyWorkerSettings(options, cfg.Worker)
+	options, err = applyWorkerSettings(options, cfg.Worker)
+	if err != nil {
+		return err
+	}
 	providers, err := metadataProviders(options)
 	if err != nil {
 		return err
@@ -99,7 +102,7 @@ func run(args []string) error {
 	scanHandler := &worker.ScanRootHandler{
 		Repo: repository,
 		Scanner: scanner.New(
-			media.NewFFProbe("ffprobe"),
+			media.NewFFProbe(options.ffprobePath),
 			scanner.Options{},
 		),
 		Roots: rootByID,
@@ -154,6 +157,7 @@ func runWorkerWithMonitor(ctx context.Context, runtime, rootMonitor contextRunne
 
 type workerOptions struct {
 	scanInterval          time.Duration
+	ffprobePath           string
 	openLibraryBaseURL    string
 	googleBooksBaseURL    string
 	coverBackupRoot       string
@@ -161,12 +165,20 @@ type workerOptions struct {
 }
 
 func workerOptionsFromEnvironment() (workerOptions, error) {
+	rawFFProbePath := os.Getenv("BOOKBOX_FFPROBE_PATH")
+	if hasLineBreak(rawFFProbePath) {
+		return workerOptions{}, errors.New("BOOKBOX_FFPROBE_PATH is invalid")
+	}
 	options := workerOptions{
 		scanInterval:          worker.ScanInterval,
+		ffprobePath:           strings.TrimSpace(rawFFProbePath),
 		openLibraryBaseURL:    strings.TrimSpace(os.Getenv("BOOKBOX_OPENLIBRARY_BASE_URL")),
 		googleBooksBaseURL:    strings.TrimSpace(os.Getenv("BOOKBOX_GOOGLE_BOOKS_BASE_URL")),
 		coverBackupRoot:       strings.TrimSpace(os.Getenv("BOOKBOX_COVER_BACKUP_ROOT")),
 		googleBooksAPIKeyFile: strings.TrimSpace(os.Getenv("BOOKBOX_GOOGLE_BOOKS_API_KEY_FILE")),
+	}
+	if options.ffprobePath == "" {
+		options.ffprobePath = "ffprobe"
 	}
 	if options.coverBackupRoot == "" {
 		options.coverBackupRoot = "/var/lib/bookbox/backups"
@@ -189,14 +201,24 @@ func workerOptionsFromEnvironment() (workerOptions, error) {
 	return options, nil
 }
 
-func applyWorkerSettings(options workerOptions, settings config.WorkerSettings) workerOptions {
+func applyWorkerSettings(options workerOptions, settings config.WorkerSettings) (workerOptions, error) {
+	if hasLineBreak(settings.FFProbePath) {
+		return workerOptions{}, errors.New("worker.ffprobe_path is invalid")
+	}
+	if configured := strings.TrimSpace(settings.FFProbePath); configured != "" {
+		options.ffprobePath = configured
+	}
 	if settings.CoverBackupRoot != "" {
 		options.coverBackupRoot = settings.CoverBackupRoot
 	}
 	if settings.GoogleBooksAPIKeyFile != "" {
 		options.googleBooksAPIKeyFile = settings.GoogleBooksAPIKeyFile
 	}
-	return options
+	return options, nil
+}
+
+func hasLineBreak(value string) bool {
+	return strings.ContainsAny(value, "\r\n")
 }
 
 func validateProviderBaseURL(raw string) error {

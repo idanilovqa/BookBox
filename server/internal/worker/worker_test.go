@@ -13,6 +13,7 @@ import (
 	"bookbox.local/server/internal/catalog"
 	"bookbox.local/server/internal/config"
 	"bookbox.local/server/internal/covers"
+	"bookbox.local/server/internal/library"
 	"bookbox.local/server/internal/media"
 	"bookbox.local/server/internal/metadata"
 	"bookbox.local/server/internal/scanner"
@@ -161,7 +162,7 @@ func TestScanRootHandlerIndexesAndQueuesIncompleteBooks(t *testing.T) {
 	}
 	handler := &ScanRootHandler{
 		Repo: repository, Scanner: scannerFake{result: scanResult},
-		Roots: map[string]config.Root{root.ID: root},
+		Roots: map[string]config.Root{root.ID: root}, ValidateRoot: acceptRoot,
 	}
 
 	if err := handler.Handle(t.Context(), catalog.WorkerJob{
@@ -185,6 +186,25 @@ func TestScanRootHandlerIndexesAndQueuesIncompleteBooks(t *testing.T) {
 	}
 }
 
+func TestScanRootRejectsUnavailableRootBeforeBeginScan(t *testing.T) {
+	root := config.Root{ID: "audio", Name: "Audio", ContainerPath: `Z:\Unavailable`}
+	repository := &scanRepositoryFake{}
+	handler := &ScanRootHandler{
+		Repo: repository, Scanner: scannerFake{},
+		Roots:        map[string]config.Root{root.ID: root},
+		ValidateRoot: func(string) error { return library.ErrRootUnavailable },
+	}
+
+	err := handler.Handle(t.Context(), catalog.WorkerJob{
+		Kind: catalog.JobScanRoot, Payload: map[string]any{"rootId": root.ID},
+	})
+	if !errors.Is(err, library.ErrRootUnavailable) || repository.beginCalls != 0 ||
+		repository.finalizeCalls != 0 || repository.upsertCalled ||
+		len(repository.finishResults) != 0 {
+		t.Fatalf("unavailable root mutated catalog: err=%v repo=%+v", err, repository)
+	}
+}
+
 func TestScanRootMarksScanFailedWhenProjectionPublicationFails(t *testing.T) {
 	root := config.Root{ID: "audio", Name: "Audio", ContainerPath: "/library/audio"}
 	finalizeErr := errors.New("projection failed")
@@ -197,7 +217,7 @@ func TestScanRootMarksScanFailedWhenProjectionPublicationFails(t *testing.T) {
 		Scanner: scannerFake{result: scanner.Result{
 			RootID: root.ID,
 		}},
-		Roots: map[string]config.Root{root.ID: root},
+		Roots: map[string]config.Root{root.ID: root}, ValidateRoot: acceptRoot,
 	}
 
 	err := handler.Handle(t.Context(), catalog.WorkerJob{
@@ -234,7 +254,7 @@ func TestScanRootJoinsProjectionAndFailedScanCompletionErrors(t *testing.T) {
 		Scanner: scannerFake{result: scanner.Result{
 			RootID: root.ID,
 		}},
-		Roots: map[string]config.Root{root.ID: root},
+		Roots: map[string]config.Root{root.ID: root}, ValidateRoot: acceptRoot,
 	}
 
 	err := handler.Handle(t.Context(), catalog.WorkerJob{
@@ -264,7 +284,7 @@ func TestScanRootEnrichmentFailureDoesNotRollbackSuccessfulFinalization(t *testi
 		Scanner: scannerFake{result: scanner.Result{
 			RootID: root.ID,
 		}},
-		Roots: map[string]config.Root{root.ID: root},
+		Roots: map[string]config.Root{root.ID: root}, ValidateRoot: acceptRoot,
 	}
 
 	err := handler.Handle(t.Context(), catalog.WorkerJob{
@@ -293,7 +313,7 @@ func TestScanRootPartialResultDoesNotFinalizeProjection(t *testing.T) {
 				RelativePath: "Unreadable", Operation: "read directory",
 			}},
 		}},
-		Roots: map[string]config.Root{root.ID: root},
+		Roots: map[string]config.Root{root.ID: root}, ValidateRoot: acceptRoot,
 	}
 
 	err := handler.Handle(t.Context(), catalog.WorkerJob{
@@ -317,7 +337,7 @@ func TestScanRootHandlerFailureFinishesScanAndPreservesCatalog(t *testing.T) {
 	}
 	handler := &ScanRootHandler{
 		Repo: repository, Scanner: scannerFake{err: errors.New("source unavailable")},
-		Roots: map[string]config.Root{root.ID: root},
+		Roots: map[string]config.Root{root.ID: root}, ValidateRoot: acceptRoot,
 	}
 
 	if err := handler.Handle(t.Context(), catalog.WorkerJob{
@@ -359,7 +379,7 @@ func TestScanRootHandlerQueuesIncompleteBooksAcrossAllPages(t *testing.T) {
 		Scanner: scannerFake{result: scanner.Result{
 			RootID: root.ID,
 		}},
-		Roots: map[string]config.Root{root.ID: root},
+		Roots: map[string]config.Root{root.ID: root}, ValidateRoot: acceptRoot,
 	}
 
 	if err := handler.Handle(t.Context(), catalog.WorkerJob{
@@ -543,6 +563,8 @@ func (repository *jobRepositoryFake) EnqueueDeduplicated(
 	return job, nil
 }
 
+func acceptRoot(string) error { return nil }
+
 type scannerFake struct {
 	result scanner.Result
 	err    error
@@ -571,12 +593,14 @@ type scanRepositoryFake struct {
 	finishErr      error
 	listErr        error
 	failedScans    int
+	beginCalls     int
 }
 
 func (repository *scanRepositoryFake) BeginScan(
 	context.Context,
 	string,
 ) (catalog.ScanRun, error) {
+	repository.beginCalls++
 	return repository.scan, nil
 }
 

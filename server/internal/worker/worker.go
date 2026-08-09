@@ -13,6 +13,7 @@ import (
 	"bookbox.local/server/internal/config"
 	"bookbox.local/server/internal/covers"
 	"bookbox.local/server/internal/grouping"
+	"bookbox.local/server/internal/library"
 	"bookbox.local/server/internal/metadata"
 	"bookbox.local/server/internal/scanner"
 )
@@ -216,9 +217,10 @@ type ScanRepository interface {
 }
 
 type ScanRootHandler struct {
-	Repo    ScanRepository
-	Scanner Scanner
-	Roots   map[string]config.Root
+	Repo         ScanRepository
+	Scanner      Scanner
+	Roots        map[string]config.Root
+	ValidateRoot func(string) error
 }
 
 func (handler *ScanRootHandler) Handle(
@@ -236,6 +238,13 @@ func (handler *ScanRootHandler) Handle(
 	root, exists := handler.Roots[rootID]
 	if !exists {
 		return errors.New("scan root is not configured")
+	}
+	validateRoot := handler.ValidateRoot
+	if validateRoot == nil {
+		validateRoot = library.ValidateLocalRoot
+	}
+	if err := validateRoot(root.ContainerPath); err != nil {
+		return fmt.Errorf("validate scan root: %w", err)
 	}
 	run, err := handler.Repo.BeginScan(ctx, rootID)
 	if err != nil {

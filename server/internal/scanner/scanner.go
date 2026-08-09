@@ -3,11 +3,9 @@ package scanner
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -135,7 +133,7 @@ func (s *Scanner) Scan(ctx context.Context, root config.Root) (Result, error) {
 			return nil
 		}
 
-		handle, _, err := resolver.OpenRegular(root.ID, relative)
+		handle, resolved, err := resolver.OpenRegular(root.ID, relative)
 		if err != nil {
 			if isRaceError(err) || errors.Is(err, library.ErrNotRegular) ||
 				errors.Is(err, library.ErrPathEscape) {
@@ -174,7 +172,9 @@ func (s *Scanner) Scan(ctx context.Context, root config.Root) (Result, error) {
 			file.Folder = ""
 		}
 		if kind == KindAudio {
-			metadata, probeErr := probeOpenedFile(ctx, s.probe, handle)
+			metadata, probeErr := probeOpenedFile(
+				ctx, s.probe, resolver, root.ID, relative, handle, resolved,
+			)
 			if errors.Is(probeErr, media.ErrUnsupportedMedia) || isRaceError(probeErr) {
 				_ = handle.Close()
 				return nil
@@ -206,21 +206,6 @@ func (s *Scanner) Scan(ctx context.Context, root config.Root) (Result, error) {
 	})
 	result.Folders = makeFolders(result.Files)
 	return result, nil
-}
-
-func probeOpenedFile(
-	ctx context.Context,
-	probe media.Probe,
-	handle *os.File,
-) (media.Metadata, error) {
-	if descriptorProbe, ok := probe.(media.OpenFileProbe); ok {
-		return descriptorProbe.ProbeOpenFile(ctx, handle)
-	}
-	if runtime.GOOS != "linux" {
-		return media.Metadata{}, media.ErrProbeFailed
-	}
-	descriptorPath := fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), handle.Fd())
-	return probe.Probe(ctx, descriptorPath)
 }
 
 func classify(name string) (FileKind, bool) {
