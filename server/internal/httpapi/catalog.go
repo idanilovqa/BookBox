@@ -90,15 +90,16 @@ type GroupingRequestGroup struct {
 }
 
 type GroupingContextResponse struct {
-	BookID        string                        `json:"bookId"`
-	RootID        string                        `json:"rootId"`
-	SourceFolder  string                        `json:"sourceFolder,omitempty"`
-	ScopePath     string                        `json:"scopePath"`
-	ReviewReason  string                        `json:"reviewReason,omitempty"`
-	Evidence      map[string][]string           `json:"evidence"`
-	Files         []GroupingContextFileResponse `json:"files"`
-	Books         []GroupingContextBookResponse `json:"books"`
-	CanReorganize bool                          `json:"canReorganize"`
+	CatalogGeneration int64                         `json:"catalogGeneration"`
+	BookID            string                        `json:"bookId"`
+	RootID            string                        `json:"rootId"`
+	SourceFolder      string                        `json:"sourceFolder,omitempty"`
+	ScopePath         string                        `json:"scopePath"`
+	ReviewReason      string                        `json:"reviewReason,omitempty"`
+	Evidence          map[string][]string           `json:"evidence"`
+	Files             []GroupingContextFileResponse `json:"files"`
+	Books             []GroupingContextBookResponse `json:"books"`
+	CanReorganize     bool                          `json:"canReorganize"`
 }
 
 type GroupingContextFileResponse struct {
@@ -113,9 +114,10 @@ type GroupingContextFileResponse struct {
 }
 
 type GroupingContextBookResponse struct {
-	BookID  string   `json:"bookId"`
-	Title   string   `json:"title"`
-	FileIDs []string `json:"fileIds"`
+	BookID      string   `json:"bookId"`
+	Title       string   `json:"title"`
+	GroupingKey string   `json:"groupingKey"`
+	FileIDs     []string `json:"fileIds"`
 }
 
 type groupingSaveResponse struct {
@@ -271,7 +273,7 @@ func confirmMatchHandler(repository CatalogRepository) http.Handler {
 	})
 }
 
-func groupingContextHandler(repository CatalogRepository) http.Handler {
+func groupingContextHandler(repository CatalogRepository, accessOptions ...ReorganizationAccess) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if repository == nil {
 			writeInternalError(response)
@@ -285,6 +287,13 @@ func groupingContextHandler(repository CatalogRepository) http.Handler {
 		if err != nil {
 			writeCatalogError(response, err)
 			return
+		}
+		canReorganize := grouping.CanReorganize
+		if len(accessOptions) > 0 {
+			actor, authenticated := accessSubject(request.Context())
+			canReorganize = authenticated && reorganizationAllowed(
+				request.Context(), accessOptions[0], actor, bookID,
+			)
 		}
 		scope := grouping.ScopePath
 		if scope == "" {
@@ -301,12 +310,13 @@ func groupingContextHandler(repository CatalogRepository) http.Handler {
 		}
 
 		result := GroupingContextResponse{
-			BookID: grouping.BookID.String(), RootID: grouping.RootID,
+			CatalogGeneration: grouping.CatalogGeneration,
+			BookID:            grouping.BookID.String(), RootID: grouping.RootID,
 			SourceFolder: scope, ScopePath: scope, ReviewReason: grouping.ReviewReason,
 			Evidence:      make(map[string][]string, len(grouping.Evidence)),
 			Files:         make([]GroupingContextFileResponse, 0, len(grouping.Files)),
 			Books:         make([]GroupingContextBookResponse, 0, len(grouping.Books)),
-			CanReorganize: grouping.CanReorganize,
+			CanReorganize: canReorganize,
 		}
 		for role, paths := range grouping.Evidence {
 			if role != catalog.FileRoleAudio && role != catalog.FileRoleCover &&
@@ -380,7 +390,8 @@ func groupingContextHandler(repository CatalogRepository) http.Handler {
 				publicFileIDs = append(publicFileIDs, fileID.String())
 			}
 			result.Books = append(result.Books, GroupingContextBookResponse{
-				BookID: book.BookID.String(), Title: book.Title, FileIDs: publicFileIDs,
+				BookID: book.BookID.String(), Title: book.Title,
+				GroupingKey: book.GroupingKey, FileIDs: publicFileIDs,
 			})
 		}
 		if !requestedBookFound {

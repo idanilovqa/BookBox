@@ -45,8 +45,13 @@ var (
 )
 
 type PostgresRepository struct {
-	pool *pgxpool.Pool
-	now  func() time.Time
+	pool                               *pgxpool.Pool
+	now                                func() time.Time
+	reorganizationDestinationInspector ReorganizationDestinationInspector
+}
+
+func (repository *PostgresRepository) SetReorganizationDestinationInspector(inspector ReorganizationDestinationInspector) {
+	repository.reorganizationDestinationInspector = inspector
 }
 
 func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
@@ -574,12 +579,13 @@ func (repository *PostgresRepository) GetGroupingContext(
 	result := GroupingContext{BookID: bookID, Evidence: map[string][]string{}}
 	var encodedEvidence []byte
 	if err := transaction.QueryRow(ctx, `
-		select b.root_id, b.source_folder, coalesce(e.reason_code,''),
+		select b.root_id, coalesce(g.generation,0), b.source_folder, coalesce(e.reason_code,''),
 		       coalesce(e.evidence,'{}'::jsonb)
 		from books b
+		left join catalog_generations g on g.root_id=b.root_id
 		left join book_grouping_evidence e on e.book_id=b.id and e.root_id=b.root_id
 		where b.id=$1 and b.missing_at is null
-	`, bookID).Scan(&result.RootID, &result.ScopePath, &result.ReviewReason, &encodedEvidence); err != nil {
+	`, bookID).Scan(&result.RootID, &result.CatalogGeneration, &result.ScopePath, &result.ReviewReason, &encodedEvidence); err != nil {
 		return GroupingContext{}, mapNotFound(err, "load grouping context book")
 	}
 	result.SourceFolder = result.ScopePath

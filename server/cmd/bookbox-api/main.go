@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"bookbox.local/server/internal/auth"
@@ -21,6 +22,7 @@ import (
 	"bookbox.local/server/internal/library"
 	"bookbox.local/server/internal/metadata"
 	"bookbox.local/server/internal/transfer"
+	"bookbox.local/server/internal/worker"
 )
 
 var version = "dev"
@@ -138,6 +140,7 @@ func buildHandler(
 	var transferBuilder httpapi.ManifestBuilder = transfer.NewBuilder(resolver, fileSigner)
 	if len(databasePools) > 0 && databasePools[0] != nil {
 		catalogRepository = catalog.NewPostgresRepository(databasePools[0])
+		catalogRepository.SetReorganizationDestinationInspector(worker.NewConfinedMover(resolver))
 		openLibrary, err := metadata.NewOpenLibrary("", nil)
 		if err != nil {
 			return nil, nil, err
@@ -166,6 +169,22 @@ func buildHandler(
 		Catalog:          catalogRepository,
 		MetadataMatcher:  matcher,
 		Readiness:        readiness,
+		ReorganizationAccess: httpapi.ReorganizationAccess{
+			Enabled: cfg.AllowLibraryReorganization,
+			HasCapability: func(actor, capability string) bool {
+				return capability == "library:reorganize" && actor == cfg.Auth.Username
+			},
+			ProbeBookRootWritable: func(ctx context.Context, bookID uuid.UUID) error {
+				if catalogRepository == nil {
+					return catalog.ErrNotFound
+				}
+				detail, err := catalogRepository.GetBook(ctx, bookID)
+				if err != nil {
+					return err
+				}
+				return resolver.ProbeRootWritable(detail.Book.RootID)
+			},
+		},
 	})
 	return handler, tokens, nil
 }

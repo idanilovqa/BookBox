@@ -171,15 +171,16 @@ type BookDetail struct {
 }
 
 type GroupingContext struct {
-	BookID        uuid.UUID
-	RootID        string
-	SourceFolder  string
-	ScopePath     string
-	ReviewReason  string
-	Evidence      map[string][]string
-	Files         []GroupingContextFile
-	Books         []GroupingContextBook
-	CanReorganize bool
+	BookID            uuid.UUID
+	RootID            string
+	CatalogGeneration int64
+	SourceFolder      string
+	ScopePath         string
+	ReviewReason      string
+	Evidence          map[string][]string
+	Files             []GroupingContextFile
+	Books             []GroupingContextBook
+	CanReorganize     bool
 }
 
 type GroupingContextFile struct {
@@ -269,6 +270,43 @@ type WorkerJob struct {
 	LastError   string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+type ReorganizationRequest struct {
+	BookID            uuid.UUID
+	CatalogGeneration int64
+	Groups            []GroupingGroup
+	TargetFolders     map[string]string
+	Actor             string
+}
+
+type ReorganizationMove struct {
+	Order              int
+	FileID             uuid.UUID
+	SourcePath         string
+	DestinationPath    string
+	Role               string
+	ExpectedSize       int64
+	ExpectedModifiedAt time.Time
+}
+
+type ReorganizationPreview struct {
+	OperationID       uuid.UUID
+	RootID            string
+	CatalogGeneration int64
+	Moves             []ReorganizationMove
+}
+
+type ReorganizationOperation struct {
+	ID                uuid.UUID
+	Actor             string
+	BookID            uuid.UUID
+	RootID            string
+	CatalogGeneration int64
+	Status            string
+	Groups            []GroupingGroup
+	TargetFolders     map[string]string
+	Moves             []ReorganizationMove
 }
 
 type CoverEvent struct {

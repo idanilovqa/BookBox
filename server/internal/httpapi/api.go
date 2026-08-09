@@ -15,22 +15,23 @@ import (
 )
 
 type Dependencies struct {
-	Version          string
-	Roots            []config.Root
-	Browser          *library.Browser
-	Username         string
-	PasswordHash     string
-	PasswordVerifier *auth.PasswordVerifier
-	Tokens           *auth.TokenManager
-	Limiter          *auth.LoginLimiter
-	Logger           *slog.Logger
-	Resolver         *library.Resolver
-	TransferBuilder  ManifestBuilder
-	FileSigner       *transfer.FileSigner
-	Catalog          CatalogRepository
-	MetadataMatcher  MetadataMatcher
-	Readiness        ReadinessProbe
-	Now              func() time.Time
+	Version              string
+	Roots                []config.Root
+	Browser              *library.Browser
+	Username             string
+	PasswordHash         string
+	PasswordVerifier     *auth.PasswordVerifier
+	Tokens               *auth.TokenManager
+	Limiter              *auth.LoginLimiter
+	Logger               *slog.Logger
+	Resolver             *library.Resolver
+	TransferBuilder      ManifestBuilder
+	FileSigner           *transfer.FileSigner
+	Catalog              CatalogRepository
+	MetadataMatcher      MetadataMatcher
+	Readiness            ReadinessProbe
+	ReorganizationAccess ReorganizationAccess
+	Now                  func() time.Time
 }
 
 type route struct {
@@ -138,9 +139,17 @@ func routes(deps Dependencies) []route {
 			handler: confirmMatchHandler(deps.Catalog),
 		},
 		{
+			method: "POST", path: "/v1/books/{bookId}/reorganization/preview",
+			handler: reorganizationPreviewHandler(reorganizationCatalog(deps.Catalog), deps.ReorganizationAccess),
+		},
+		{
+			method: "POST", path: "/v1/books/{bookId}/reorganization/confirm",
+			handler: reorganizationConfirmHandler(reorganizationCatalog(deps.Catalog), deps.ReorganizationAccess),
+		},
+		{
 			method:  "GET",
 			path:    "/v1/books/{bookId}/grouping",
-			handler: groupingContextHandler(deps.Catalog),
+			handler: groupingContextHandler(deps.Catalog, deps.ReorganizationAccess),
 		},
 		{
 			method:  "PUT",
@@ -163,6 +172,11 @@ func routes(deps Dependencies) []route {
 			handler: fileHandler(deps.Resolver, deps.FileSigner),
 		},
 	}
+}
+
+func reorganizationCatalog(repository CatalogRepository) ReorganizationCatalog {
+	result, _ := repository.(ReorganizationCatalog)
+	return result
 }
 
 type accessSubjectContextKey struct{}

@@ -64,8 +64,8 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 	if err := pool.QueryRow(ctx, "select count(*) from schema_migrations").Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 4 {
-		t.Fatalf("schema migration rows = %d, want 4", applied)
+	if applied != 5 {
+		t.Fatalf("schema migration rows = %d, want 5", applied)
 	}
 
 	var rejectsCrossRootScan bool
@@ -137,8 +137,9 @@ func TestMigrateCreatesStagedCatalogAndSearchSchema(t *testing.T) {
 			"file_kind", "companion_kind", "probe_status", "probe_version",
 			"probe_error", "probed_at",
 		},
-		"library_search_snapshots": {"catalog_generation"},
-		"library_search_documents": {"review_reason"},
+		"library_search_snapshots":  {"catalog_generation"},
+		"library_search_documents":  {"review_reason"},
+		"reorganization_operations": {"groups", "target_folders"},
 	} {
 		var columns int
 		if err := pool.QueryRow(ctx, `

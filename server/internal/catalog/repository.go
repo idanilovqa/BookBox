@@ -21,6 +21,8 @@ var (
 	ErrInvalidPage         = errors.New("invalid catalog page")
 	ErrConflict            = errors.New("catalog state conflict")
 	ErrSearchIndexBuilding = errors.New("search index is building")
+	ErrReorganizationStale = errors.New("reorganization preview is stale")
+	ErrDestinationConflict = errors.New("reorganization destination conflict")
 )
 
 var windowsDrivePath = regexp.MustCompile(`^[A-Za-z]:/`)

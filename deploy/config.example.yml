@@ -1,4 +1,5 @@
 listen: ":8787"
+allow_library_reorganization: false
 roots:
   - id: audiobooks
     name: Audiobooks

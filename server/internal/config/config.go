@@ -94,11 +94,12 @@ type WorkerSettings struct {
 }
 
 type Config struct {
-	Listen   string         `yaml:"listen"`
-	Roots    []Root         `yaml:"roots"`
-	Auth     Auth           `yaml:"auth"`
-	Database Database       `yaml:"database"`
-	Worker   WorkerSettings `yaml:"worker"`
+	Listen                     string         `yaml:"listen"`
+	Roots                      []Root         `yaml:"roots"`
+	Auth                       Auth           `yaml:"auth"`
+	Database                   Database       `yaml:"database"`
+	Worker                     WorkerSettings `yaml:"worker"`
+	AllowLibraryReorganization bool           `yaml:"allow_library_reorganization"`
 }
 
 type Secrets struct {

@@ -165,6 +165,8 @@ func runConfiguredProgram(ctx context.Context, cfg config.Config, logger *log.Lo
 	if err != nil {
 		return err
 	}
+	confinedMover := worker.NewConfinedMover(resolver)
+	repository.SetReorganizationDestinationInspector(confinedMover)
 	options, err := workerOptionsFromEnvironment()
 	if err != nil {
 		return err
@@ -211,6 +213,7 @@ func runConfiguredProgram(ctx context.Context, cfg config.Config, logger *log.Lo
 			catalog.JobPublishSearch:    searchHandler,
 			catalog.JobEnrichBook:       enrichHandler,
 			catalog.JobPublishCover:     publishHandler,
+			catalog.JobReorganizeFiles:  worker.ReorganizeFilesHandler{Repository: repository, Mover: confinedMover},
 		},
 	}
 	supervisors := newRootSupervisors(cfg.Roots, func(root config.Root) monitor.Runner {
