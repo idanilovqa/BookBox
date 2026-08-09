@@ -10,6 +10,9 @@ import com.rendref.bookbox.core.repository.BookSort
 import com.rendref.bookbox.core.repository.CatalogFiltersDto
 import com.rendref.bookbox.core.repository.CatalogSource
 import com.rendref.bookbox.core.repository.PagedBooks
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -228,7 +231,7 @@ class LibraryViewModelTest {
     fun `pagination rejects a different snapshot and duplicate child ids`() =
         runTest(dispatcher) {
             val firstSnapshot = snapshot("main")
-            val changedSnapshot = firstSnapshot.copy(scanRunId = "00000000-0000-4000-8000-000000000002")
+            val changedSnapshot = firstSnapshot.copy(catalogGeneration = 2)
             var invalidPage = page(
                 groups = listOf(group("group-b", book("b1"))),
                 snapshots = listOf(changedSnapshot),
@@ -261,6 +264,65 @@ class LibraryViewModelTest {
             advanceUntilIdle()
             assertEquals(listOf("group-a"), viewModel.state.value.groups.map { it.groupId })
             assertEquals("Unable to load more audiobooks", viewModel.state.value.errorMessage)
+        }
+
+    @Test
+    fun `catalog older than two scan intervals exposes stale state and copy`() =
+        runTest(dispatcher) {
+            val now = Instant.parse("2026-08-09T12:00:01Z")
+            val staleSnapshot = snapshot(
+                rootId = "main",
+                completedAt = "2026-08-09T00:00:00Z",
+            )
+            val viewModel = LibraryViewModel(
+                SavedStateHandle(),
+                RecordingCatalogSource {
+                    page(
+                        groups = listOf(group("group-a", book("a1"))),
+                        snapshots = listOf(staleSnapshot),
+                    )
+                },
+                clock = Clock.fixed(now, ZoneOffset.UTC),
+            )
+
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            assertTrue(viewModel.state.value.isCatalogStale)
+            assertEquals(
+                "Search results may be out of date",
+                viewModel.state.value.catalogStatusMessage,
+            )
+        }
+
+    @Test
+    fun `older catalog generation cannot replace retained audiobook groups`() =
+        runTest(dispatcher) {
+            val retained = group("current", book("current"))
+            val stale = group("stale", book("stale"))
+            val source = RecordingCatalogSource { query ->
+                if (query.text == "replacement") {
+                    page(
+                        groups = listOf(stale),
+                        snapshots = listOf(snapshot("main", catalogGeneration = 6)),
+                    )
+                } else {
+                    page(
+                        groups = listOf(retained),
+                        snapshots = listOf(snapshot("main", catalogGeneration = 7)),
+                    )
+                }
+            }
+            val viewModel = LibraryViewModel(SavedStateHandle(), source)
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            viewModel.setSearchText("replacement")
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            assertEquals(listOf(retained), viewModel.state.value.groups)
+            assertEquals(7L, viewModel.state.value.snapshots.single().catalogGeneration)
         }
 
     @Test
@@ -333,10 +395,15 @@ private fun group(groupId: String, vararg books: BookCardDto) = BookSearchGroupD
     books = books.toList(),
 )
 
-private fun snapshot(rootId: String) = SearchSnapshotDto(
+private fun snapshot(
+    rootId: String,
+    catalogGeneration: Long = 1,
+    completedAt: String = "2026-08-08T00:00:00Z",
+) = SearchSnapshotDto(
     rootId = rootId,
     scanRunId = "00000000-0000-4000-8000-000000000001",
-    completedAt = "2026-08-08T00:00:00Z",
+    completedAt = completedAt,
+    catalogGeneration = catalogGeneration,
 )
 
 private fun page(

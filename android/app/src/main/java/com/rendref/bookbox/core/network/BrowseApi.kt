@@ -91,6 +91,7 @@ class BrowseApi(
                 page.snapshot.rootId != rootId ||
                 !validUuid(page.snapshot.scanRunId) ||
                 !validInstant(page.snapshot.completedAt) ||
+                page.snapshot.catalogGeneration <= 0 ||
                 page.entries.distinctBy(RawSearchEntryDto::id).size != page.entries.size ||
                 page.entries.distinctBy(RawSearchEntryDto::relativePath).size != page.entries.size ||
                 page.entries.any { !validRawEntry(it) }

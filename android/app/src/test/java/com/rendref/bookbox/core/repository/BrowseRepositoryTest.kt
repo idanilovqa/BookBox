@@ -42,6 +42,7 @@ class BrowseRepositoryTest {
                 "audiobooks",
                 "11111111-1111-1111-1111-111111111111",
                 "2026-08-08T00:00:00Z",
+                3,
             )
             val page = RawSearchPageDto(
                 "audiobooks",
@@ -81,7 +82,7 @@ class BrowseRepositoryTest {
     @Test
     fun `raw search rejects hostile shapes and maps exact building response`() = runTest {
         withRepository { server, repository ->
-            val snapshot="""{"rootId":"audiobooks","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z"}"""
+            val snapshot="""{"rootId":"audiobooks","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z","catalogGeneration":1}"""
             val invalid=listOf(
                 """{"rootId":"other","query":"dune","snapshot":$snapshot,"entries":[]}""",
                 """{"rootId":"audiobooks","query":"other","snapshot":$snapshot,"entries":[]}""",
@@ -97,6 +98,24 @@ class BrowseRepositoryTest {
                 ),
             )
             assertThrows(SearchIndexBuilding::class.java){kotlinx.coroutines.runBlocking{repository.searchRaw("audiobooks","dune").first()}}
+        }
+    }
+
+    @Test
+    fun `raw search rejects nonpositive catalog generations`() = runTest {
+        withRepository { server, repository ->
+            for (generation in listOf(0, -1)) {
+                server.enqueue(
+                    MockResponse(
+                        body = """{"rootId":"audiobooks","query":"dune","snapshot":{"rootId":"audiobooks","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z","catalogGeneration":$generation},"entries":[]}""",
+                    ),
+                )
+                assertThrows(IOException::class.java) {
+                    kotlinx.coroutines.runBlocking {
+                        repository.searchRaw("audiobooks", "dune").first()
+                    }
+                }
+            }
         }
     }
     @Test
@@ -133,6 +152,7 @@ class BrowseRepositoryTest {
                                     rootId = "audiobooks",
                                     scanRunId = "11111111-1111-1111-1111-111111111111",
                                     completedAt = "2026-08-08T00:00:00Z",
+                                    catalogGeneration = 1,
                                 ),
                                 entries = emptyList(),
                             ),

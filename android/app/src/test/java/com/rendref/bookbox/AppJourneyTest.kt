@@ -36,7 +36,8 @@ class AppJourneyTest {
                           "snapshots":[{
                             "rootId":"audiobooks",
                             "scanRunId":"11111111-1111-1111-1111-111111111111",
-                            "completedAt":"2026-08-08T00:00:00Z"
+                            "completedAt":"2026-08-08T00:00:00Z",
+                            "catalogGeneration":1
                           }],
                           "groups":[{
                             "groupId":"$groupId",
@@ -49,7 +50,7 @@ class AppJourneyTest {
                               "publicationYear":1965,
                               "genres":["Science Fiction"],
                               "narrators":[],
-                              "reviewState":"matched",
+                              "reviewState":"confirmed",
                               "sourceFolder":"Frank Herbert/Dune"
                             }]
                           }],

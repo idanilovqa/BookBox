@@ -39,6 +39,7 @@ class ApiModelsTest {
         assertEquals(emptyList<String>(), card.narrators)
         assertNull(card.coverUrl)
         assertNull(card.durationMs)
+        assertNull(card.reviewReason)
     }
 
     @Test
@@ -47,7 +48,8 @@ class ApiModelsTest {
             """{
               "rootId":"audiobooks",
               "scanRunId":"00000000-0000-4000-8000-000000000001",
-              "completedAt":"2026-08-08T12:00:00Z"
+              "completedAt":"2026-08-08T12:00:00Z",
+              "catalogGeneration":7
             }""",
         )
         val group = json.decodeFromString<BookSearchGroupDto>(
@@ -61,7 +63,8 @@ class ApiModelsTest {
                   "rootId":"audiobooks",
                   "title":"Dune",
                   "authors":["Frank Herbert"],
-                  "reviewState":"confirmed",
+                  "reviewState":"needs_review",
+                  "reviewReason":"probe_failed",
                   "sourceFolder":"Dune/Edition One",
                   "durationMs":3600000
                 },
@@ -81,10 +84,12 @@ class ApiModelsTest {
         assertEquals("audiobooks", snapshot.rootId)
         assertEquals("00000000-0000-4000-8000-000000000001", snapshot.scanRunId)
         assertEquals("2026-08-08T12:00:00Z", snapshot.completedAt)
+        assertEquals(7L, snapshot.catalogGeneration)
         assertEquals("00000000-0000-4000-8000-000000000002", group.groupId)
         assertEquals(true, group.duplicate)
         assertEquals(3_600_000L, group.books.first().durationMs)
         assertEquals("audiobooks", group.books.first().rootId)
+        assertEquals("probe_failed", group.books.first().reviewReason)
         assertNull(group.books.last().durationMs)
     }
 
@@ -98,7 +103,8 @@ class ApiModelsTest {
               "snapshot":{
                 "rootId":"audiobooks",
                 "scanRunId":"00000000-0000-4000-8000-000000000001",
-                "completedAt":"2026-08-08T12:00:00Z"
+                "completedAt":"2026-08-08T12:00:00Z",
+                "catalogGeneration":1
               },
               "entries":[
                 {
@@ -147,7 +153,8 @@ class ApiModelsTest {
               "snapshot":{
                 "rootId":"audiobooks",
                 "scanRunId":"00000000-0000-4000-8000-000000000001",
-                "completedAt":"2026-08-08T12:00:00Z"
+                "completedAt":"2026-08-08T12:00:00Z",
+                "catalogGeneration":1
               },
               "entries":[{
                 "id":"00000000-0000-4000-8000-000000000002",

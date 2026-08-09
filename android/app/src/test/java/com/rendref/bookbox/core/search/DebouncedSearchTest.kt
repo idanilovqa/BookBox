@@ -233,16 +233,23 @@ class DebouncedSearchTest {
                     debounceMillis = 150,
                     text = { it },
                     isIndexBuilding = { it is Building },
-                    load = { throw Building() },
+                    load = { query ->
+                        if (query == "replacement") throw Building()
+                        query
+                    },
                 ).toList(updates)
             }
             runCurrent()
 
-            queries.emit("dune")
+            queries.emit("retained")
+            advanceTimeBy(150)
+            runCurrent()
+            queries.emit("replacement")
             advanceTimeBy(150)
             runCurrent()
 
-            assertTrue(updates.last() is SearchUpdate.IndexBuilding)
+            val building = updates.last() as SearchUpdate.IndexBuilding
+            assertEquals("retained", building.retainedPage)
             job.cancel()
         }
 }

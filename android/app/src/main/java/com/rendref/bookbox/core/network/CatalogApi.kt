@@ -125,7 +125,9 @@ class CatalogApi(
                 snapshotRoots.any { !VALID_ROOT.matches(it) } ||
                 (requested.isNotEmpty() && snapshotRoots.toSet() != requested) ||
                 page.snapshots.any {
-                    !validUuid(it.scanRunId) || !validInstant(it.completedAt)
+                    !validUuid(it.scanRunId) ||
+                        !validInstant(it.completedAt) ||
+                        it.catalogGeneration <= 0
                 }
         val invalidGroups =
             childIds.distinct().size != childIds.size ||
@@ -150,9 +152,16 @@ class CatalogApi(
                 !validUuid(book.id) ||
                     book.title.isBlank() ||
                     !validRelativePath(book.sourceFolder, true) ||
-                    book.durationMs?.let { it < 0 } == true
+                    book.durationMs?.let { it < 0 } == true ||
+                    !validReviewPair(book)
             }
     }
+}
+
+private fun validReviewPair(book: BookCardDto): Boolean = when (book.reviewState) {
+    "needs_review" -> !book.reviewReason.isNullOrBlank()
+    "confirmed", "unreviewed" -> book.reviewReason == null
+    else -> false
 }
 
 @Serializable

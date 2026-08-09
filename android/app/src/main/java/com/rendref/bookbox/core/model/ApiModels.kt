@@ -39,6 +39,7 @@ data class SearchSnapshotDto(
     val rootId: String,
     val scanRunId: String,
     val completedAt: String,
+    val catalogGeneration: Long = 0,
 )
 
 @Serializable
@@ -114,6 +115,7 @@ data class BookCardDto(
     val narrators: List<String> = emptyList(),
     val coverUrl: String? = null,
     val reviewState: String,
+    val reviewReason: String? = null,
     val sourceFolder: String,
     val rootId: String = "",
     val durationMs: Long? = null,

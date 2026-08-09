@@ -10,7 +10,11 @@ import com.rendref.bookbox.core.model.SearchSnapshotDto
 import com.rendref.bookbox.core.network.SearchIndexBuilding
 import com.rendref.bookbox.core.repository.BrowseSource
 import com.rendref.bookbox.core.search.SearchUpdate
+import com.rendref.bookbox.core.search.STALE_CATALOG_STATUS
+import com.rendref.bookbox.core.search.catalogIsStale
 import com.rendref.bookbox.core.search.debouncedSearchUpdates
+import com.rendref.bookbox.core.search.isOlderCatalogGeneration
+import java.time.Clock
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -42,6 +46,8 @@ data class FoldersState(
     val searchSnapshot: SearchSnapshotDto? = null,
     val searchNextCursor: String? = null,
     val isSearchIndexBuilding: Boolean = false,
+    val isSearchCatalogStale: Boolean = false,
+    val searchCatalogStatusMessage: String? = null,
     val searchHighlightedRelativePath: String? = null,
     val isSearching: Boolean = false,
     val isSearchLoadingMore: Boolean = false,
@@ -53,6 +59,7 @@ data class FoldersState(
 
 class FoldersViewModel(
     private val browse: BrowseSource,
+    private val clock: Clock = Clock.systemUTC(),
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(FoldersState(isLoading = true))
     val state: StateFlow<FoldersState> = mutableState.asStateFlow()
@@ -117,6 +124,8 @@ class FoldersViewModel(
             isSearching = false,
             isSearchLoadingMore = false,
             isSearchIndexBuilding = false,
+            isSearchCatalogStale = false,
+            searchCatalogStatusMessage = null,
             searchHighlightedRelativePath = null,
             searchErrorMessage = null,
         )
@@ -191,6 +200,8 @@ class FoldersViewModel(
             mutableState.value = mutableState.value.copy(
                 searchResults = emptyList(),
                 searchSnapshot = null,
+                isSearchCatalogStale = false,
+                searchCatalogStatusMessage = null,
                 searchHighlightedRelativePath = null,
             )
         }
@@ -361,6 +372,8 @@ class FoldersViewModel(
             isSearching = false,
             isSearchLoadingMore = false,
             searchSnapshot = null,
+            isSearchCatalogStale = false,
+            searchCatalogStatusMessage = null,
             searchNextCursor = null,
             isSearchIndexBuilding = false,
             searchHighlightedRelativePath = null,
@@ -386,15 +399,35 @@ class FoldersViewModel(
                 isSearchIndexBuilding = false,
                 searchErrorMessage = null,
             )
-            is SearchUpdate.Loaded -> mutableState.value = mutableState.value.copy(
-                searchResults = update.page.entries,
-                searchSnapshot = update.page.snapshot,
-                searchNextCursor = update.page.nextCursor,
-                isSearching = false,
-                isSearchLoadingMore = false,
-                isSearchIndexBuilding = false,
-                searchErrorMessage = null,
-            )
+            is SearchUpdate.Loaded -> {
+                val current = mutableState.value
+                if (
+                    isOlderCatalogGeneration(
+                        listOf(update.page.snapshot),
+                        listOfNotNull(current.searchSnapshot),
+                    )
+                ) {
+                    mutableState.value = current.copy(
+                        isSearching = false,
+                        isSearchLoadingMore = false,
+                        isSearchIndexBuilding = false,
+                        searchErrorMessage = null,
+                    )
+                    return
+                }
+                val catalogStale = catalogIsStale(listOf(update.page.snapshot), clock)
+                mutableState.value = current.copy(
+                    searchResults = update.page.entries,
+                    searchSnapshot = update.page.snapshot,
+                    searchNextCursor = update.page.nextCursor,
+                    isSearching = false,
+                    isSearchLoadingMore = false,
+                    isSearchIndexBuilding = false,
+                    isSearchCatalogStale = catalogStale,
+                    searchCatalogStatusMessage = STALE_CATALOG_STATUS.takeIf { catalogStale },
+                    searchErrorMessage = null,
+                )
+            }
             is SearchUpdate.IndexBuilding -> mutableState.value = mutableState.value.copy(
                 isSearching = false,
                 isSearchLoadingMore = false,

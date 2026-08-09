@@ -41,11 +41,14 @@ class CatalogRepositoryTest {
     @Test
     fun `shared catalog sends repeated roots and decodes snapshot groups`() = runTest {
         withBookBoxServer { server, client ->
-            server.enqueue(MockResponse(body = """{"snapshots":[{"rootId":"alpha","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z"},{"rootId":"beta","scanRunId":"22222222-2222-2222-2222-222222222222","completedAt":"2026-08-08T00:00:00Z"}],"groups":[{"groupId":"33333333-3333-3333-3333-333333333333","duplicate":false,"books":[{"id":"44444444-4444-4444-4444-444444444444","rootId":"alpha","title":"Dune","authors":[],"genres":[],"narrators":[],"reviewState":"unreviewed","sourceFolder":"Dune","durationMs":10}]}],"filters":{}}"""))
+            server.enqueue(MockResponse(body = """{"snapshots":[{"rootId":"alpha","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z","catalogGeneration":7},{"rootId":"beta","scanRunId":"22222222-2222-2222-2222-222222222222","completedAt":"2026-08-08T00:00:00Z","catalogGeneration":9}],"groups":[{"groupId":"33333333-3333-3333-3333-333333333333","duplicate":false,"books":[{"id":"44444444-4444-4444-4444-444444444444","rootId":"alpha","title":"Dune","authors":[],"genres":[],"narrators":[],"reviewState":"needs_review","reviewReason":"probe_failed","sourceFolder":"Dune","durationMs":10}]}],"filters":{}}"""))
             val repository = CatalogRepository(CatalogApi(AuthenticatedCall(client, FakeTokenSession("access-current")), server.url("/")))
             val page = repository.books(BookQuery(rootIds=listOf("beta", "alpha", "beta"))).first()
             assertEquals("/v1/books?rootId=alpha&rootId=beta&sort=title", server.takeRequest().target)
-            assertEquals(2,page.snapshots.size);assertEquals("Dune",page.groups.single().books.single().title);assertEquals(10L,page.groups.single().books.single().durationMs)
+            assertEquals(listOf(7L, 9L), page.snapshots.map { it.catalogGeneration })
+            assertEquals("Dune", page.groups.single().books.single().title)
+            assertEquals("probe_failed", page.groups.single().books.single().reviewReason)
+            assertEquals(10L, page.groups.single().books.single().durationMs)
         }
     }
 
@@ -61,7 +64,7 @@ class CatalogRepositoryTest {
     @Test
     fun `shared catalog rejects legacy and hostile grouped responses`() = runTest {
         withBookBoxServer { server, client ->
-            val snapshot="""[{"rootId":"alpha","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z"}]"""
+            val snapshot="""[{"rootId":"alpha","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z","catalogGeneration":1}]"""
             val book="""{"id":"44444444-4444-4444-4444-444444444444","rootId":"alpha","title":"Dune","authors":[],"genres":[],"narrators":[],"reviewState":"unreviewed","sourceFolder":"Dune"}"""
             val invalid=listOf(
                 """{"items":[$book],"filters":{}}""",
@@ -73,6 +76,51 @@ class CatalogRepositoryTest {
             invalid.forEach{server.enqueue(MockResponse(body=it));assertThrows(IOException::class.java){kotlinx.coroutines.runBlocking{repository.books(BookQuery()).first()}}}
         }
     }
+
+    @Test
+    fun `shared catalog rejects nonpositive generations and invalid review reason pairs`() =
+        runTest {
+            withBookBoxServer { server, client ->
+                val repository = CatalogRepository(
+                    CatalogApi(
+                        AuthenticatedCall(client, FakeTokenSession("access-current")),
+                        server.url("/"),
+                    ),
+                )
+                val validSnapshot =
+                    """{"rootId":"alpha","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z","catalogGeneration":1}"""
+                val validBook =
+                    """{"id":"44444444-4444-4444-4444-444444444444","rootId":"alpha","title":"Dune","authors":[],"reviewState":"confirmed","sourceFolder":"Dune"}"""
+                val invalidBodies = listOf(
+                    task10CatalogPage(validSnapshot.replace(":1}", ":0}"), validBook),
+                    task10CatalogPage(validSnapshot.replace(":1}", ":-1}"), validBook),
+                    task10CatalogPage(
+                        validSnapshot,
+                        validBook.replace(
+                            "\"reviewState\":\"confirmed\"",
+                            "\"reviewState\":\"needs_review\"",
+                        ),
+                    ),
+                    task10CatalogPage(
+                        validSnapshot,
+                        validBook.replace(
+                            "\"reviewState\":\"confirmed\"",
+                            "\"reviewState\":\"confirmed\",\"reviewReason\":\"probe_failed\"",
+                        ),
+                    ),
+                )
+
+                invalidBodies.forEach { body ->
+                    server.enqueue(MockResponse(body = body))
+                    assertThrows(IOException::class.java) {
+                        kotlinx.coroutines.runBlocking {
+                            repository.books(BookQuery(rootId = "alpha")).first()
+                        }
+                    }
+                }
+            }
+        }
+
     @Test
     fun `concurrent 401 responses perform one serialized refresh and retry once`() = runTest {
         withBookBoxServer { server, client ->
@@ -262,7 +310,7 @@ class CatalogRepositoryTest {
         withBookBoxServer { server, client ->
             server.enqueue(
                 MockResponse(
-                    body = """{"snapshots":[{"rootId":"audiobooks","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z"}],"groups":[],"nextCursor":null,"filters":{"genres":["Science Fiction"],"years":[1965]}}""",
+                    body = """{"snapshots":[{"rootId":"audiobooks","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z","catalogGeneration":1}],"groups":[],"nextCursor":null,"filters":{"genres":["Science Fiction"],"years":[1965]}}""",
                 ),
             )
             val session = FakeTokenSession("access-current")
@@ -296,7 +344,7 @@ class CatalogRepositoryTest {
                 MockResponse(
                     body = """
                         {
-                          "snapshots":[{"rootId":"audiobooks","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z"}],
+                          "snapshots":[{"rootId":"audiobooks","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z","catalogGeneration":1}],
                           "groups":[{"groupId":"22222222-2222-2222-2222-222222222222","duplicate":false,"books":[{
                             "id":"33333333-3333-3333-3333-333333333333","rootId":"audiobooks","title":"Dune","authors":["Frank Herbert"],
                             "publicationYear":1965,"genres":["Science Fiction"],
@@ -336,7 +384,7 @@ class CatalogRepositoryTest {
                 MockResponse(
                     body = """
                         {
-                          "snapshots":[{"rootId":"audiobooks","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z"}],
+                          "snapshots":[{"rootId":"audiobooks","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z","catalogGeneration":1}],
                           "groups":[{"groupId":"22222222-2222-2222-2222-222222222222","duplicate":false,"books":[{
                             "id":"33333333-3333-3333-3333-333333333333","rootId":"audiobooks","title":"Dune","authors":["Frank Herbert"],
                             "coverUrl":"https://localhost:443/cover",
@@ -384,7 +432,7 @@ class CatalogRepositoryTest {
                     MockResponse(
                         body = """
                             {
-                              "snapshots":[{"rootId":"audiobooks","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z"}],
+                              "snapshots":[{"rootId":"audiobooks","scanRunId":"11111111-1111-1111-1111-111111111111","completedAt":"2026-08-08T00:00:00Z","catalogGeneration":1}],
                               "groups":[{"groupId":"22222222-2222-2222-2222-222222222222","duplicate":false,"books":[{
                                 "id":"33333333-3333-3333-3333-333333333333","rootId":"audiobooks","title":"Dune","authors":["Frank Herbert"],
                                 "coverUrl":"$coverUrl",
@@ -442,3 +490,6 @@ class CatalogRepositoryTest {
         }
     }
 }
+
+private fun task10CatalogPage(snapshot: String, book: String): String =
+    """{"snapshots":[$snapshot],"groups":[{"groupId":"33333333-3333-3333-3333-333333333333","duplicate":false,"books":[$book]}],"filters":{}}"""

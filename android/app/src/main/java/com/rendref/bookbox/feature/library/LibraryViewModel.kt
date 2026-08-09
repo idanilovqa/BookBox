@@ -13,8 +13,12 @@ import com.rendref.bookbox.core.repository.CatalogFiltersDto
 import com.rendref.bookbox.core.repository.CatalogSource
 import com.rendref.bookbox.core.repository.PagedBooks
 import com.rendref.bookbox.core.search.SearchUpdate
+import com.rendref.bookbox.core.search.STALE_CATALOG_STATUS
+import com.rendref.bookbox.core.search.catalogIsStale
 import com.rendref.bookbox.core.search.debouncedSearchUpdates
+import com.rendref.bookbox.core.search.isOlderCatalogGeneration
 import java.io.IOException
+import java.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -35,6 +39,8 @@ data class LibraryState(
     val isLoading: Boolean = false,
     val isLoadingMore: Boolean = false,
     val isIndexBuilding: Boolean = false,
+    val isCatalogStale: Boolean = false,
+    val catalogStatusMessage: String? = null,
     val errorMessage: String? = null,
     val scrollIndex: Int = 0,
     val scrollOffset: Int = 0,
@@ -43,6 +49,7 @@ data class LibraryState(
 class LibraryViewModel(
     private val savedState: SavedStateHandle,
     private val catalog: CatalogSource,
+    private val clock: Clock = Clock.systemUTC(),
 ) : ViewModel() {
     private val initialQuery = savedState.get<BookQuery>(QUERY_KEY) ?: BookQuery()
     private val query = MutableStateFlow(initialQuery.withoutCursor())
@@ -209,7 +216,19 @@ class LibraryViewModel(
             }
 
             is SearchUpdate.Loaded -> {
+                val current = mutableState.value
+                if (isOlderCatalogGeneration(update.page.snapshots, current.snapshots)) {
+                    mutableState.value = current.copy(
+                        query = update.query,
+                        isLoading = false,
+                        isLoadingMore = false,
+                        isIndexBuilding = false,
+                        errorMessage = null,
+                    )
+                    return
+                }
                 val groups = update.page.groups
+                val catalogStale = catalogIsStale(update.page.snapshots, clock)
                 mutableState.value = mutableState.value.copy(
                     query = update.query,
                     books = groups.flatMap(BookSearchGroupDto::books),
@@ -220,6 +239,8 @@ class LibraryViewModel(
                     isLoading = false,
                     isLoadingMore = false,
                     isIndexBuilding = false,
+                    isCatalogStale = catalogStale,
+                    catalogStatusMessage = STALE_CATALOG_STATUS.takeIf { catalogStale },
                     errorMessage = null,
                 )
             }

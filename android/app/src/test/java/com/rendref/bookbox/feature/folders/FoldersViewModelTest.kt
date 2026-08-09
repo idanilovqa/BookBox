@@ -11,6 +11,9 @@ import com.rendref.bookbox.core.model.SearchSnapshotDto
 import com.rendref.bookbox.core.network.SearchIndexBuilding
 import com.rendref.bookbox.core.repository.BrowseSource
 import java.io.IOException
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -341,7 +344,7 @@ class FoldersViewModelTest {
                 query = "black box",
                 entries = listOf(rawEntry("other", "Other/Path", "folder")),
                 snapshot = rawSnapshot("audiobooks").copy(
-                    scanRunId = "00000000-0000-4000-8000-000000000002",
+                    catalogGeneration = 2,
                 ),
             )
             viewModel.loadNextSearchPage()
@@ -361,6 +364,55 @@ class FoldersViewModelTest {
             advanceUntilIdle()
             assertEquals(retained, viewModel.state.value.searchResults)
             assertEquals("Unable to load more search results", viewModel.state.value.searchErrorMessage)
+        }
+
+    @Test
+    fun `raw catalog older than two scan intervals exposes stale state and copy`() =
+        runTest(dispatcher) {
+            val source = FakeBrowseSource().apply {
+                searchSnapshot = rawSnapshot(
+                    rootId = "audiobooks",
+                    completedAt = "2026-08-09T00:00:00Z",
+                )
+            }
+            val viewModel = FoldersViewModel(
+                source,
+                clock = Clock.fixed(
+                    Instant.parse("2026-08-09T12:00:01Z"),
+                    ZoneOffset.UTC,
+                ),
+            )
+            advanceUntilIdle()
+
+            viewModel.updateSearchQuery("black box")
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            assertTrue(viewModel.state.value.isSearchCatalogStale)
+            assertEquals(
+                "Search results may be out of date",
+                viewModel.state.value.searchCatalogStatusMessage,
+            )
+        }
+
+    @Test
+    fun `older raw catalog generation cannot replace retained search results`() =
+        runTest(dispatcher) {
+            val source = FakeBrowseSource().apply { searchGeneration = 7 }
+            val viewModel = FoldersViewModel(source)
+            advanceUntilIdle()
+            viewModel.updateSearchQuery("black box")
+            advanceTimeBy(150)
+            advanceUntilIdle()
+            val retained = viewModel.state.value.searchResults
+
+            source.searchGeneration = 6
+            viewModel.updateSearchQuery("older result")
+            advanceTimeBy(150)
+            advanceUntilIdle()
+
+            assertEquals(retained, viewModel.state.value.searchResults)
+            assertEquals(7L, viewModel.state.value.searchSnapshot?.catalogGeneration)
         }
 
     @Test
@@ -407,6 +459,8 @@ class FoldersViewModelTest {
         val buildingQueries = mutableSetOf<String>()
         var rawNextCursor: String? = null
         var nextRawPage: RawSearchPageDto? = null
+        var searchGeneration = 1L
+        var searchSnapshot: SearchSnapshotDto? = null
         var failSearch = false
 
         override fun roots(): Flow<List<RootDto>> =
@@ -468,7 +522,18 @@ class FoldersViewModelTest {
                 )
                 else -> emptyList()
             }
-            return flowOf(rawPage(rootId, query, entries, nextCursor = rawNextCursor))
+            return flowOf(
+                rawPage(
+                    rootId,
+                    query,
+                    entries,
+                    snapshot = searchSnapshot ?: rawSnapshot(
+                        rootId,
+                        catalogGeneration = searchGeneration,
+                    ),
+                    nextCursor = rawNextCursor,
+                ),
+            )
         }
 
         override fun bookFiles(bookId: String): Flow<BookFilesDto> =
@@ -508,10 +573,15 @@ private fun rawEntry(id: String, path: String, kind: String) = RawSearchEntryDto
     modifiedAt = if (kind == "file") "2026-08-08T00:00:00Z" else null,
 )
 
-private fun rawSnapshot(rootId: String) = SearchSnapshotDto(
+private fun rawSnapshot(
+    rootId: String,
+    catalogGeneration: Long = 1,
+    completedAt: String = "2026-08-08T00:00:00Z",
+) = SearchSnapshotDto(
     rootId = rootId,
     scanRunId = "00000000-0000-4000-8000-000000000001",
-    completedAt = "2026-08-08T00:00:00Z",
+    completedAt = completedAt,
+    catalogGeneration = catalogGeneration,
 )
 
 private fun rawPage(
