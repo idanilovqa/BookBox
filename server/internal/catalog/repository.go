@@ -42,7 +42,9 @@ type Repository interface {
 	SaveGrouping(context.Context, GroupingCorrection) error
 	Enqueue(context.Context, WorkerJob) error
 	EnqueueDeduplicated(context.Context, WorkerJob, string) (WorkerJob, error)
+	RecoverExpiredJobs(context.Context, time.Time) error
 	ClaimJob(context.Context, string, time.Time) (WorkerJob, error)
+	RenewJob(context.Context, uuid.UUID, uuid.UUID, time.Time) (time.Time, error)
 	CompleteJob(context.Context, uuid.UUID, uuid.UUID, error) error
 	RecordCoverEvent(context.Context, CoverEvent) error
 }

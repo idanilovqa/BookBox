@@ -25,6 +25,7 @@ const (
 
 	completionTimeout = 5 * time.Second
 	bookPageSize      = 100
+	jobLeaseDuration  = 15 * time.Minute
 )
 
 type Handler interface {
@@ -41,6 +42,8 @@ func (function HandlerFunc) Handle(
 }
 
 type JobRepository interface {
+	LeaseRepository
+	RecoverExpiredJobs(context.Context, time.Time) error
 	ClaimJob(context.Context, string, time.Time) (catalog.WorkerJob, error)
 	CompleteJob(context.Context, uuid.UUID, uuid.UUID, error) error
 	EnqueueDeduplicated(
@@ -84,6 +87,9 @@ func (worker *Worker) Run(ctx context.Context) error {
 	}
 
 	now := clock().UTC()
+	if err := worker.Repo.RecoverExpiredJobs(ctx, now); err != nil {
+		return fmt.Errorf("recover expired worker jobs: %w", err)
+	}
 	if err := worker.scheduleScans(ctx, now); err != nil {
 		return fmt.Errorf("schedule startup scans: %w", err)
 	}
@@ -123,7 +129,12 @@ func (worker *Worker) Run(ctx context.Context) error {
 			jobErr = fmt.Errorf("unsupported job kind %q", job.Kind)
 		} else {
 			jobErr = runWithGrace(ctx, gracePeriod, func(operationCtx context.Context) error {
-				return handler.Handle(operationCtx, job)
+				return runWithLease(
+					operationCtx, worker.Repo, job, jobLeaseDuration,
+					func(handlerCtx context.Context) error {
+						return handler.Handle(handlerCtx, job)
+					},
+				)
 			})
 		}
 		completionCtx, cancel := context.WithTimeout(context.Background(), completionTimeout)

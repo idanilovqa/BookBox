@@ -556,7 +556,12 @@ func TestPostgresRepositoryScanMissingAndWorkerLeaseLifecycle(t *testing.T) {
 	); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expired CompleteJob() = %v, want ErrConflict", err)
 	}
-	reclaimed, err := repository.ClaimJob(ctx, "worker-b", reclaimedAt)
+	if err := repository.RecoverExpiredJobs(ctx, reclaimedAt); err != nil {
+		t.Fatal(err)
+	}
+	retryAt := reclaimedAt.Add(retryDelay(1))
+	repository.now = func() time.Time { return retryAt }
+	reclaimed, err := repository.ClaimJob(ctx, "worker-b", retryAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -592,7 +597,7 @@ func TestPostgresRepositoryScanMissingAndWorkerLeaseLifecycle(t *testing.T) {
 	if status != JobDead || attempts != 2 {
 		t.Fatalf("dead state = %q attempts=%d", status, attempts)
 	}
-	if _, err := repository.ClaimJob(ctx, "worker-c", reclaimedAt.Add(time.Hour)); !errors.Is(err, ErrNoJob) {
+	if _, err := repository.ClaimJob(ctx, "worker-c", retryAt.Add(time.Hour)); !errors.Is(err, ErrNoJob) {
 		t.Fatalf("ClaimJob(dead) = %v, want ErrNoJob", err)
 	}
 }
@@ -742,6 +747,113 @@ func TestPostgresRepositoryDeduplicatesOnlyActiveJobs(t *testing.T) {
 	}
 	if requeued.ID != retry.ID || requeued.ID == active.ID {
 		t.Fatalf("terminal retry = %#v after %#v", requeued, active)
+	}
+}
+
+func TestRecoverExpiredJobsRunsBeforeStartupDeduplication(t *testing.T) {
+	repository, pool := workerJobFixture(t)
+	job := expiredRunningJob(t, pool, JobScanRoot, 4, 5, "scan_root:audiobooks")
+	now := time.Now().UTC()
+
+	if err := repository.RecoverExpiredJobs(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+
+	var status string
+	var attempts int
+	var leaseCleared bool
+	if err := pool.QueryRow(context.Background(), `
+		select status, attempts,
+		       locked_at is null and locked_by is null and
+		       lease_until is null and lease_token is null
+		from worker_jobs
+		where id=$1
+	`, job.ID).Scan(&status, &attempts, &leaseCleared); err != nil {
+		t.Fatal(err)
+	}
+	if status != JobDead || attempts != 5 || !leaseCleared {
+		t.Fatalf("recovered job status=%q attempts=%d leaseCleared=%v", status, attempts, leaseCleared)
+	}
+
+	enqueued, err := repository.EnqueueDeduplicated(context.Background(), WorkerJob{
+		ID: uuid.New(), Kind: JobScanRoot,
+		Payload: map[string]any{"rootId": "audiobooks"},
+	}, "scan_root:audiobooks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enqueued.ID == job.ID {
+		t.Fatalf("deduplication returned expired terminal job %s", job.ID)
+	}
+}
+
+func TestRecoverExpiredJobsRequeuesRetryableLeaseOnce(t *testing.T) {
+	repository, pool := workerJobFixture(t)
+	job := expiredRunningJob(t, pool, JobScanRoot, 1, 5, "")
+	now := time.Now().UTC()
+
+	if err := repository.RecoverExpiredJobs(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+
+	var status, lastError string
+	var attempts int
+	var runAfter time.Time
+	var leaseCleared bool
+	if err := pool.QueryRow(context.Background(), `
+		select status, attempts, run_after, coalesce(last_error,''),
+		       locked_at is null and locked_by is null and
+		       lease_until is null and lease_token is null
+		from worker_jobs
+		where id=$1
+	`, job.ID).Scan(&status, &attempts, &runAfter, &lastError, &leaseCleared); err != nil {
+		t.Fatal(err)
+	}
+	if status != JobQueued || attempts != 2 || !runAfter.After(now) ||
+		!strings.Contains(lastError, "lease expired") || !leaseCleared {
+		t.Fatalf(
+			"recovered retry status=%q attempts=%d runAfter=%s error=%q leaseCleared=%v",
+			status, attempts, runAfter, lastError, leaseCleared,
+		)
+	}
+
+	if err := repository.RecoverExpiredJobs(context.Background(), now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var attemptsAfterSecondRecovery int
+	if err := pool.QueryRow(context.Background(),
+		`select attempts from worker_jobs where id=$1`, job.ID,
+	).Scan(&attemptsAfterSecondRecovery); err != nil {
+		t.Fatal(err)
+	}
+	if attemptsAfterSecondRecovery != attempts {
+		t.Fatalf("second recovery attempts=%d, want unchanged %d", attemptsAfterSecondRecovery, attempts)
+	}
+}
+
+func TestRenewJobExtendsOnlyCurrentLease(t *testing.T) {
+	repository, _ := workerJobFixture(t)
+	claimed := enqueueAndClaim(t, repository)
+	renewedAt := claimed.LockedAt.Add(5 * time.Minute)
+
+	next, err := repository.RenewJob(
+		context.Background(), claimed.ID, claimed.LeaseToken, renewedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !next.After(*claimed.LeaseUntil) {
+		t.Fatalf("renewed lease=%s, want after %s", next, *claimed.LeaseUntil)
+	}
+	if _, err := repository.RenewJob(
+		context.Background(), claimed.ID, uuid.New(), renewedAt,
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("RenewJob(stale token)=%v, want ErrConflict", err)
+	}
+	if _, err := repository.RenewJob(
+		context.Background(), claimed.ID, claimed.LeaseToken, next.Add(time.Nanosecond),
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("RenewJob(expired lease)=%v, want ErrConflict", err)
 	}
 }
 
@@ -1167,6 +1279,70 @@ func assertFileMissing(t *testing.T, pool *pgxpool.Pool, id uuid.UUID, want bool
 	if missing != want {
 		t.Fatalf("file %s missing = %v, want %v", id, missing, want)
 	}
+}
+
+func workerJobFixture(t *testing.T) (*PostgresRepository, *pgxpool.Pool) {
+	t.Helper()
+	pool := testpostgres.Open(t)
+	if err := database.Migrate(context.Background(), pool); err != nil {
+		t.Fatal(err)
+	}
+	return NewPostgresRepository(pool), pool
+}
+
+func expiredRunningJob(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	kind string,
+	attempts int,
+	maxAttempts int,
+	dedupeKey string,
+) WorkerJob {
+	t.Helper()
+	now := time.Now().UTC()
+	job := WorkerJob{
+		ID: uuid.New(), Kind: kind, Payload: map[string]any{"rootId": "audiobooks"},
+		Status: JobRunning, RunAfter: now.Add(-time.Hour), Attempts: attempts,
+		MaxAttempts: maxAttempts, LockedBy: "stopped-worker",
+		LeaseToken: uuid.New(),
+	}
+	lockedAt := now.Add(-20 * time.Minute)
+	leaseUntil := now.Add(-5 * time.Minute)
+	job.LockedAt = &lockedAt
+	job.LeaseUntil = &leaseUntil
+	if _, err := pool.Exec(context.Background(), `
+		insert into worker_jobs(
+			id, kind, dedupe_key, payload, status, run_after,
+			attempts, max_attempts, locked_at, locked_by, lease_until, lease_token
+		) values ($1,$2,nullif($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12)
+	`, job.ID, job.Kind, dedupeKey, job.Payload, job.Status, job.RunAfter,
+		job.Attempts, job.MaxAttempts, job.LockedAt, job.LockedBy,
+		job.LeaseUntil, job.LeaseToken); err != nil {
+		t.Fatal(err)
+	}
+	return job
+}
+
+func enqueueAndClaim(t *testing.T, repository *PostgresRepository) WorkerJob {
+	t.Helper()
+	now := time.Now().UTC()
+	job := WorkerJob{
+		ID: uuid.New(), Kind: JobScanRoot,
+		Payload:  map[string]any{"rootId": "audiobooks"},
+		RunAfter: now,
+	}
+	if err := repository.Enqueue(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repository.ClaimJob(context.Background(), "worker-a", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.ID != job.ID || claimed.LockedAt == nil || claimed.LeaseUntil == nil ||
+		claimed.LeaseToken == uuid.Nil {
+		t.Fatalf("claimed job=%#v", claimed)
+	}
+	return claimed
 }
 
 func pointer[T any](value T) *T {

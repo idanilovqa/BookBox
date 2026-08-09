@@ -56,6 +56,31 @@ func TestWorkerSchedulesStartupAndSixHourScans(t *testing.T) {
 	}
 }
 
+func TestWorkerRecoversExpiredJobsBeforeSchedulingStartupScans(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	ctx, cancel := context.WithCancel(context.Background())
+	repository := &jobRepositoryFake{}
+	runtime := &Worker{
+		Repo: repository, Roots: []config.Root{{ID: "audio"}},
+		WorkerID: "test-worker", Clock: func() time.Time { return now },
+		Wait: func(context.Context, time.Duration) error {
+			cancel()
+			return context.Canceled
+		},
+	}
+
+	if err := runtime.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if repository.recoveries != 1 {
+		t.Fatalf("recoveries=%d, want one", repository.recoveries)
+	}
+	if len(repository.events) < 2 ||
+		repository.events[0] != "recover" || repository.events[1] != "enqueue" {
+		t.Fatalf("startup events=%v, want recovery before scan enqueue", repository.events)
+	}
+}
+
 func TestWorkerUsesConfiguredScanInterval(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -88,8 +113,10 @@ func TestWorkerUsesConfiguredScanInterval(t *testing.T) {
 }
 
 func TestWorkerStopsClaimsAndCancelsCurrentHandlerAfterGracePeriod(t *testing.T) {
+	leaseUntil := time.Now().Add(15 * time.Minute)
 	job := catalog.WorkerJob{
 		ID: uuid.New(), Kind: catalog.JobEnrichBook, LeaseToken: uuid.New(),
+		LeaseUntil: &leaseUntil,
 	}
 	repository := &jobRepositoryFake{claimed: []catalog.WorkerJob{job}}
 	started := make(chan struct{})
@@ -525,6 +552,17 @@ type jobRepositoryFake struct {
 	claims        int
 	completions   []error
 	enqueuedRoots []string
+	recoveries    int
+	events        []string
+}
+
+func (repository *jobRepositoryFake) RecoverExpiredJobs(
+	context.Context,
+	time.Time,
+) error {
+	repository.recoveries++
+	repository.events = append(repository.events, "recover")
+	return nil
 }
 
 func (repository *jobRepositoryFake) ClaimJob(
@@ -533,6 +571,7 @@ func (repository *jobRepositoryFake) ClaimJob(
 	time.Time,
 ) (catalog.WorkerJob, error) {
 	repository.claims++
+	repository.events = append(repository.events, "claim")
 	if len(repository.claimed) == 0 {
 		return catalog.WorkerJob{}, catalog.ErrNoJob
 	}
@@ -551,11 +590,21 @@ func (repository *jobRepositoryFake) CompleteJob(
 	return nil
 }
 
+func (repository *jobRepositoryFake) RenewJob(
+	_ context.Context,
+	_ uuid.UUID,
+	_ uuid.UUID,
+	now time.Time,
+) (time.Time, error) {
+	return now.Add(15 * time.Minute), nil
+}
+
 func (repository *jobRepositoryFake) EnqueueDeduplicated(
 	_ context.Context,
 	job catalog.WorkerJob,
 	_ string,
 ) (catalog.WorkerJob, error) {
+	repository.events = append(repository.events, "enqueue")
 	repository.enqueuedRoots = append(
 		repository.enqueuedRoots,
 		job.Payload["rootId"].(string),

@@ -1563,45 +1563,18 @@ func (repository *PostgresRepository) ClaimJob(
 		return WorkerJob{}, fmt.Errorf("begin worker job claim: %w", err)
 	}
 	defer transaction.Rollback(ctx)
-	if _, err := transaction.Exec(ctx, `
-		update worker_jobs
-		set status='dead',
-		    attempts=max_attempts,
-		    locked_at=null,
-		    locked_by=null,
-		    lease_until=null,
-		    lease_token=null,
-		    last_error='worker lease expired at maximum attempts',
-		    updated_at=$1
-		where status='running'
-		  and lease_until < $1
-		  and attempts + 1 >= max_attempts
-	`, now); err != nil {
-		return WorkerJob{}, fmt.Errorf("expire exhausted worker jobs: %w", err)
-	}
 	leaseToken := uuid.New()
 	row := transaction.QueryRow(ctx, `
 		with candidate as (
 			select id
 			from worker_jobs
-			where (
-				(status='queued' and run_after <= $1)
-				or (
-					status='running'
-					and lease_until < $1
-					and attempts + 1 < max_attempts
-				)
-			)
-			order by
-			    case when status='running' then lease_until else run_after end,
-			    created_at,
-			    id
+			where status='queued' and run_after <= $1
+			order by run_after, created_at, id
 			for update skip locked
 			limit 1
 		)
 		update worker_jobs job
 		set status='running',
-		    attempts=case when job.status='running' then job.attempts+1 else job.attempts end,
 		    locked_at=$1,
 		    locked_by=$2,
 		    lease_until=$3,
@@ -1625,6 +1598,110 @@ func (repository *PostgresRepository) ClaimJob(
 		return WorkerJob{}, fmt.Errorf("commit worker job claim: %w", err)
 	}
 	return job, nil
+}
+
+func (repository *PostgresRepository) RecoverExpiredJobs(
+	ctx context.Context,
+	now time.Time,
+) error {
+	if repository == nil || repository.pool == nil || now.IsZero() {
+		return ErrInvalidData
+	}
+	transaction, err := repository.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin expired worker job recovery: %w", err)
+	}
+	defer transaction.Rollback(ctx)
+
+	rows, err := transaction.Query(ctx, `
+		select id, attempts, max_attempts
+		from worker_jobs
+		where status='running' and lease_until < $1
+		order by lease_until, created_at, id
+		for update
+	`, now)
+	if err != nil {
+		return fmt.Errorf("load expired worker jobs: %w", err)
+	}
+	type expiredJob struct {
+		id                    uuid.UUID
+		attempts, maxAttempts int
+	}
+	var expired []expiredJob
+	for rows.Next() {
+		var job expiredJob
+		if err := rows.Scan(&job.id, &job.attempts, &job.maxAttempts); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan expired worker job: %w", err)
+		}
+		expired = append(expired, job)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate expired worker jobs: %w", err)
+	}
+	rows.Close()
+
+	for _, job := range expired {
+		attempts := job.attempts + 1
+		status := JobQueued
+		runAfter := now.Add(retryDelay(attempts))
+		lastError := "worker lease expired"
+		if attempts >= job.maxAttempts {
+			status = JobDead
+			runAfter = now
+			lastError = "worker lease expired at maximum attempts"
+		}
+		if _, err := transaction.Exec(ctx, `
+			update worker_jobs
+			set status=$2,
+			    attempts=$3,
+			    run_after=$4,
+			    locked_at=null,
+			    locked_by=null,
+			    lease_until=null,
+			    lease_token=null,
+			    last_error=$5,
+			    updated_at=$6
+			where id=$1
+		`, job.id, status, attempts, runAfter, lastError, now); err != nil {
+			return fmt.Errorf("recover expired worker job: %w", err)
+		}
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return fmt.Errorf("commit expired worker job recovery: %w", err)
+	}
+	return nil
+}
+
+func (repository *PostgresRepository) RenewJob(
+	ctx context.Context,
+	jobID uuid.UUID,
+	leaseToken uuid.UUID,
+	now time.Time,
+) (time.Time, error) {
+	if repository == nil || repository.pool == nil || jobID == uuid.Nil ||
+		leaseToken == uuid.Nil || now.IsZero() {
+		return time.Time{}, ErrInvalidData
+	}
+	next := now.Add(jobLease)
+	var renewed time.Time
+	err := repository.pool.QueryRow(ctx, `
+		update worker_jobs
+		set lease_until=$4, updated_at=$3
+		where id=$1
+		  and status='running'
+		  and lease_token=$2
+		  and lease_until > $3
+		returning lease_until
+	`, jobID, leaseToken, now, next).Scan(&renewed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, ErrConflict
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("renew worker job lease: %w", err)
+	}
+	return renewed, nil
 }
 
 func (repository *PostgresRepository) CompleteJob(
