@@ -46,6 +46,18 @@ func TestParseCommandModesLegacyAndDefaults(t *testing.T) {
 	}
 }
 
+func TestParseCommandAcceptsSideEffectFreeHelp(t *testing.T) {
+	for _, args := range [][]string{{"help"}, {"--help"}, {"-h"}} {
+		command, err := parseCommand(args)
+		if err != nil {
+			t.Fatalf("parseCommand(%q): %v", args, err)
+		}
+		if command.Mode != commandHelp || command.ConfigPath != "" {
+			t.Fatalf("parseCommand(%q) = %#v, want help without config", args, command)
+		}
+	}
+}
+
 func TestParseCommandRejectsUnknownCommandsAndExtraArguments(t *testing.T) {
 	for _, args := range [][]string{
 		{"unknown"},

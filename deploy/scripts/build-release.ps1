@@ -201,6 +201,7 @@ $script:artifacts = $artifacts
 $debugArtifact = Join-Path $artifacts "BookBox-v$Version-debug.apk"
 $releaseArtifact = Join-Path $artifacts "BookBox-v$Version-release.apk"
 $discoveryArtifact = Join-Path $artifacts 'bookbox-discovery.exe'
+$workerArtifact = Join-Path $artifacts 'bookbox-catalog-worker.exe'
 $metadataArtifact = Join-Path $artifacts 'APK_METADATA.json'
 $discoveryMetadataArtifact = Join-Path $artifacts 'DISCOVERY_METADATA.json'
 $checksumsArtifact = Join-Path $artifacts 'SHA256SUMS.txt'
@@ -208,6 +209,7 @@ foreach ($path in @(
     $debugArtifact,
     $releaseArtifact,
     $discoveryArtifact,
+    $workerArtifact,
     $metadataArtifact,
     $discoveryMetadataArtifact,
     $checksumsArtifact
@@ -239,7 +241,8 @@ if ((@(& docker ps -a --filter "name=^/$goContainer$" -q) -join '').Trim()) {
 $goVerificationAndBuild = @(
     'GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go test -mod=readonly -p=1 -race ./... &&'
     'GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go vet -mod=readonly ./... &&'
-    'go build -mod=readonly -trimpath -o /artifacts/bookbox-discovery.exe ./cmd/bookbox-discovery'
+    'go build -mod=readonly -trimpath -o /artifacts/bookbox-discovery.exe ./cmd/bookbox-discovery &&'
+    'go build -mod=readonly -trimpath -o /artifacts/bookbox-catalog-worker.exe ./cmd/bookbox-catalog-worker'
 ) -join ' '
 Invoke-MonitoredProcess `
     -Label 'Go tests and vet' `
@@ -265,10 +268,15 @@ Invoke-MonitoredProcess `
 if (-not (Test-Path -LiteralPath $discoveryArtifact -PathType Leaf)) {
     throw "Discovery executable was not produced: $discoveryArtifact"
 }
+if (-not (Test-Path -LiteralPath $workerArtifact -PathType Leaf)) {
+    throw "Catalog worker executable was not produced: $workerArtifact"
+}
 Write-Host "Created $discoveryArtifact"
+Write-Host "Created $workerArtifact"
 foreach ($gate in @(
     'discovery-process.tests.ps1',
-    'install-transaction.tests.ps1'
+    'install-transaction.tests.ps1',
+    'catalog-worker-service.tests.ps1'
 )) {
     Invoke-MonitoredProcess `
         -Label "Windows deployment gate: $gate" `

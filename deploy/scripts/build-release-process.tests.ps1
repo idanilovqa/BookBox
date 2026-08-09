@@ -66,6 +66,21 @@ foreach ($sidecar in @(
     }
 }
 foreach ($required in @(
+    'bookbox-catalog-worker.exe',
+    './cmd/bookbox-catalog-worker',
+    'catalog-worker-service.tests.ps1'
+)) {
+    if ($text -notmatch [regex]::Escape($required)) {
+        throw "Release build is missing the native worker artifact gate: $required"
+    }
+}
+if ($text -notmatch '(?s)foreach\s*\(\$path\s+in\s+@\(.*?\$workerArtifact.*?Remove-Item\s+-LiteralPath\s+\$path') {
+    throw 'Release startup does not invalidate the prior catalog worker artifact.'
+}
+if ($text -notmatch 'go build -mod=readonly -trimpath -o /artifacts/bookbox-catalog-worker\.exe \./cmd/bookbox-catalog-worker') {
+    throw 'Release does not build the production catalog worker command explicitly.'
+}
+foreach ($required in @(
     'bookbox-discovery.exe',
     '$goVerificationAndBuild',
     "-join ' '",
@@ -79,10 +94,31 @@ foreach ($required in @(
         throw "Release build is missing the discovery release gate: $required"
     }
 }
+$workerPE = $verifyText.IndexOf('$workerMetadata = Get-PEMetadata -Path $workerPath')
+$workerHelp = $verifyText.IndexOf("Invoke-Captured `$workerPath @('help')")
+$workerChecksum = $verifyText.IndexOf('$checksumLines += "$($workerMetadata.sha256)  $($workerMetadata.file)"')
+$sidecarPublication = $verifyText.IndexOf('Move-Item -LiteralPath $checksumsTemporary')
+if ($workerPE -lt 0 -or $workerHelp -lt 0 -or $workerChecksum -lt 0 -or
+    $sidecarPublication -lt 0 -or $workerPE -gt $workerChecksum -or
+    $workerHelp -gt $workerChecksum -or $workerChecksum -gt $sidecarPublication) {
+    throw 'Worker PE/help/checksum validation must precede atomic checksum publication.'
+}
+foreach ($required in @(
+    'bookbox-catalog-worker.exe',
+    'Get-PEMetadata',
+    "@('help')",
+    '0x5A4D',
+    '0x00004550',
+    '0x8664'
+)) {
+    if ($verifyText -notmatch [regex]::Escape($required)) {
+        throw "Release verification does not validate the catalog worker: $required"
+    }
+}
 $buildArtifactRemoval = [regex]::Match(
     $text,
     '(?s)foreach\s*\(\$path\s+in\s+@\(\s*' +
-    '\$debugArtifact,\s*\$releaseArtifact,\s*\$discoveryArtifact,\s*' +
+    '\$debugArtifact,\s*\$releaseArtifact,\s*\$discoveryArtifact,\s*\$workerArtifact,\s*' +
     '\$metadataArtifact,\s*\$discoveryMetadataArtifact,\s*' +
     '\$checksumsArtifact\s*' +
     '\)\)\s*\{\s*Remove-Item\s+-LiteralPath\s+\$path'

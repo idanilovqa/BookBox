@@ -16,6 +16,34 @@ function Invoke-Captured {
     return ($output -join [Environment]::NewLine).Trim()
 }
 
+function Get-PEMetadata {
+    param([Parameter(Mandatory)][string] $Path)
+    $item = Get-Item -LiteralPath $Path
+    if ($item.Length -le 0) { throw "$($item.Name) is empty." }
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $reader = $null
+    try {
+        $reader = [IO.BinaryReader]::new($stream)
+        if ($reader.ReadUInt16() -ne 0x5A4D) { throw "$($item.Name) lacks a DOS header." }
+        $stream.Position = 0x3c
+        $offset = $reader.ReadInt32()
+        if ($offset -lt 0x40 -or $offset -gt ($stream.Length - 6)) { throw "$($item.Name) has an invalid PE offset." }
+        $stream.Position = $offset
+        if ($reader.ReadUInt32() -ne 0x00004550) { throw "$($item.Name) lacks a PE signature." }
+        if ($reader.ReadUInt16() -ne 0x8664) { throw "$($item.Name) is not AMD64." }
+    } finally {
+        if ($null -ne $reader) { $reader.Dispose() } else { $stream.Dispose() }
+    }
+    [ordered]@{
+        file = $item.Name
+        bytes = [int64]$item.Length
+        sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        operatingSystem = 'windows'
+        architecture = 'amd64'
+        format = 'PE'
+    }
+}
+
 function Get-AndroidSdk {
     if ($env:ANDROID_HOME -and (Test-Path -LiteralPath $env:ANDROID_HOME -PathType Container)) {
         return [IO.Path]::GetFullPath($env:ANDROID_HOME)
@@ -84,6 +112,10 @@ Remove-Item -LiteralPath $metadataPath, $discoveryMetadataPath, $checksumsPath `
 $discoveryPath = Join-Path $artifacts 'bookbox-discovery.exe'
 if (-not (Test-Path -LiteralPath $discoveryPath -PathType Leaf)) {
     throw "BookBox discovery executable does not exist: $discoveryPath"
+}
+$workerPath = Join-Path $artifacts 'bookbox-catalog-worker.exe'
+if (-not (Test-Path -LiteralPath $workerPath -PathType Leaf)) {
+    throw "BookBox catalog worker executable does not exist: $workerPath"
 }
 $apks = @(@(
     Join-Path $artifacts "BookBox-v$Version-debug.apk"
@@ -181,52 +213,17 @@ foreach ($apk in $apks) {
     })
 }
 $metadata = @($metadata | Sort-Object file)
-$discoveryItem = Get-Item -LiteralPath $discoveryPath
-$stream = [IO.File]::Open(
-    $discoveryPath,
-    [IO.FileMode]::Open,
-    [IO.FileAccess]::Read,
-    [IO.FileShare]::Read
-)
-$reader = $null
-try {
-    $reader = [IO.BinaryReader]::new($stream)
-    if ($reader.ReadUInt16() -ne 0x5A4D) {
-        throw 'bookbox-discovery.exe does not have a DOS executable header.'
-    }
-    $stream.Position = 0x3c
-    $peOffset = $reader.ReadInt32()
-    if ($peOffset -lt 0x40 -or $peOffset -gt ($stream.Length - 6)) {
-        throw 'bookbox-discovery.exe has an invalid PE header offset.'
-    }
-    $stream.Position = $peOffset
-    if ($reader.ReadUInt32() -ne 0x00004550) {
-        throw 'bookbox-discovery.exe does not have a PE signature.'
-    }
-    if ($reader.ReadUInt16() -ne 0x8664) {
-        throw 'bookbox-discovery.exe is not an AMD64 Windows executable.'
-    }
-} finally {
-    if ($null -ne $reader) {
-        $reader.Dispose()
-    } else {
-        $stream.Dispose()
-    }
-}
-$discoveryMetadata = [ordered]@{
-    file = $discoveryItem.Name
-    bytes = [int64] $discoveryItem.Length
-    sha256 = (
-        Get-FileHash -LiteralPath $discoveryPath -Algorithm SHA256
-    ).Hash.ToLowerInvariant()
-    operatingSystem = 'windows'
-    architecture = 'amd64'
-    format = 'PE'
+$discoveryMetadata = Get-PEMetadata -Path $discoveryPath
+$workerMetadata = Get-PEMetadata -Path $workerPath
+$help = Invoke-Captured $workerPath @('help')
+if ($help -notmatch '^usage: bookbox-catalog-worker') {
+    throw 'Catalog worker help output is missing or unsafe.'
 }
 $checksumLines = @($metadata | ForEach-Object {
     "$($_.sha256)  $($_.file)"
 })
 $checksumLines += "$($discoveryMetadata.sha256)  $($discoveryMetadata.file)"
+$checksumLines += "$($workerMetadata.sha256)  $($workerMetadata.file)"
 $checksumLines = @($checksumLines | Sort-Object)
 $publicationID = [Guid]::NewGuid().ToString('N')
 $metadataTemporary = "$metadataPath.tmp-$publicationID"
@@ -260,4 +257,4 @@ try {
     Remove-Item -LiteralPath $metadataTemporary, $discoveryMetadataTemporary, $checksumsTemporary `
         -Force -ErrorAction SilentlyContinue
 }
-Write-Host "PASS: verified $($metadata.Count) APK(s) and bookbox-discovery.exe; wrote release metadata and SHA256SUMS.txt."
+Write-Host "PASS: verified $($metadata.Count) APK(s), discovery, and catalog worker; wrote release metadata and SHA256SUMS.txt."

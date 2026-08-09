@@ -38,7 +38,10 @@ type commandMode string
 const (
 	commandRun     commandMode = "run"
 	commandService commandMode = "service"
+	commandHelp    commandMode = "help"
 )
+
+const workerUsage = "usage: bookbox-catalog-worker [run|service] --config <path>"
 
 type workerCommand struct {
 	Mode       commandMode
@@ -56,6 +59,10 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if command.Mode == commandHelp {
+		_, err := fmt.Fprintln(os.Stdout, workerUsage)
+		return err
+	}
 	if command.Mode == commandService {
 		return runServiceCommand(command.ConfigPath)
 	}
@@ -69,6 +76,9 @@ func run(args []string) error {
 }
 
 func parseCommand(args []string) (workerCommand, error) {
+	if len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h") {
+		return workerCommand{Mode: commandHelp}, nil
+	}
 	mode := commandRun
 	modeArgs := args
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
