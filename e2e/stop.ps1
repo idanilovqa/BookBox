@@ -8,6 +8,9 @@ param(
 
     [string] $EnvironmentFile,
 
+    [ValidateSet('Container', 'Hybrid')]
+    [string] $DeploymentMode = 'Container',
+
     [int[]] $OwnedProcessIds = @(),
 
     [int[]] $OwnedLongLivedProcessIds = @(),
@@ -17,6 +20,14 @@ param(
     [string] $EmulatorSerial,
 
     [int[]] $TaskPorts = @(18787, 18474),
+
+    [string] $NativeWorkerExecutable,
+
+    [string] $NativeWorkerConfig,
+
+    [string] $FFProbeFixtureExecutable,
+
+    [string] $FFProbePIDDirectory,
 
     [switch] $ValidateOnly
 )
@@ -163,7 +174,31 @@ function Stop-ExactOwnedProcessTree {
         return
     }
     $rootName = [IO.Path]::GetFileNameWithoutExtension([string] $root.Name)
-    if ($rootName -notmatch '^(adb|emulator|qemu-system-.+)$') {
+    $isTaskProcessName = $rootName -match '^(adb|emulator|qemu-system-.+|bookbox-catalog-worker|ffprobe-fixture)$'
+    if (-not $isTaskProcessName) {
+        # A completed task PID was recycled for an unrelated executable.
+        return
+    }
+    $isAndroid = $rootName -match '^(adb|emulator|qemu-system-.+)$'
+    $isNativeWorker = $rootName -eq 'bookbox-catalog-worker' -and
+        -not [string]::IsNullOrWhiteSpace($script:nativeWorkerExecutablePath) -and
+        [string]::Equals(
+            [IO.Path]::GetFullPath([string] $root.ExecutablePath),
+            $script:nativeWorkerExecutablePath,
+            [StringComparison]::OrdinalIgnoreCase
+        ) -and
+        "$($root.CommandLine)".IndexOf(
+            $script:nativeWorkerConfigPath,
+            [StringComparison]::OrdinalIgnoreCase
+        ) -ge 0
+    $isProbeFixture = $rootName -eq 'ffprobe-fixture' -and
+        -not [string]::IsNullOrWhiteSpace($script:ffprobeFixtureExecutablePath) -and
+        [string]::Equals(
+            [IO.Path]::GetFullPath([string] $root.ExecutablePath),
+            $script:ffprobeFixtureExecutablePath,
+            [StringComparison]::OrdinalIgnoreCase
+        )
+    if ($isTaskProcessName -and -not ($isAndroid -or $isNativeWorker -or $isProbeFixture)) {
         throw "Refusing to stop unexpected owned process $RootProcessId ($rootName)."
     }
     if (-not (Test-OriginalParentChain `
@@ -234,6 +269,24 @@ function Stop-ExactEmulatorSerial {
 }
 
 $scope = Get-ValidatedScope -ComposeProject $ProjectName -RunRoot $TaskRoot
+$script:nativeWorkerExecutablePath = ''
+$script:nativeWorkerConfigPath = ''
+$script:ffprobeFixtureExecutablePath = ''
+if (-not [string]::IsNullOrWhiteSpace($NativeWorkerExecutable)) {
+    $script:nativeWorkerExecutablePath = [IO.Path]::GetFullPath($NativeWorkerExecutable)
+    $script:nativeWorkerConfigPath = [IO.Path]::GetFullPath($NativeWorkerConfig)
+    $script:ffprobeFixtureExecutablePath = [IO.Path]::GetFullPath($FFProbeFixtureExecutable)
+    foreach ($expected in @(
+        @{ Actual = $script:nativeWorkerExecutablePath; Name = 'bookbox-catalog-worker.exe' }
+        @{ Actual = $script:nativeWorkerConfigPath; Name = 'worker-config.yml' }
+        @{ Actual = $script:ffprobeFixtureExecutablePath; Name = 'ffprobe-fixture.exe' }
+    )) {
+        $expectedPath = Join-Path $scope.Root $expected.Name
+        if (-not [string]::Equals($expected.Actual, $expectedPath, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "E2E native cleanup path is outside the exact task artifact: $($expected.Name)"
+        }
+    }
+}
 if ($ValidateOnly) {
     return
 }
@@ -241,6 +294,7 @@ if ($ValidateOnly) {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $baseCompose = Join-Path $repoRoot 'deploy\compose.yml'
 $testCompose = Join-Path $repoRoot 'deploy\compose.test.yml'
+$hybridCompose = Join-Path $repoRoot 'deploy\compose.hybrid.yml'
 if ([string]::IsNullOrWhiteSpace($EnvironmentFile)) {
     $EnvironmentFile = Join-Path $scope.Root 'compose.env'
 }
@@ -252,18 +306,27 @@ if (-not (Test-Path -LiteralPath $environmentPath -PathType Leaf)) {
 $cleanupErrors = [Collections.Generic.List[string]]::new()
 $safeToDelete = $true
 try {
-    $null = Invoke-DockerChecked @(
+    $cleanupComposeArgs = @(
         'compose',
         '--project-name', $ProjectName,
         '--env-file', $environmentPath,
         '-f', $baseCompose,
-        '-f', $testCompose,
+        '-f', $testCompose
+    )
+    if ($DeploymentMode -eq 'Container') {
+        $cleanupComposeArgs = @('compose', '--profile', 'container-worker') +
+            $cleanupComposeArgs[1..($cleanupComposeArgs.Count - 1)]
+    } else {
+        $cleanupComposeArgs += @('-f', $hybridCompose)
+    }
+    $cleanupComposeArgs += @(
         'down',
         '--volumes',
         '--rmi', 'local',
         '--remove-orphans',
         '--timeout', '20'
     )
+    $null = Invoke-DockerChecked $cleanupComposeArgs
 } catch {
     $cleanupErrors.Add("Compose cleanup: $($_.Exception.Message)")
 }
@@ -322,6 +385,49 @@ foreach ($processID in $OwnedLongLivedProcessIds) {
     }
 }
 
+if (-not [string]::IsNullOrWhiteSpace($FFProbePIDDirectory)) {
+    $markerRoot = [IO.Path]::GetFullPath($FFProbePIDDirectory).TrimEnd('\')
+    $expectedMarkerRoot = (Join-Path $scope.Root 'ffprobe-pids').TrimEnd('\')
+    if (-not [string]::Equals($markerRoot, $expectedMarkerRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'E2E ffprobe PID marker directory is outside the task scope.'
+    }
+    $fixtureProcessIds = [Collections.Generic.List[int]]::new()
+    foreach ($marker in @(Get-ChildItem -LiteralPath $markerRoot -ErrorAction Stop)) {
+        $markerMatch = [regex]::Match($marker.Name, '^([1-9][0-9]{0,9})\.pid$')
+        if (-not $markerMatch.Success -or $marker.PSIsContainer -or
+            $marker.Attributes -band [IO.FileAttributes]::ReparsePoint -or
+            $marker.Length -gt 16 -or
+            (Get-Content -Raw -LiteralPath $marker.FullName).Trim() -cne $markerMatch.Groups[1].Value) {
+            throw "Invalid task-scoped ffprobe PID marker: $($marker.Name)"
+        }
+        $fixturePID = [int] $markerMatch.Groups[1].Value
+        $fixtureProcessIds.Add($fixturePID) | Out-Null
+        $fixtureProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $fixturePID" -ErrorAction SilentlyContinue
+        if ($null -ne $fixtureProcess -and [string]::Equals(
+            [IO.Path]::GetFullPath([string] $fixtureProcess.ExecutablePath),
+            $script:ffprobeFixtureExecutablePath,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+            try {
+                Stop-ExactOwnedProcessTree -RootProcessId $fixturePID
+            } catch {
+                $cleanupErrors.Add("Owned ffprobe fixture $fixturePID cleanup: $($_.Exception.Message)")
+            }
+        }
+    }
+    foreach ($fixturePID in $fixtureProcessIds) {
+        $remainingFixture = Get-CimInstance Win32_Process -Filter "ProcessId = $fixturePID" -ErrorAction SilentlyContinue
+        if ($null -ne $remainingFixture -and [string]::Equals(
+            [IO.Path]::GetFullPath([string] $remainingFixture.ExecutablePath),
+            $script:ffprobeFixtureExecutablePath,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+            $safeToDelete = $false
+            $cleanupErrors.Add("Owned ffprobe fixture remains: $fixturePID")
+        }
+    }
+}
+
 $listeners = foreach ($port in $TaskPorts) {
     Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue
 }
@@ -333,18 +439,20 @@ if (@($listeners).Count -ne 0) {
     $cleanupErrors.Add("Task-scoped port listener remains: $($listenerSummary -join ', ')")
 }
 
-$ownedAlive = foreach ($processID in @(
-    $OwnedProcessIds + $OwnedLongLivedProcessIds
-)) {
+$ownedAlive = foreach ($processID in $OwnedLongLivedProcessIds) {
     if ($processID -le 0) {
         continue
     }
-    Get-Process -Id $processID -ErrorAction SilentlyContinue
+    $ownedProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $processID" -ErrorAction SilentlyContinue
+    if ($null -eq $ownedProcess) { continue }
+    $ownedName = [IO.Path]::GetFileNameWithoutExtension([string] $ownedProcess.Name)
+    $isTaskProcessName = $ownedName -match '^(adb|emulator|qemu-system-.+|bookbox-catalog-worker|ffprobe-fixture)$'
+    if ($isTaskProcessName) { $ownedProcess }
 }
 if (@($ownedAlive).Count -ne 0) {
     $safeToDelete = $false
     $processSummary = @($ownedAlive | ForEach-Object {
-        "$($_.Id):$($_.ProcessName)"
+        "$($_.ProcessId):$([IO.Path]::GetFileNameWithoutExtension([string]$_.Name))"
     })
     $cleanupErrors.Add("Owned E2E process remains: $($processSummary -join ', ')")
 }

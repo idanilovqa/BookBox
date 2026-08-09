@@ -7,7 +7,7 @@ param(
     [string] $RawRootId = 'audiobooks',
     [string] $PreviousCompletedAt,
     [string] $ExpectedRawRelativePath,
-    [ValidateRange(1, 300)]
+    [ValidateRange(1, 1800)]
     [int] $TimeoutSeconds = 120,
     [switch] $HarnessInvocation
 )
@@ -21,7 +21,7 @@ if (-not $HarnessInvocation) {
         throw 'BaseUrl and Password are supplied only by the task-scoped E2E harness.'
     }
     $run = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\run.ps1'))
-    & $run -CatalogSearchOnly -TimeoutSeconds $TimeoutSeconds
+    & $run -CatalogSearchOnly -DeploymentMode Hybrid -TimeoutSeconds $TimeoutSeconds
     if (-not $?) {
         throw 'The focused catalog-search E2E harness failed.'
     }
@@ -327,4 +327,6 @@ Assert-NoPrivatePath -Value $cursorRaw
     RawCompletedAt = "$($raw.snapshot.completedAt)"
     AudiobookSnapshotCount = $snapshotRoots.Count
     DuplicateGroupId = "$($duplicateGroups[0].groupId)"
+    BookOrder = $bookOrder
+    RawOrder = $rawOrder
 }

@@ -12,6 +12,26 @@ if (-not (Test-Path -LiteralPath $runnerPath -PathType Leaf)) {
     throw 'Shared E2E process runner is missing.'
 }
 $runnerText = Get-Content -Raw -LiteralPath $runnerPath
+$composeTestPath = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'deploy\compose.test.yml'
+$hybridComposePath = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'deploy\compose.hybrid.yml'
+$fixturePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'support\ffprobe-fixture\main.go'
+$composeTestText = Get-Content -Raw -LiteralPath $composeTestPath
+$hybridComposeText = Get-Content -Raw -LiteralPath $hybridComposePath
+$stopPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'stop.ps1'
+$stopText = Get-Content -Raw -LiteralPath $stopPath
+$catalogPath = Join-Path $PSScriptRoot 'catalog-search.tests.ps1'
+foreach ($powershellPath in @($scriptPath, $stopPath, $catalogPath)) {
+    $tokens = $null
+    $parseErrors = $null
+    $null = [Management.Automation.Language.Parser]::ParseFile(
+        $powershellPath,
+        [ref] $tokens,
+        [ref] $parseErrors
+    )
+    if ($parseErrors.Count -ne 0) {
+        throw "PowerShell syntax error in $([IO.Path]::GetFileName($powershellPath)): $($parseErrors[0].Message)"
+    }
+}
 
 $requirements = [ordered]@{
     'unique project' = 'bookbox-e2e-\$runID'
@@ -64,6 +84,34 @@ $requirements = [ordered]@{
     'finally cleanup' = '(?s)finally\s*\{.*stop\.ps1'
     'final success line' =
         'BookBox E2E passed; owned processes and ports are clean'
+    'hybrid deployment parameter' = '(?s)\[ValidateSet\(''Container'', ''Hybrid''\)\].*?\[string\] \$DeploymentMode'
+    'hybrid catalog gate' = '(?s)CatalogSearchOnly.*?DeploymentMode.*?Hybrid'
+    'hybrid compose override' = 'compose\.hybrid\.yml'
+    'loopback PostgreSQL port' = 'BOOKBOX_POSTGRES_HOST_PORT=55432'
+    'native worker build' = 'bookbox-catalog-worker\.exe'
+    'native fixture build' = 'ffprobe-fixture\.exe'
+    'pinned Go image' = 'golang:1\.26\.5'
+    'native worker config' = 'worker-config\.yml'
+    'external probe path' = 'BOOKBOX_FFPROBE_PATH'
+    'native worker interactive mode' = '''run'', ''--config'', \$workerConfig'
+    'owned native worker' = '(?s)function Start-OwnedProcess.*?ownedLongLivedProcessIds\.Add.*?Start-OwnedProcess.*?native-worker'
+    'six-hour fallback' = 'BOOKBOX_TEST_SCAN_INTERVAL=6h'
+    'exact native PID stop' = 'Stop-OwnedNativeWorker\s+-Process\s+\$nativeWorkerProcess'
+    'exact task root audit' = '(?s)taskRoot.*?OwnedLongLivedProcessIds.*?TaskPorts'
+    'hybrid dummy fixtures' = "(?s)DeploymentMode\s+-eq\s+'Container'.*?ffmpegBase.*?else\s*\{.*?task-scoped ffprobe fixture input"
+    'fixture PID marker directory' = 'BOOKBOX_FFPROBE_FIXTURE_PID_DIRECTORY'
+    'stable database-only order' = '(?s)databaseOnlySearch\.BookOrder.*?monitoredSearch\.BookOrder.*?databaseOnlySearch\.RawOrder.*?monitoredSearch\.RawOrder'
+    'runtime PostgreSQL binding gate' = "Assert-TaskPortBound\s+-Service\s+'postgres'\s+-ContainerPort\s+5432\s+-HostPort\s+55432\s+-Name\s+'PostgreSQL'"
+    'runtime PostgreSQL TCP gate' = '(?s)function Assert-TaskPortBound.*?TcpClient.*?ConnectAsync.*?127\.0\.0\.1'
+    'array-safe binding capture' = '(?s)\$actual\s*=\s*@\(\s*@\(Invoke-DockerChecked.*?Where-Object.*?\)'
+    'hybrid native stop before container stop' = "(?s)if\s*\(\s*\`$DeploymentMode\s+-eq\s+'Hybrid'\s*\)\s*\{\s*Stop-OwnedNativeWorker.*?\}\s*else\s*\{\s*Invoke-DockerChecked.*?'stop'.*?bookbox-catalog-worker"
+    'container-only worker restart' = "(?s)if\s*\(\s*\`$DeploymentMode\s+-eq\s+'Container'.*?\)\s*\{\s*Invoke-DockerChecked.*?'up'.*?bookbox-catalog-worker"
+    'hybrid-only PostgreSQL reservation' = "(?s)if\s*\(\s*\`$DeploymentMode\s+-eq\s+'Hybrid'\s*\)\s*\{.*?taskPorts\.Add\(55432\)"
+    'hybrid-only PostgreSQL environment' = "(?s)if\s*\(\s*\`$DeploymentMode\s+-eq\s+'Hybrid'\s*\)\s*\{.*?BOOKBOX_POSTGRES_HOST_PORT=55432"
+    'hybrid-only PostgreSQL gate' = "(?s)if\s*\(\s*\`$DeploymentMode\s+-eq\s+'Hybrid'\s*\)\s*\{.*?Assert-TaskPortBound.*?postgres"
+    'provider runtime binding gate' = "Assert-TaskPortBound\s+-Service\s+'provider-fixtures'\s+-ContainerPort\s+8080\s+-HostPort\s+18080"
+    'generalized runtime binding helper' = '(?s)function Assert-TaskPortBound.*?\$Service.*?\$ContainerPort.*?\$HostPort'
+    'identity-safe native worker stop' = '(?s)function Stop-OwnedNativeWorker.*?\$Process\.HasExited.*?MainModule\.FileName.*?CommandLine.*?\$Process\.Kill\(\).*?\$Process\.WaitForExit\(15000\)'
 }
 foreach ($entry in $requirements.GetEnumerator()) {
     if ($runText -notmatch $entry.Value) {
@@ -99,6 +147,48 @@ if ($runText -match '(?i)\badb(?:\.exe)?\s+kill-server\b') {
 }
 if ($runText -match '(?i)\bstart-server\b') {
     throw 'E2E must own an explicit nodaemon adb server instead of a daemon handoff.'
+}
+if ($composeTestText -notmatch '(?s)provider-fixtures:.*?published:\s*"?\$\{BOOKBOX_TEST_PROVIDER_HOST_PORT:-18080\}"?.*?host_ip:\s*127\.0\.0\.1') {
+    throw 'Hybrid E2E provider fixtures must publish a task-scoped loopback port.'
+}
+if ($hybridComposeText -notmatch '(?s)postgres:.*?networks:.*?backend.*?hybrid-postgres-host' -or
+    $hybridComposeText -notmatch '(?s)networks:.*?hybrid-postgres-host:' -or
+    [regex]::Matches($hybridComposeText, 'hybrid-postgres-host').Count -ne 2) {
+    throw 'Hybrid PostgreSQL must alone join a dedicated non-internal host bridge while retaining backend.'
+}
+if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) {
+    throw 'Task-scoped external ffprobe fixture source is missing.'
+}
+$fixtureText = Get-Content -Raw -LiteralPath $fixturePath
+foreach ($canonicalCheck in @(
+    'samePath\(manifestAbsolute, manifestPath\)',
+    'samePath\(inputAbsolute, input\)',
+    'samePath\(pidAbsolute, pidRoot\)'
+)) {
+    if ($fixtureText -notmatch $canonicalCheck) {
+        throw "ffprobe fixture must reject a reparse-point candidate: $canonicalCheck"
+    }
+}
+if ($stopText -notmatch '(?s)DeploymentMode.*?compose\.hybrid\.yml.*?cleanupComposeArgs' -or
+    $stopText -notmatch '(?s)ffprobe-pids.*?ExecutablePath.*?ffprobeFixtureExecutablePath') {
+    throw 'E2E cleanup must use exact hybrid Compose scope and PID-reuse-safe fixture auditing.'
+}
+foreach ($pidReuseContract in @(
+    '(?s)function Stop-ExactOwnedProcessTree.*?\$isTaskProcessName.*?if\s*\(-not \$isTaskProcessName\)\s*\{.*?return',
+    '(?s)if\s*\(\$isTaskProcessName -and -not \(\$isAndroid -or \$isNativeWorker -or \$isProbeFixture\)\).*?Refusing to stop',
+    '(?s)\$ownedAlive.*?Get-CimInstance Win32_Process.*?\$isTaskProcessName'
+)) {
+    if ($stopText -notmatch $pidReuseContract) {
+        throw "E2E cleanup is not PID-reuse safe: $pidReuseContract"
+    }
+}
+$nativeStop = [regex]::Match(
+    $runText,
+    '(?s)function Stop-OwnedNativeWorker\s*\{.*?(?=\r?\nfunction )'
+)
+if (-not $nativeStop.Success -or
+    $nativeStop.Value -match 'Stop-OwnedProcessTree|Stop-Process|-RootProcessId') {
+    throw 'Native worker stop must use the validated original process handle, not an ID-only kill helper.'
 }
 if ($runText -match '&\s+\$(?:adb|AdbPath)\b') {
     throw 'Every adb invocation must use the bounded monitored helper.'

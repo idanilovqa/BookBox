@@ -68,6 +68,12 @@ services:
         source: ../e2e/provider-fixtures/nginx.conf
         target: /etc/nginx/nginx.conf
         read_only: true
+    ports:
+      - name: provider-http
+        target: 8080
+        published: "${BOOKBOX_TEST_PROVIDER_HOST_PORT:-18080}"
+        host_ip: 127.0.0.1
+        protocol: tcp
     networks:
       - outbound
     healthcheck:

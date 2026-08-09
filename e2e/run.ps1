@@ -2,7 +2,9 @@
 param(
     [ValidateRange(60, 1800)]
     [int] $TimeoutSeconds = 600,
-    [switch] $CatalogSearchOnly
+    [switch] $CatalogSearchOnly,
+    [ValidateSet('Container', 'Hybrid')]
+    [string] $DeploymentMode = 'Container'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +15,7 @@ $processRunner = Join-Path $PSScriptRoot 'process-runner.ps1'
 $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $baseCompose = Join-Path $repoRoot 'deploy\compose.yml'
 $testCompose = Join-Path $repoRoot 'deploy\compose.test.yml'
+$hybridCompose = Join-Path $repoRoot 'deploy\compose.hybrid.yml'
 $manifestScript = Join-Path $PSScriptRoot 'library-manifest.ps1'
 $runID = [Guid]::NewGuid().ToString('N')
 $project = "bookbox-e2e-$runID"
@@ -24,6 +27,12 @@ $library = Join-Path $taskRoot 'library'
 $secrets = Join-Path $taskRoot 'secrets'
 $logs = Join-Path $taskRoot 'logs'
 $config = Join-Path $taskRoot 'config.yml'
+$workerConfig = Join-Path $taskRoot 'worker-config.yml'
+$probeManifest = Join-Path $taskRoot 'ffprobe-manifest.json'
+$nativeWorkerExecutable = Join-Path $taskRoot 'bookbox-catalog-worker.exe'
+$ffprobeFixtureExecutable = Join-Path $taskRoot 'ffprobe-fixture.exe'
+$ffprobePIDDirectory = Join-Path $taskRoot 'ffprobe-pids'
+$coverBackups = Join-Path $taskRoot 'cover-backups'
 $environmentFile = Join-Path $taskRoot 'compose.env'
 $sourceBefore = Join-Path $taskRoot 'source-before.json'
 $sourceAfter = Join-Path $taskRoot 'source-after.json'
@@ -33,21 +42,29 @@ $ownedLongLivedProcessIds = [Collections.Generic.List[int]]::new()
 $taskPorts = [Collections.Generic.List[int]]::new()
 $taskPorts.Add(18787)
 $taskPorts.Add(18474)
+$taskPorts.Add(18080)
 $adb = ''
 $emulatorSerial = ''
 $composeArgs = @(
     'compose',
-    '--profile', 'container-worker',
     '--project-name', $project,
     '--env-file', $environmentFile,
     '-f', $baseCompose,
     '-f', $testCompose
 )
+if ($DeploymentMode -eq 'Container') {
+    $composeArgs = @('compose', '--profile', 'container-worker') + $composeArgs[1..($composeArgs.Count - 1)]
+}
+if ($DeploymentMode -eq 'Hybrid') {
+    $taskPorts.Add(55432)
+    $composeArgs += @('-f', $hybridCompose)
+}
 $username = 'owner'
 $password = 'bookbox-e2e-password'
 $primaryFailure = $null
 $focusedCatalogSearchComplete = $false
 $adbInvocationID = 0
+$nativeWorkerProcess = $null
 
 function Write-Utf8 {
     param(
@@ -128,6 +145,149 @@ function Stop-OwnedProcessTree {
         Start-Sleep -Milliseconds 250
     } while ([DateTime]::UtcNow -lt $deadline)
     throw "Owned process tree did not exit: $($alive -join ', ')"
+}
+
+function Start-OwnedProcess {
+    param(
+        [Parameter(Mandatory)][string] $FilePath,
+        [Parameter(Mandatory)][string[]] $Arguments,
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)][string] $WorkingDirectory
+    )
+    $stdout = Join-Path $logs "$Name.stdout.log"
+    $stderr = Join-Path $logs "$Name.stderr.log"
+    $process = Start-Process `
+        -FilePath $FilePath `
+        -ArgumentList (($Arguments | ForEach-Object {
+            ConvertTo-ProcessArgument $_
+        }) -join ' ') `
+        -WorkingDirectory $WorkingDirectory `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $stdout `
+        -RedirectStandardError $stderr `
+        -PassThru
+    $ownedLongLivedProcessIds.Add($process.Id) | Out-Null
+    Start-Sleep -Milliseconds 250
+    $process.Refresh()
+    if ($process.HasExited) {
+        throw "$Name exited during startup; see $Name.stdout.log and $Name.stderr.log"
+    }
+    $process
+}
+
+function Assert-TaskPortBound {
+    param(
+        [Parameter(Mandatory)][string] $Service,
+        [Parameter(Mandatory)][int] $ContainerPort,
+        [Parameter(Mandatory)][int] $HostPort,
+        [Parameter(Mandatory)][string] $Name
+    )
+    $expected = "127.0.0.1:$HostPort"
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $actual = @(@(Invoke-DockerChecked ($composeArgs + @(
+            'port', $Service, "$ContainerPort"
+        ))) | Where-Object { -not [string]::IsNullOrWhiteSpace("$_") })
+        $mappingReady = $actual.Count -eq 1 -and
+            "$($actual[0])".Trim() -ceq $expected
+        $tcpReady = $false
+        if ($mappingReady) {
+            $client = [Net.Sockets.TcpClient]::new()
+            try {
+                $connect = $client.ConnectAsync('127.0.0.1', $HostPort)
+                if ($connect.Wait(500)) {
+                    $connect.GetAwaiter().GetResult()
+                    $tcpReady = $client.Connected
+                }
+            } catch {
+                $tcpReady = $false
+            } finally {
+                $client.Dispose()
+            }
+        }
+        if ($mappingReady -and $tcpReady) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "$Name did not publish its exact task-scoped loopback port."
+}
+
+function Start-NativeCatalogWorker {
+    $saved = @{
+        FFProbe = $env:BOOKBOX_FFPROBE_PATH
+        FixtureRoot = $env:BOOKBOX_FFPROBE_FIXTURE_ROOT
+        FixtureManifest = $env:BOOKBOX_FFPROBE_FIXTURE_MANIFEST
+        FixturePIDs = $env:BOOKBOX_FFPROBE_FIXTURE_PID_DIRECTORY
+        ScanInterval = $env:BOOKBOX_SCAN_INTERVAL
+        OpenLibrary = $env:BOOKBOX_OPENLIBRARY_BASE_URL
+        GoogleBooks = $env:BOOKBOX_GOOGLE_BOOKS_BASE_URL
+    }
+    try {
+        $env:BOOKBOX_FFPROBE_PATH = $ffprobeFixtureExecutable
+        $env:BOOKBOX_FFPROBE_FIXTURE_ROOT = $taskRoot
+        $env:BOOKBOX_FFPROBE_FIXTURE_MANIFEST = $probeManifest
+        $env:BOOKBOX_FFPROBE_FIXTURE_PID_DIRECTORY = $ffprobePIDDirectory
+        $env:BOOKBOX_SCAN_INTERVAL = '6h'
+        $env:BOOKBOX_OPENLIBRARY_BASE_URL = 'http://127.0.0.1:18080/openlibrary'
+        $env:BOOKBOX_GOOGLE_BOOKS_BASE_URL = 'http://127.0.0.1:18080/googlebooks'
+        Start-OwnedProcess `
+            -FilePath $nativeWorkerExecutable `
+            -Arguments @('run', '--config', $workerConfig) `
+            -Name 'native-worker' `
+            -WorkingDirectory $taskRoot
+    } finally {
+        $env:BOOKBOX_FFPROBE_PATH = $saved.FFProbe
+        $env:BOOKBOX_FFPROBE_FIXTURE_ROOT = $saved.FixtureRoot
+        $env:BOOKBOX_FFPROBE_FIXTURE_MANIFEST = $saved.FixtureManifest
+        $env:BOOKBOX_FFPROBE_FIXTURE_PID_DIRECTORY = $saved.FixturePIDs
+        $env:BOOKBOX_SCAN_INTERVAL = $saved.ScanInterval
+        $env:BOOKBOX_OPENLIBRARY_BASE_URL = $saved.OpenLibrary
+        $env:BOOKBOX_GOOGLE_BOOKS_BASE_URL = $saved.GoogleBooks
+    }
+}
+
+function Stop-OwnedNativeWorker {
+    param([Parameter(Mandatory)][Diagnostics.Process] $Process)
+
+    $Process.Refresh()
+    if ($Process.HasExited) {
+        return
+    }
+    $expectedExecutable = [IO.Path]::GetFullPath($nativeWorkerExecutable)
+    try {
+        $handleExecutable = [IO.Path]::GetFullPath($Process.MainModule.FileName)
+        $owned = Get-CimInstance Win32_Process -Filter "ProcessId = $($Process.Id)" -ErrorAction Stop
+        $identityMatches = $null -ne $owned -and
+            [IO.Path]::GetFileNameWithoutExtension([string]$owned.Name) -ceq 'bookbox-catalog-worker' -and
+            [string]::Equals($handleExecutable, $expectedExecutable, [StringComparison]::OrdinalIgnoreCase) -and
+            [string]::Equals(
+                [IO.Path]::GetFullPath([string]$owned.ExecutablePath),
+                $expectedExecutable,
+                [StringComparison]::OrdinalIgnoreCase
+            ) -and
+            "$($owned.CommandLine)".IndexOf(
+                [IO.Path]::GetFullPath($workerConfig),
+                [StringComparison]::OrdinalIgnoreCase
+            ) -ge 0
+    } catch {
+        $Process.Refresh()
+        if ($Process.HasExited) { return }
+        throw 'Refusing to stop a native worker whose process identity could not be verified.'
+    }
+    if (-not $identityMatches) {
+        throw 'Refusing to stop a native worker whose process identity changed.'
+    }
+    try {
+        $Process.Kill()
+    } catch [InvalidOperationException] {
+        $Process.Refresh()
+        if (-not $Process.HasExited) { throw }
+        return
+    }
+    if (-not $Process.WaitForExit(15000)) {
+        throw 'Native worker did not exit within the bounded shutdown timeout.'
+    }
 }
 
 function Invoke-MonitoredProcess {
@@ -469,7 +629,7 @@ if (
 ) {
     throw 'Refusing an unsafe E2E temporary root.'
 }
-foreach ($port in @(18787, 18474)) {
+foreach ($port in $taskPorts) {
     if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue) {
         throw "Task-scoped port $port is already in use."
     }
@@ -477,7 +637,7 @@ foreach ($port in @(18787, 18474)) {
 
 try {
     $null = New-Item -ItemType Directory -Path `
-        $library, $secrets, $logs -Force
+        $library, $secrets, $logs, $ffprobePIDDirectory, $coverBackups -Force
     $primaryLibrary = Join-Path $library 'primary'
     $archiveLibrary = Join-Path $library 'archive'
     $normal = Join-Path $primaryLibrary 'Author One\Normal Book'
@@ -489,16 +649,17 @@ try {
     $nested = Join-Path $primaryLibrary 'Needlebox Nested\Needlebox Assets'
     $emptyFolder = Join-Path $primaryLibrary 'Empty Folder'
     $archiveBook = Join-Path $archiveLibrary 'Archive Author\Archive Needlebox'
+    $monitorFolder = Join-Path $primaryLibrary 'Monitor Trigger'
     $null = New-Item -ItemType Directory -Path `
         $normal, $shared, $copyOne, $copyTwo, $otherNarrator, $longRecording, $nested,
-        $emptyFolder, $archiveBook -Force
+        $emptyFolder, $archiveBook, $monitorFolder -Force
     Write-Utf8 -Path (Join-Path $primaryLibrary 'notes.txt') -Value 'not catalog content'
 
     $composePath = {
         param([string] $Path)
         [IO.Path]::GetFullPath($Path).Replace('\', '/')
     }
-    $environment = @(
+    $environmentEntries = @(
         "BOOKBOX_LIBRARY_PATH=$(& $composePath $library)"
         "BOOKBOX_TEST_LIBRARY_PATH=$(& $composePath $library)"
         "BOOKBOX_CONFIG_HOST_FILE=$(& $composePath $config)"
@@ -513,8 +674,13 @@ try {
         "BOOKBOX_TEST_GOOGLE_BOOKS_KEY_HOST_FILE=$(& $composePath (Join-Path $secrets 'google_books_key.txt'))"
         'BOOKBOX_BIND_ADDRESS=127.0.0.1'
         'BOOKBOX_HOST_PORT=18787'
+        'BOOKBOX_TEST_PROVIDER_HOST_PORT=18080'
         'BOOKBOX_TEST_SCAN_INTERVAL=6h'
-    ) -join [Environment]::NewLine
+    )
+    if ($DeploymentMode -eq 'Hybrid') {
+        $environmentEntries += 'BOOKBOX_POSTGRES_HOST_PORT=55432'
+    }
+    $environment = $environmentEntries -join [Environment]::NewLine
     # Create this before any fallible fixture setup so finally cleanup can
     # always resolve the unique Compose project and remove the task root.
     Write-Utf8 -Path $environmentFile -Value $environment
@@ -540,6 +706,26 @@ database:
   password_file: /run/bookbox-secrets/postgres_password
   ssl_mode: disable
 '@
+    Write-Utf8 -Path $workerConfig -Value @"
+roots:
+  - id: audiobooks
+    name: Audiobooks
+    path: '$primaryLibrary'
+  - id: archive
+    name: Archive
+    path: '$archiveLibrary'
+database:
+  host: 127.0.0.1
+  port: 55432
+  name: bookbox
+  username: bookbox
+  password_file: '$(Join-Path $secrets 'postgres_password.txt')'
+  ssl_mode: disable
+worker:
+  cover_backup_root: '$coverBackups'
+  log_directory: '$logs'
+  google_books_api_key_file: '$(Join-Path $secrets 'google_books_key.txt')'
+"@
     Write-Utf8 `
         -Path (Join-Path $secrets 'app_password_hash.txt') `
         -Value 'pending-build-generated-hash'
@@ -557,9 +743,33 @@ database:
         -Value 'fixture-only-google-books-key'
 
     $docker = (Get-Command docker -ErrorAction Stop).Source
+    if ($DeploymentMode -eq 'Hybrid') {
+        $repoMount = & $composePath $repoRoot
+        $outputMount = & $composePath $taskRoot
+        $buildScript = 'set -eu; export GOOS=windows GOARCH=amd64 CGO_ENABLED=0; cd /src/server; go build -trimpath -o /out/bookbox-catalog-worker.exe ./cmd/bookbox-catalog-worker; go build -trimpath -o /out/ffprobe-fixture.exe /src/e2e/support/ffprobe-fixture/main.go'
+        Invoke-MonitoredProcess `
+            -FilePath $docker `
+            -Arguments @(
+                'run', '--rm',
+                '--volume', "${repoMount}:/src:ro",
+                '--volume', "${outputMount}:/out",
+                'golang:1.26.5', 'sh', '-c', $buildScript
+            ) `
+            -Name 'native-windows-build' `
+            -WorkingDirectory $repoRoot
+        foreach ($artifact in @($nativeWorkerExecutable, $ffprobeFixtureExecutable)) {
+            if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+                throw "Pinned Windows build did not produce $([IO.Path]::GetFileName($artifact))."
+            }
+        }
+    }
+    $composeBuildArguments = $composeArgs + @('build')
+    if ($DeploymentMode -eq 'Hybrid') {
+        $composeBuildArguments += @('bookbox-api')
+    }
     Invoke-MonitoredProcess `
         -FilePath $docker `
-        -Arguments ($composeArgs + @('build')) `
+        -Arguments $composeBuildArguments `
         -Name 'compose-build' `
         -WorkingDirectory $repoRoot
 
@@ -584,6 +794,7 @@ database:
         -Path (Join-Path $secrets 'app_password_hash.txt') `
         -Value $passwordHash
 
+    if ($DeploymentMode -eq 'Container') {
     $ffmpegBase = $composeArgs + @(
         'run', '--rm', '--no-deps', '--entrypoint', 'ffmpeg',
         'bookbox-catalog-worker',
@@ -661,6 +872,29 @@ database:
         '-frames:v', '1', '-y',
         '/library/audiobooks/primary/Needlebox Nested/Needlebox Assets/cover.jpg'
     )) | Out-Null
+    } else {
+        foreach ($audioPath in @(
+            (Join-Path $normal 'chapter01.mp3'),
+            (Join-Path $normal 'chapter02.mp3'),
+            (Join-Path $shared 'Dune.m4b'),
+            (Join-Path $shared 'Dune Messiah.m4b'),
+            (Join-Path $copyOne 'Needlebox.m4b'),
+            (Join-Path $copyTwo 'Needlebox.m4b'),
+            (Join-Path $otherNarrator 'Needlebox.m4b'),
+            (Join-Path $longRecording 'Needlebox.m4b'),
+            (Join-Path $archiveBook 'Needlebox Archive.m4b')
+        )) {
+            Write-Utf8 -Path $audioPath -Value 'task-scoped ffprobe fixture input'
+        }
+        $jpeg = [Convert]::FromBase64String('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAEf/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/EB//xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/EB//xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/EB//2Q==')
+        foreach ($coverPath in @(
+            (Join-Path $normal 'cover.jpg'),
+            (Join-Path $shared 'folder.jpg'),
+            (Join-Path $nested 'cover.jpg')
+        )) {
+            [IO.File]::WriteAllBytes($coverPath, $jpeg)
+        }
+    }
 
     $providerFixtureText = @(
         Get-Content -Raw -LiteralPath (
@@ -675,6 +909,19 @@ database:
     ) {
         throw 'E2E metadata fixtures must not offer a replacement cover.'
     }
+    $probeEntries = @(
+        @{ path = 'library/primary/Author One/Normal Book/chapter01.mp3'; title = 'Normal Book'; author = 'Author One'; narrator = 'Narrator One'; duration = '12' }
+        @{ path = 'library/primary/Author One/Normal Book/chapter02.mp3'; title = 'Normal Book'; author = 'Author One'; narrator = 'Narrator One'; duration = '12' }
+        @{ path = 'library/primary/Author Two/Shared Folder/Dune.m4b'; title = 'Dune'; author = 'Frank Herbert'; narrator = 'Narrator One'; duration = '12' }
+        @{ path = 'library/primary/Author Two/Shared Folder/Dune Messiah.m4b'; title = 'Dune Messiah'; author = 'Frank Herbert'; narrator = 'Narrator One'; duration = '12' }
+        @{ path = 'library/primary/Frank Herbert/Needlebox Copy One/Needlebox.m4b'; title = 'Needlebox'; author = 'Frank Herbert'; narrator = 'Shared Narrator'; duration = '12' }
+        @{ path = 'library/primary/Frank Herbert/Needlebox Copy Two/Needlebox.m4b'; title = 'Needlebox'; author = 'Frank Herbert'; narrator = 'Shared Narrator'; duration = '12' }
+        @{ path = 'library/primary/Frank Herbert/Needlebox Other Narrator/Needlebox.m4b'; title = 'Needlebox'; author = 'Frank Herbert'; narrator = 'Other Narrator'; duration = '12' }
+        @{ path = 'library/primary/Frank Herbert/Needlebox Long Recording/Needlebox.m4b'; title = 'Needlebox'; author = 'Frank Herbert'; narrator = 'Shared Narrator'; duration = '180' }
+        @{ path = 'library/archive/Archive Author/Archive Needlebox/Needlebox Archive.m4b'; title = 'Needlebox'; author = 'Archive Author'; narrator = 'Archive Narrator'; duration = '12' }
+        @{ path = 'library/primary/Monitor Trigger/Needlebox Watched.mp3'; title = 'Needlebox Watched'; author = 'Author One'; narrator = 'Narrator One'; duration = '12' }
+    )
+    Write-Utf8 -Path $probeManifest -Value ($probeEntries | ConvertTo-Json -Depth 4)
 
     & $manifestScript -Path $library -OutputPath $sourceBefore
     Invoke-MonitoredProcess `
@@ -684,6 +931,11 @@ database:
         )) `
         -Name 'compose-up' `
         -WorkingDirectory $repoRoot
+
+    Assert-TaskPortBound -Service 'provider-fixtures' -ContainerPort 8080 -HostPort 18080 -Name 'Provider fixtures'
+    if ($DeploymentMode -eq 'Hybrid') {
+        Assert-TaskPortBound -Service 'postgres' -ContainerPort 5432 -HostPort 55432 -Name 'PostgreSQL'
+    }
 
     Wait-Toxiproxy
     $proxyBody = '{"name":"bookbox","listen":"0.0.0.0:18787","upstream":"bookbox-api:8787"}'
@@ -701,6 +953,9 @@ database:
         -BaseUrl 'http://127.0.0.1:18787' `
         -TimeoutSeconds 180
     Assert-ApiVersion
+    if ($DeploymentMode -eq 'Hybrid') {
+        $nativeWorkerProcess = Start-NativeCatalogWorker
+    }
 
     $catalogSearchTest = Join-Path $PSScriptRoot 'tests\catalog-search.tests.ps1'
     $initialSearch = @(& $catalogSearchTest `
@@ -717,54 +972,8 @@ database:
         throw 'Initial catalog-search E2E did not return its sanitized result summary.'
     }
 
-    # Prove both request paths use PostgreSQL after publication. Stop the only
-    # source reader, temporarily withdraw the two disposable configured roots,
-    # and restore them exactly even when an assertion fails.
-    Invoke-DockerChecked ($composeArgs + @('stop', 'bookbox-catalog-worker')) | Out-Null
-    $withdrawn = Join-Path $taskRoot 'withdrawn-library'
-    $null = New-Item -ItemType Directory -Path $withdrawn -Force
-    try {
-        Move-Item -LiteralPath $primaryLibrary -Destination $withdrawn
-        Move-Item -LiteralPath $archiveLibrary -Destination $withdrawn
-        $null = & $catalogSearchTest `
-            -HarnessInvocation `
-            -BaseUrl 'http://127.0.0.1:18787' `
-            -Username $username `
-            -Password $password `
-            -RootIds @('audiobooks', 'archive') `
-            -RawRootId 'audiobooks' `
-            -TimeoutSeconds 30
-    } finally {
-        foreach ($rootName in @('primary', 'archive')) {
-            $withdrawnRoot = Join-Path $withdrawn $rootName
-            if (Test-Path -LiteralPath $withdrawnRoot) {
-                Move-Item -LiteralPath $withdrawnRoot -Destination $library
-            }
-        }
-    }
-    Invoke-DockerChecked ($composeArgs + @(
-        'up', '--detach', '--wait', '--wait-timeout', '180',
-        'bookbox-catalog-worker'
-    )) | Out-Null
-
-    # Startup reconciliation may publish once. Establish that baseline before
-    # creating a new file, then require fsnotify to beat the six-hour fallback.
-    $postRestartSearch = @(& $catalogSearchTest `
-        -HarnessInvocation `
-        -BaseUrl 'http://127.0.0.1:18787' `
-        -Username $username `
-        -Password $password `
-        -RootIds @('audiobooks', 'archive') `
-        -RawRootId 'audiobooks' `
-        -PreviousCompletedAt $initialSearch.RawCompletedAt `
-        -TimeoutSeconds ([Math]::Min($TimeoutSeconds, 180))) |
-        Where-Object { $_.PSObject.Properties.Name -contains 'RawCompletedAt' } |
-        Select-Object -Last 1
-    if ($null -eq $postRestartSearch) {
-        throw 'Post-restart catalog-search baseline did not publish.'
-    }
-    $monitorFolder = Join-Path $primaryLibrary 'Monitor Trigger'
-    $null = New-Item -ItemType Directory -Path $monitorFolder -Force
+    # The watched directory existed before startup. Creating the file now must
+    # beat the six-hour authoritative fallback through native fsnotify.
     Copy-Item `
         -LiteralPath (Join-Path $normal 'chapter01.mp3') `
         -Destination (Join-Path $monitorFolder 'Needlebox Watched.mp3')
@@ -775,13 +984,56 @@ database:
         -Password $password `
         -RootIds @('audiobooks', 'archive') `
         -RawRootId 'audiobooks' `
-        -PreviousCompletedAt $postRestartSearch.RawCompletedAt `
+        -PreviousCompletedAt $initialSearch.RawCompletedAt `
         -ExpectedRawRelativePath 'Monitor Trigger/Needlebox Watched.mp3' `
         -TimeoutSeconds ([Math]::Min($TimeoutSeconds, 180))) |
         Where-Object { $_.PSObject.Properties.Name -contains 'RawCompletedAt' } |
         Select-Object -Last 1
     if ($null -eq $monitoredSearch) {
         throw 'Filesystem monitoring did not publish a changed search snapshot.'
+    }
+
+    # Stop the only source reader, withdraw both disposable roots, and prove
+    # the API returns the exact same ordered PostgreSQL projection.
+    if ($DeploymentMode -eq 'Hybrid') {
+        Stop-OwnedNativeWorker -Process $nativeWorkerProcess
+    } else {
+        Invoke-DockerChecked ($composeArgs + @('stop', 'bookbox-catalog-worker')) | Out-Null
+    }
+    $withdrawn = Join-Path $taskRoot 'withdrawn-library'
+    $null = New-Item -ItemType Directory -Path $withdrawn -Force
+    try {
+        Move-Item -LiteralPath $primaryLibrary -Destination $withdrawn
+        Move-Item -LiteralPath $archiveLibrary -Destination $withdrawn
+        $databaseOnlySearch = @(& $catalogSearchTest `
+            -HarnessInvocation `
+            -BaseUrl 'http://127.0.0.1:18787' `
+            -Username $username `
+            -Password $password `
+            -RootIds @('audiobooks', 'archive') `
+            -RawRootId 'audiobooks' `
+            -ExpectedRawRelativePath 'Monitor Trigger/Needlebox Watched.mp3' `
+            -TimeoutSeconds 30) |
+            Where-Object { $_.PSObject.Properties.Name -contains 'RawCompletedAt' } |
+            Select-Object -Last 1
+        if ($null -eq $databaseOnlySearch -or
+            $databaseOnlySearch.BookOrder -cne $monitoredSearch.BookOrder -or
+            $databaseOnlySearch.RawOrder -cne $monitoredSearch.RawOrder) {
+            throw 'PostgreSQL-only search changed stable book or raw-result ordering.'
+        }
+    } finally {
+        foreach ($rootName in @('primary', 'archive')) {
+            $withdrawnRoot = Join-Path $withdrawn $rootName
+            if (Test-Path -LiteralPath $withdrawnRoot) {
+                Move-Item -LiteralPath $withdrawnRoot -Destination $library
+            }
+        }
+    }
+    if ($DeploymentMode -eq 'Container' -and -not $CatalogSearchOnly) {
+        Invoke-DockerChecked ($composeArgs + @(
+            'up', '--detach', '--wait', '--wait-timeout', '180',
+            'bookbox-catalog-worker'
+        )) | Out-Null
     }
     & $manifestScript -Path $library -OutputPath $sourceExpected
 
@@ -984,11 +1236,16 @@ database:
             -ProjectName $project `
             -TaskRoot $taskRoot `
             -EnvironmentFile $environmentFile `
+            -DeploymentMode $DeploymentMode `
             -OwnedProcessIds $ownedProcessIds.ToArray() `
             -OwnedLongLivedProcessIds $ownedLongLivedProcessIds.ToArray() `
             -AdbPath $adb `
             -EmulatorSerial $emulatorSerial `
-            -TaskPorts $taskPorts.ToArray()
+            -TaskPorts $taskPorts.ToArray() `
+            -NativeWorkerExecutable $nativeWorkerExecutable `
+            -NativeWorkerConfig $workerConfig `
+            -FFProbeFixtureExecutable $ffprobeFixtureExecutable `
+            -FFProbePIDDirectory $ffprobePIDDirectory
     } catch {
         if ($null -eq $primaryFailure) {
             $primaryFailure = $_
