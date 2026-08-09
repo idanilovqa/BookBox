@@ -372,7 +372,7 @@ func replaceInferredBooksTx(
 	); err != nil {
 		return fmt.Errorf("lock root books: %w", err)
 	}
-	corrections, err := loadGroupingCorrections(ctx, transaction, rootID)
+	corrections, err := loadGroupingCorrections(ctx, transaction, rootID, true)
 	if err != nil {
 		return err
 	}
@@ -2135,13 +2135,17 @@ func loadGroupingCorrections(
 	ctx context.Context,
 	transaction pgx.Tx,
 	rootID string,
+	lock bool,
 ) (map[string]GroupingCorrection, error) {
-	rows, err := transaction.Query(ctx, `
+	query := `
 		select id, root_id, source_folder, groups, updated_at
 		from grouping_corrections
 		where root_id=$1
-		for share
-	`, rootID)
+	`
+	if lock {
+		query += " for share"
+	}
+	rows, err := transaction.Query(ctx, query, rootID)
 	if err != nil {
 		return nil, fmt.Errorf("load grouping corrections: %w", err)
 	}

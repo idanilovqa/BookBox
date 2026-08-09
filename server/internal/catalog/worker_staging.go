@@ -241,7 +241,7 @@ func (repository *PostgresRepository) LoadGroupingScope(
 		return nil, nil, err
 	}
 	rows.Close()
-	correctionsByFolder, err := loadGroupingCorrections(ctx, transaction, rootID)
+	correctionsByFolder, err := loadGroupingCorrections(ctx, transaction, rootID, false)
 	if err != nil {
 		return nil, nil, err
 	}
