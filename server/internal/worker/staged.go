@@ -8,6 +8,8 @@ import (
 	"math"
 	"os"
 	"path"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -23,6 +25,8 @@ import (
 )
 
 const companionInputLimit = 2 << 20
+
+var discInventoryFolder = regexp.MustCompile(`(?i)^(disc|disk|cd)[\s._-]*(\d+|one|two|three|four|five|six|seven|eight|nine|ten)$`)
 
 type PostgresStagedRepository struct {
 	*catalog.PostgresRepository
@@ -44,6 +48,107 @@ func (repository *PostgresStagedRepository) LoadGroupingTree(
 	return grouping.Tree{
 		RootID: rootID, ScopePath: scopePath, Files: files, Corrections: corrections,
 	}, nil
+}
+
+func inferFullInventoryTree(
+	tree grouping.Tree,
+	infer func(grouping.Tree) grouping.Result,
+) grouping.Result {
+	if infer == nil {
+		infer = grouping.InferTree
+	}
+	audioScopes := make(map[uuid.UUID]string)
+	scopeSet := make(map[string]struct{})
+	for _, file := range tree.Files {
+		if file.MissingAt != nil || file.FileKind != catalog.FileKindAudio {
+			continue
+		}
+		scope := fullInventoryAudioScope(file.RelativePath)
+		audioScopes[file.ID] = scope
+		scopeSet[scope] = struct{}{}
+	}
+	scopes := make([]string, 0, len(scopeSet))
+	for scope := range scopeSet {
+		scopes = append(scopes, scope)
+	}
+	sort.Slice(scopes, func(i, j int) bool {
+		if len(scopes[i]) != len(scopes[j]) {
+			return len(scopes[i]) > len(scopes[j])
+		}
+		return scopes[i] < scopes[j]
+	})
+
+	result := grouping.Result{Evidence: make(map[string]catalog.GroupingEvidence)}
+	for _, scope := range scopes {
+		partition := grouping.Tree{RootID: tree.RootID, ScopePath: scope}
+		for _, file := range tree.Files {
+			if file.MissingAt != nil {
+				continue
+			}
+			if file.FileKind == catalog.FileKindAudio {
+				if audioScopes[file.ID] == scope {
+					partition.Files = append(partition.Files, file)
+				}
+				continue
+			}
+			if owner, ok := fullInventoryFileScope(file.RelativePath, scopes); ok && owner == scope {
+				partition.Files = append(partition.Files, file)
+			}
+		}
+		for _, correction := range tree.Corrections {
+			if correction.SourceFolder == scope {
+				partition.Corrections = append(partition.Corrections, correction)
+			}
+		}
+		grouped := infer(partition)
+		result.Books = append(result.Books, grouped.Books...)
+		for key, evidence := range grouped.Evidence {
+			result.Evidence[key] = evidence
+		}
+	}
+	sort.Slice(result.Books, func(i, j int) bool {
+		if result.Books[i].SourceFolder != result.Books[j].SourceFolder {
+			return result.Books[i].SourceFolder < result.Books[j].SourceFolder
+		}
+		if result.Books[i].Title != result.Books[j].Title {
+			return result.Books[i].Title < result.Books[j].Title
+		}
+		return result.Books[i].GroupingKey < result.Books[j].GroupingKey
+	})
+	return result
+}
+
+func fullInventoryAudioScope(relativePath string) string {
+	directory := path.Dir(relativePath)
+	if directory == "." {
+		return ""
+	}
+	if discInventoryFolder.MatchString(path.Base(directory)) {
+		directory = path.Dir(directory)
+		if directory == "." {
+			return ""
+		}
+	}
+	return directory
+}
+
+func fullInventoryFileScope(relativePath string, scopes []string) (string, bool) {
+	directory := path.Dir(relativePath)
+	if directory == "." {
+		directory = ""
+	}
+	for _, scope := range scopes {
+		if scope == "" {
+			if directory == "" {
+				return scope, true
+			}
+			continue
+		}
+		if directory == scope || strings.HasPrefix(directory, scope+"/") {
+			return scope, true
+		}
+	}
+	return "", false
 }
 
 type StagedScanRepository interface {
@@ -131,7 +236,12 @@ func (handler *ScanRootHandler) handleInventory(
 	if infer == nil {
 		infer = grouping.InferTree
 	}
-	grouped := infer(tree)
+	var grouped grouping.Result
+	if full {
+		grouped = inferFullInventoryTree(tree, infer)
+	} else {
+		grouped = infer(tree)
+	}
 	if full {
 		if _, err := repository.FinalizeInventoryAndPublish(ctx, catalog.InventoryFinalization{
 			ScanRunID: run.ID, RootID: root.ID, Books: grouped.Books, Evidence: grouped.Evidence,
