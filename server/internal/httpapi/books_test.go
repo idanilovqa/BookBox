@@ -31,7 +31,7 @@ func TestBooksHandlersReturnCardsDetailsAndRelativeFiles(t *testing.T) {
 		searchPage: catalog.SearchPage{
 			Snapshots: []catalog.SearchSnapshot{{
 				RootID: "audio", ScanRunID: uuid.New(),
-				CompletedAt: time.Unix(20, 0).UTC(), DocumentCount: 1,
+				CompletedAt: time.Unix(20, 0).UTC(), DocumentCount: 1, CatalogGeneration: 1,
 			}},
 			Groups:     []catalog.SearchGroup{{ID: uuid.New()}},
 			NextCursor: "next-page",

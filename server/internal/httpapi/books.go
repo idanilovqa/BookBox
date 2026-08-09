@@ -27,6 +27,7 @@ type BookCardResponse struct {
 	Narrators       []string `json:"narrators"`
 	CoverURL        string   `json:"coverUrl,omitempty"`
 	ReviewState     string   `json:"reviewState"`
+	ReviewReason    string   `json:"reviewReason,omitempty"`
 	SourceFolder    string   `json:"sourceFolder"`
 	DurationMS      *int64   `json:"durationMs,omitempty"`
 }

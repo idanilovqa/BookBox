@@ -16,9 +16,10 @@ import (
 const defaultSearchPageSize = 50
 
 type SearchSnapshotResponse struct {
-	RootID      string    `json:"rootId"`
-	ScanRunID   string    `json:"scanRunId"`
-	CompletedAt time.Time `json:"completedAt"`
+	RootID            string    `json:"rootId"`
+	ScanRunID         string    `json:"scanRunId"`
+	CatalogGeneration int64     `json:"catalogGeneration"`
+	CompletedAt       time.Time `json:"completedAt"`
 }
 
 type BookSearchGroupResponse struct {
@@ -98,12 +99,16 @@ func shapeSnapshots(values []catalog.SearchSnapshot, roots map[string]struct{}) 
 	for _, value := range values {
 		_, requested := roots[value.RootID]
 		_, duplicate := seen[value.RootID]
-		if !requested || duplicate || value.RootID <= previousRoot || value.ScanRunID == uuid.Nil || value.CompletedAt.IsZero() || value.DocumentCount < 0 {
+		if !requested || duplicate || value.RootID <= previousRoot || value.ScanRunID == uuid.Nil ||
+			value.CatalogGeneration <= 0 || value.CompletedAt.IsZero() || value.DocumentCount < 0 {
 			return nil, false
 		}
 		seen[value.RootID] = struct{}{}
 		previousRoot = value.RootID
-		result = append(result, SearchSnapshotResponse{RootID: value.RootID, ScanRunID: value.ScanRunID.String(), CompletedAt: value.CompletedAt.UTC()})
+		result = append(result, SearchSnapshotResponse{
+			RootID: value.RootID, ScanRunID: value.ScanRunID.String(),
+			CatalogGeneration: value.CatalogGeneration, CompletedAt: value.CompletedAt.UTC(),
+		})
 	}
 	return result, true
 }
@@ -119,7 +124,7 @@ func shapeBookGroups(values []catalog.SearchGroup, roots map[string]struct{}) ([
 		groupRoot := group.Documents[0].RootID
 		for _, document := range group.Documents {
 			_, rootOK := roots[document.RootID]
-			valid := rootOK && document.RootID == groupRoot && document.ID != uuid.Nil && document.BookID != uuid.Nil && document.EntityKind == catalog.SearchEntityAudiobook && catalog.ValidateSourceFolder(document.RelativePath) == nil && strings.TrimSpace(document.Title) != "" && document.DuplicateCount == len(group.Documents) && (document.DurationMS == nil || *document.DurationMS >= 0)
+			valid := rootOK && document.RootID == groupRoot && document.ID != uuid.Nil && document.BookID != uuid.Nil && document.EntityKind == catalog.SearchEntityAudiobook && catalog.ValidateSourceFolder(document.RelativePath) == nil && strings.TrimSpace(document.Title) != "" && document.DuplicateCount == len(group.Documents) && (document.DurationMS == nil || *document.DurationMS >= 0) && validReviewStateReason(document.ReviewState, document.ReviewReason)
 			if group.Duplicate {
 				valid = valid && document.DuplicateGroupID == group.ID
 			} else {
@@ -137,7 +142,26 @@ func shapeBookGroups(values []catalog.SearchGroup, roots map[string]struct{}) ([
 }
 
 func searchBookCard(document catalog.SearchDocument) BookCardResponse {
-	return BookCardResponse{ID: document.BookID.String(), RootID: document.RootID, Title: document.Title, Authors: nonNil(document.Authors), PublicationYear: document.PublicationYear, Genres: nonNil(document.Genres), Series: document.Series, Narrators: nonNil(document.Narrators), CoverURL: "/v1/books/" + document.BookID.String() + "/cover", ReviewState: document.ReviewState, SourceFolder: document.RelativePath, DurationMS: document.DurationMS}
+	return BookCardResponse{ID: document.BookID.String(), RootID: document.RootID, Title: document.Title, Authors: nonNil(document.Authors), PublicationYear: document.PublicationYear, Genres: nonNil(document.Genres), Series: document.Series, Narrators: nonNil(document.Narrators), CoverURL: "/v1/books/" + document.BookID.String() + "/cover", ReviewState: document.ReviewState, ReviewReason: document.ReviewReason, SourceFolder: document.RelativePath, DurationMS: document.DurationMS}
+}
+
+func validReviewStateReason(state, reason string) bool {
+	if reason != strings.TrimSpace(reason) {
+		return false
+	}
+	switch state {
+	case catalog.ReviewUnreviewed, catalog.ReviewConfirmed:
+		return reason == ""
+	case catalog.ReviewNeedsReview:
+		switch reason {
+		case "conflicting_title", "conflicting_author", "weak_loose_files", "probe_failed", "reorganization_incomplete":
+			return true
+		default:
+			return false
+		}
+	default:
+		return false
+	}
 }
 
 func shapeRawEntries(values []catalog.SearchGroup, rootID string) ([]RawSearchEntryResponse, bool) {
