@@ -189,6 +189,7 @@ type InferredBook struct {
 	RootID           string
 	SourceFolder     string
 	GroupingKey      string
+	GroupingLocked   bool
 	Title            string
 	Subtitle         string
 	Authors          []string
@@ -204,6 +205,7 @@ type InferredBook struct {
 	MetadataSource   string
 	Confidence       float64
 	ReviewState      string
+	ReviewReason     string
 	SourceFileIDs    []uuid.UUID
 	FileRoles        map[uuid.UUID]string
 }
