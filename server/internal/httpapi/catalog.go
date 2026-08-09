@@ -30,7 +30,7 @@ type CatalogRepository interface {
 	GetGroupingContext(context.Context, uuid.UUID) (catalog.GroupingContext, error)
 	SaveMatches(context.Context, uuid.UUID, []catalog.MetadataMatch) error
 	ConfirmMatch(context.Context, uuid.UUID, uuid.UUID) error
-	SaveGrouping(context.Context, catalog.GroupingCorrection) error
+	SaveGrouping(context.Context, catalog.GroupingCorrection) (catalog.CatalogGeneration, error)
 	Enqueue(context.Context, catalog.WorkerJob) error
 	EnqueueDeduplicated(context.Context, catalog.WorkerJob, string) (catalog.WorkerJob, error)
 }
@@ -74,7 +74,14 @@ type ConfirmMatchRequest struct {
 }
 
 type GroupingRequest struct {
-	Groups []GroupingRequestGroup `json:"groups"`
+	ExpectedFiles []GroupingExpectedFileRequest `json:"expectedFiles"`
+	Groups        []GroupingRequestGroup        `json:"groups"`
+}
+
+type GroupingExpectedFileRequest struct {
+	FileID     string    `json:"fileId"`
+	Size       int64     `json:"size"`
+	ModifiedAt time.Time `json:"modifiedAt"`
 }
 
 type GroupingRequestGroup struct {
@@ -83,17 +90,36 @@ type GroupingRequestGroup struct {
 }
 
 type GroupingContextResponse struct {
-	BookID       string                        `json:"bookId"`
-	RootID       string                        `json:"rootId"`
-	SourceFolder string                        `json:"sourceFolder"`
-	Files        []BookFileResponse            `json:"files"`
-	Books        []GroupingContextBookResponse `json:"books"`
+	BookID        string                        `json:"bookId"`
+	RootID        string                        `json:"rootId"`
+	SourceFolder  string                        `json:"sourceFolder,omitempty"`
+	ScopePath     string                        `json:"scopePath"`
+	ReviewReason  string                        `json:"reviewReason,omitempty"`
+	Evidence      map[string][]string           `json:"evidence"`
+	Files         []GroupingContextFileResponse `json:"files"`
+	Books         []GroupingContextBookResponse `json:"books"`
+	CanReorganize bool                          `json:"canReorganize"`
+}
+
+type GroupingContextFileResponse struct {
+	ID            string    `json:"id"`
+	RelativePath  string    `json:"relativePath"`
+	Name          string    `json:"name"`
+	Size          int64     `json:"size"`
+	ModifiedAt    time.Time `json:"modifiedAt"`
+	Role          string    `json:"role"`
+	CompanionKind string    `json:"companionKind,omitempty"`
+	Shared        bool      `json:"shared"`
 }
 
 type GroupingContextBookResponse struct {
 	BookID  string   `json:"bookId"`
 	Title   string   `json:"title"`
 	FileIDs []string `json:"fileIds"`
+}
+
+type groupingSaveResponse struct {
+	CatalogGeneration int64 `json:"catalogGeneration"`
 }
 
 type RescanRequest struct {
@@ -260,25 +286,51 @@ func groupingContextHandler(repository CatalogRepository) http.Handler {
 			writeCatalogError(response, err)
 			return
 		}
+		scope := grouping.ScopePath
+		if scope == "" {
+			scope = grouping.SourceFolder
+		}
 		if grouping.BookID != bookID || grouping.RootID == "" ||
-			catalog.ValidateSourceFolder(grouping.SourceFolder) != nil {
+			catalog.ValidateSourceFolder(scope) != nil ||
+			(grouping.SourceFolder != "" && grouping.ScopePath != "" &&
+				grouping.SourceFolder != grouping.ScopePath) ||
+			grouping.ReviewReason != strings.TrimSpace(grouping.ReviewReason) ||
+			strings.IndexFunc(grouping.ReviewReason, unicode.IsControl) >= 0 {
 			writeInternalError(response)
 			return
 		}
 
 		result := GroupingContextResponse{
 			BookID: grouping.BookID.String(), RootID: grouping.RootID,
-			SourceFolder: grouping.SourceFolder,
-			Files:        make([]BookFileResponse, 0, len(grouping.Files)),
-			Books:        make([]GroupingContextBookResponse, 0, len(grouping.Books)),
+			SourceFolder: scope, ScopePath: scope, ReviewReason: grouping.ReviewReason,
+			Evidence:      make(map[string][]string, len(grouping.Evidence)),
+			Files:         make([]GroupingContextFileResponse, 0, len(grouping.Files)),
+			Books:         make([]GroupingContextBookResponse, 0, len(grouping.Books)),
+			CanReorganize: grouping.CanReorganize,
 		}
-		availableFiles := make(map[uuid.UUID]struct{}, len(grouping.Files))
+		for role, paths := range grouping.Evidence {
+			if role != catalog.FileRoleAudio && role != catalog.FileRoleCover &&
+				role != catalog.FileRoleSidecar {
+				writeInternalError(response)
+				return
+			}
+			result.Evidence[role] = make([]string, 0, len(paths))
+			for _, relativePath := range paths {
+				if catalog.ValidateRelativePath(relativePath) != nil ||
+					!inGroupingScope(relativePath, scope) {
+					writeInternalError(response)
+					return
+				}
+				result.Evidence[role] = append(result.Evidence[role], relativePath)
+			}
+		}
+		availableFiles := make(map[uuid.UUID]catalog.GroupingContextFile, len(grouping.Files))
 		for _, file := range grouping.Files {
 			if file.ID == uuid.Nil || file.RootID != grouping.RootID ||
 				file.MissingAt != nil || file.Size < 0 || file.ModifiedAt.IsZero() ||
 				catalog.ValidateRelativePath(file.RelativePath) != nil ||
-				!inSourceFolder(file.RelativePath, grouping.SourceFolder) ||
-				!isAudioPath(file.RelativePath) {
+				!inGroupingScope(file.RelativePath, scope) ||
+				!validGroupingContextFile(file) {
 				writeInternalError(response)
 				return
 			}
@@ -286,16 +338,17 @@ func groupingContextHandler(repository CatalogRepository) http.Handler {
 				writeInternalError(response)
 				return
 			}
-			availableFiles[file.ID] = struct{}{}
-			result.Files = append(result.Files, BookFileResponse{
+			availableFiles[file.ID] = file
+			result.Files = append(result.Files, GroupingContextFileResponse{
 				ID: file.ID.String(), RelativePath: file.RelativePath,
 				Name: path.Base(file.RelativePath), Size: file.Size,
-				ModifiedAt: file.ModifiedAt.UTC(),
+				ModifiedAt: file.ModifiedAt.UTC(), Role: file.Role,
+				CompanionKind: file.CompanionKind, Shared: file.Shared,
 			})
 		}
 
 		seenBooks := make(map[uuid.UUID]struct{}, len(grouping.Books))
-		assignedFiles := make(map[uuid.UUID]struct{})
+		assignedFiles := make(map[uuid.UUID]int)
 		requestedBookFound := false
 		for _, book := range grouping.Books {
 			if book.BookID == uuid.Nil || strings.TrimSpace(book.Title) == "" ||
@@ -314,15 +367,16 @@ func groupingContextHandler(repository CatalogRepository) http.Handler {
 			}
 			publicFileIDs := make([]string, 0, len(book.FileIDs))
 			for _, fileID := range book.FileIDs {
-				if _, exists := availableFiles[fileID]; !exists {
+				file, exists := availableFiles[fileID]
+				if !exists {
 					writeInternalError(response)
 					return
 				}
-				if _, duplicate := assignedFiles[fileID]; duplicate {
+				assignedFiles[fileID]++
+				if assignedFiles[fileID] > 1 && !file.Shared {
 					writeInternalError(response)
 					return
 				}
-				assignedFiles[fileID] = struct{}{}
 				publicFileIDs = append(publicFileIDs, fileID.String())
 			}
 			result.Books = append(result.Books, GroupingContextBookResponse{
@@ -335,6 +389,40 @@ func groupingContextHandler(repository CatalogRepository) http.Handler {
 		}
 		writeJSON(response, http.StatusOK, result)
 	})
+}
+
+func validGroupingContextFile(file catalog.GroupingContextFile) bool {
+	if file.CompanionKind != file.SourceFile.CompanionKind &&
+		file.CompanionKind != "" && file.SourceFile.CompanionKind != "" {
+		return false
+	}
+	switch file.Role {
+	case catalog.FileRoleAudio:
+		return !file.Shared &&
+			(file.FileKind == catalog.FileKindAudio || file.FileKind == "") &&
+			isAudioPath(file.RelativePath) && file.CompanionKind == ""
+	case catalog.FileRoleCover:
+		return file.Shared &&
+			(file.FileKind == catalog.FileKindCover || file.FileKind == "") &&
+			file.CompanionKind == ""
+	case catalog.FileRoleSidecar:
+		return !file.Shared && file.FileKind == catalog.FileKindCompanion &&
+			(file.CompanionKind == catalog.CompanionCue ||
+				file.CompanionKind == catalog.CompanionNFO ||
+				file.CompanionKind == catalog.CompanionOPF ||
+				file.CompanionKind == catalog.CompanionPlaylist ||
+				file.CompanionKind == catalog.CompanionEbook ||
+				file.CompanionKind == catalog.CompanionOther)
+	default:
+		return false
+	}
+}
+
+func inGroupingScope(relativePath, scope string) bool {
+	if scope == "" {
+		return true
+	}
+	return strings.HasPrefix(relativePath, scope+"/")
 }
 
 func groupingHandler(repository CatalogRepository) http.Handler {
@@ -351,7 +439,8 @@ func groupingHandler(repository CatalogRepository) http.Handler {
 		if !decodeCatalogJSON(response, request, &input) {
 			return
 		}
-		if len(input.Groups) == 0 || len(input.Groups) > 100 {
+		if len(input.Groups) == 0 || len(input.Groups) > 100 ||
+			len(input.ExpectedFiles) == 0 || len(input.ExpectedFiles) > 100000 {
 			writeInvalidRequest(response)
 			return
 		}
@@ -360,18 +449,22 @@ func groupingHandler(repository CatalogRepository) http.Handler {
 			writeCatalogError(response, err)
 			return
 		}
+		scope := folder.ScopePath
+		if scope == "" {
+			scope = folder.SourceFolder
+		}
 		if folder.BookID != bookID || folder.RootID == "" ||
-			catalog.ValidateSourceFolder(folder.SourceFolder) != nil {
+			catalog.ValidateSourceFolder(scope) != nil {
 			writeInternalError(response)
 			return
 		}
-		allowed := make(map[uuid.UUID]struct{}, len(folder.Files))
+		allowed := make(map[uuid.UUID]catalog.GroupingContextFile, len(folder.Files))
 		for _, file := range folder.Files {
 			if file.ID == uuid.Nil || file.RootID != folder.RootID ||
-				file.MissingAt != nil ||
+				file.MissingAt != nil || file.Size < 0 || file.ModifiedAt.IsZero() ||
 				catalog.ValidateRelativePath(file.RelativePath) != nil ||
-				!inSourceFolder(file.RelativePath, folder.SourceFolder) ||
-				!isAudioPath(file.RelativePath) {
+				!inGroupingScope(file.RelativePath, scope) ||
+				!validGroupingContextFile(file) {
 				writeInternalError(response)
 				return
 			}
@@ -379,7 +472,35 @@ func groupingHandler(repository CatalogRepository) http.Handler {
 				writeInternalError(response)
 				return
 			}
-			allowed[file.ID] = struct{}{}
+			allowed[file.ID] = file
+		}
+		if len(input.ExpectedFiles) != len(allowed) {
+			writeCatalogError(response, catalog.ErrConflict)
+			return
+		}
+		expectedFiles := make([]catalog.GroupingFileFingerprint, 0, len(input.ExpectedFiles))
+		seenExpected := make(map[uuid.UUID]struct{}, len(input.ExpectedFiles))
+		for _, expected := range input.ExpectedFiles {
+			fileID, err := uuid.Parse(expected.FileID)
+			file, exists := allowed[fileID]
+			if err != nil || fileID == uuid.Nil || expected.Size < 0 ||
+				expected.ModifiedAt.IsZero() {
+				writeInvalidRequest(response)
+				return
+			}
+			if _, duplicate := seenExpected[fileID]; duplicate {
+				writeInvalidRequest(response)
+				return
+			}
+			seenExpected[fileID] = struct{}{}
+			if !exists || file.Size != expected.Size ||
+				!file.ModifiedAt.Equal(expected.ModifiedAt) {
+				writeCatalogError(response, catalog.ErrConflict)
+				return
+			}
+			expectedFiles = append(expectedFiles, catalog.GroupingFileFingerprint{
+				FileID: fileID, Size: expected.Size, ModifiedAt: expected.ModifiedAt.UTC(),
+			})
 		}
 		bookContexts := make(map[uuid.UUID]catalog.GroupingContextBook, len(folder.Books))
 		requestedBookFound := false
@@ -423,31 +544,38 @@ func groupingHandler(repository CatalogRepository) http.Handler {
 		}
 		correction := catalog.GroupingCorrection{
 			ID: uuid.New(), RootID: folder.RootID,
-			SourceFolder: folder.SourceFolder, UpdatedAt: time.Now().UTC(),
+			SourceFolder: scope, ExpectedFiles: expectedFiles, UpdatedAt: time.Now().UTC(),
 			Groups: make([]catalog.GroupingGroup, 0, len(input.Groups)),
 		}
-		seenFiles := make(map[uuid.UUID]struct{}, len(allowed))
+		seenFiles := make(map[uuid.UUID]int, len(allowed))
 		for _, group := range input.Groups {
 			if len(group.FileIDs) == 0 {
 				writeInvalidRequest(response)
 				return
 			}
 			fileIDs := make([]uuid.UUID, 0, len(group.FileIDs))
+			groupFiles := make(map[uuid.UUID]struct{}, len(group.FileIDs))
 			for _, encoded := range group.FileIDs {
 				fileID, err := uuid.Parse(encoded)
 				if err != nil || fileID == uuid.Nil {
 					writeInvalidRequest(response)
 					return
 				}
-				if _, exists := allowed[fileID]; !exists {
+				file, exists := allowed[fileID]
+				if !exists {
 					writeCatalogError(response, catalog.ErrConflict)
 					return
 				}
-				if _, duplicate := seenFiles[fileID]; duplicate {
+				if _, duplicate := groupFiles[fileID]; duplicate {
 					writeInvalidRequest(response)
 					return
 				}
-				seenFiles[fileID] = struct{}{}
+				groupFiles[fileID] = struct{}{}
+				seenFiles[fileID]++
+				if seenFiles[fileID] > 1 && !file.Shared {
+					writeInvalidRequest(response)
+					return
+				}
 				fileIDs = append(fileIDs, fileID)
 			}
 			sort.Slice(fileIDs, func(left, right int) bool {
@@ -455,7 +583,7 @@ func groupingHandler(repository CatalogRepository) http.Handler {
 			})
 			var existingBookID *uuid.UUID
 			groupingKey := manualGroupingKey(catalog.Book{
-				RootID: folder.RootID, SourceFolder: folder.SourceFolder,
+				RootID: folder.RootID, SourceFolder: scope,
 			}, fileIDs)
 			if group.BookID != "" {
 				parsed := uuid.MustParse(group.BookID)
@@ -466,15 +594,23 @@ func groupingHandler(repository CatalogRepository) http.Handler {
 				BookID: existingBookID, GroupingKey: groupingKey, FileIDs: fileIDs,
 			})
 		}
-		if len(seenFiles) != len(allowed) {
-			writeCatalogError(response, catalog.ErrConflict)
-			return
+		for fileID, file := range allowed {
+			count := seenFiles[fileID]
+			if count == 0 || (!file.Shared && count != 1) {
+				writeCatalogError(response, catalog.ErrConflict)
+				return
+			}
 		}
-		if err := repository.SaveGrouping(request.Context(), correction); err != nil {
+		generation, err := repository.SaveGrouping(request.Context(), correction)
+		if err != nil {
 			writeCatalogError(response, err)
 			return
 		}
-		response.WriteHeader(http.StatusNoContent)
+		if generation.RootID != folder.RootID || generation.Value <= 0 {
+			writeInternalError(response)
+			return
+		}
+		writeJSON(response, http.StatusOK, groupingSaveResponse{CatalogGeneration: generation.Value})
 	})
 }
 

@@ -213,7 +213,7 @@ func TestPostgresRepositoryPreservesConfirmedMetadataAndCorrections(t *testing.T
 	crossBookCorrection.ID = uuid.New()
 	crossBookCorrection.Groups = append([]GroupingGroup(nil), correction.Groups...)
 	crossBookCorrection.Groups[0].BookID = &otherBook.ID
-	if err := repository.SaveGrouping(
+	if _, err := repository.SaveGrouping(
 		ctx,
 		crossBookCorrection,
 	); !errors.Is(err, ErrConflict) {
@@ -261,12 +261,12 @@ func TestPostgresRepositoryPreservesConfirmedMetadataAndCorrections(t *testing.T
 			invalid := correction
 			invalid.ID = uuid.New()
 			invalid.Groups = groups
-			if err := repository.SaveGrouping(ctx, invalid); err == nil {
+			if _, err := repository.SaveGrouping(ctx, invalid); err == nil {
 				t.Fatalf("SaveGrouping(%s) accepted invalid partition", name)
 			}
 		})
 	}
-	if err := repository.SaveGrouping(ctx, correction); err != nil {
+	if _, err := repository.SaveGrouping(ctx, correction); err != nil {
 		t.Fatal(err)
 	}
 
@@ -349,7 +349,7 @@ func TestPostgresRepositoryPreservesConfirmedMetadataAndCorrections(t *testing.T
 	}
 }
 
-func TestPostgresRepositoryGroupingContextIncludesFolderAudioAndActiveSiblingAssignments(
+func TestPostgresRepositoryGroupingContextIncludesSubtreeEvidenceCompanionsAndRoles(
 	t *testing.T,
 ) {
 	pool := testpostgres.Open(t)
@@ -369,17 +369,29 @@ func TestPostgresRepositoryGroupingContextIncludesFolderAudioAndActiveSiblingAss
 		t.Fatal(err)
 	}
 	files := []SourceFile{
-		sourceFile("First", "Omnibus/First.m4b"),
-		sourceFile("Second", "Omnibus/Second.mp3"),
+		sourceFile("First", "Omnibus/Disc 1/First.m4b"),
+		sourceFile("Second", "Omnibus/Disc 2/Second.mp3"),
 		sourceFile("Loose", "Omnibus/Loose.flac"),
-		sourceFile("Missing", "Omnibus/Missing.m4b"),
-		sourceFile("Nested", "Omnibus/Nested/Hidden.m4b"),
+		sourceFile("Missing", "Omnibus/Disc 3/Missing.m4b"),
+		sourceFile("Cue", "Omnibus/book.cue"),
 		sourceFile("Cover", "Omnibus/cover.jpg"),
 	}
 	if err := repository.UpsertSourceFiles(ctx, scan.ID, files); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.FinishScan(ctx, scan.ID, ScanResult{Success: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		update source_files
+		set file_kind=case
+			when id=$1 then 'companion'
+			when id=$2 then 'cover'
+			else 'audio'
+		end,
+		companion_kind=case when id=$1 then 'cue' end,
+		probe_status=case when id in ($1,$2) then 'not_applicable' else 'succeeded' end
+	`, files[4].ID, files[5].ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -410,11 +422,25 @@ func TestPostgresRepositoryGroupingContextIncludesFolderAudioAndActiveSiblingAss
 	first := findBook(t, page.Items, nil, "First")
 	second := findBook(t, page.Items, nil, "Second")
 	inactive := findBook(t, page.Items, nil, "Inactive")
+	if _, err := pool.Exec(ctx, `
+		insert into book_files(book_id,file_id,root_id,role)
+		values ($1,$3,'audiobooks','sidecar'),
+		       ($1,$4,'audiobooks','cover'),
+		       ($2,$4,'audiobooks','cover')
+	`, first.ID, second.ID, files[4].ID, files[5].ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(
 		ctx,
 		`update source_files set missing_at=now() where id=$1`,
 		files[3].ID,
 	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		insert into book_grouping_evidence(book_id,root_id,reason_code,evidence)
+		values ($1,'audiobooks','probe_failed',$2::jsonb)
+	`, first.ID, `{"audio":["Omnibus/Disc 1/First.m4b"],"sidecar":["Omnibus/book.cue"]}`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(
@@ -430,33 +456,226 @@ func TestPostgresRepositoryGroupingContextIncludesFolderAudioAndActiveSiblingAss
 		t.Fatal(err)
 	}
 	if grouping.BookID != first.ID || grouping.RootID != "audiobooks" ||
-		grouping.SourceFolder != "Omnibus" {
+		grouping.ScopePath != "Omnibus" || grouping.ReviewReason != "probe_failed" ||
+		grouping.CanReorganize {
 		t.Fatalf("grouping identity = %#v", grouping)
 	}
 	if got, want := groupingFilePaths(grouping.Files), []string{
-		"Omnibus/First.m4b",
+		"Omnibus/Disc 1/First.m4b",
+		"Omnibus/Disc 2/Second.mp3",
 		"Omnibus/Loose.flac",
-		"Omnibus/Second.mp3",
+		"Omnibus/book.cue",
+		"Omnibus/cover.jpg",
 	}; !slices.Equal(got, want) {
 		t.Fatalf("grouping files = %v, want %v", got, want)
+	}
+	filesByPath := make(map[string]GroupingContextFile, len(grouping.Files))
+	for _, file := range grouping.Files {
+		filesByPath[file.RelativePath] = file
+	}
+	if filesByPath["Omnibus/Disc 1/First.m4b"].Role != FileRoleAudio ||
+		filesByPath["Omnibus/book.cue"].Role != FileRoleSidecar ||
+		filesByPath["Omnibus/book.cue"].CompanionKind != CompanionCue ||
+		filesByPath["Omnibus/book.cue"].Shared ||
+		filesByPath["Omnibus/cover.jpg"].Role != FileRoleCover ||
+		!filesByPath["Omnibus/cover.jpg"].Shared {
+		t.Fatalf("grouping file roles = %#v", filesByPath)
+	}
+	if !slices.Equal(grouping.Evidence[FileRoleAudio], []string{"Omnibus/Disc 1/First.m4b"}) ||
+		!slices.Equal(grouping.Evidence[FileRoleSidecar], []string{"Omnibus/book.cue"}) {
+		t.Fatalf("grouping evidence = %#v", grouping.Evidence)
 	}
 	if len(grouping.Books) != 2 ||
 		grouping.Books[0].BookID != first.ID ||
 		grouping.Books[0].Title != "First" ||
-		!slices.Equal(grouping.Books[0].FileIDs, []uuid.UUID{files[0].ID}) ||
+		!slices.Equal(grouping.Books[0].FileIDs, []uuid.UUID{files[0].ID, files[4].ID, files[5].ID}) ||
 		grouping.Books[1].BookID != second.ID ||
 		grouping.Books[1].Title != "Second" ||
-		!slices.Equal(grouping.Books[1].FileIDs, []uuid.UUID{files[1].ID}) {
+		!slices.Equal(grouping.Books[1].FileIDs, []uuid.UUID{files[1].ID, files[5].ID}) {
 		t.Fatalf("grouping books = %#v", grouping.Books)
 	}
 }
 
-func groupingFilePaths(files []SourceFile) []string {
+func groupingFilePaths(files []GroupingContextFile) []string {
 	result := make([]string, len(files))
 	for index := range files {
 		result[index] = files[index].RelativePath
 	}
 	return result
+}
+
+func TestPostgresRepositorySaveGroupingPersistsCompanionOwnershipEvidenceAndOneGeneration(
+	t *testing.T,
+) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if err := database.Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewPostgresRepository(pool)
+	if err := repository.SyncRoots(ctx, []LibraryRoot{{ID: "audiobooks", DisplayName: "Audiobooks"}}); err != nil {
+		t.Fatal(err)
+	}
+	scan, err := repository.BeginScan(ctx, "audiobooks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := []SourceFile{
+		sourceFile("First", "Shelf/Disc 1/First.m4b"),
+		sourceFile("Second", "Shelf/Disc 2/Second.m4b"),
+		sourceFile("Cue", "Shelf/books.cue"),
+		sourceFile("Cover", "Shelf/cover.jpg"),
+	}
+	if err := repository.UpsertSourceFiles(ctx, scan.ID, files); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinishScan(ctx, scan.ID, ScanResult{Success: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		update source_files
+		set file_kind=case when id=$1 then 'companion' when id=$2 then 'cover' else 'audio' end,
+		    companion_kind=case when id=$1 then 'cue' end,
+		    probe_status=case when id in ($1,$2) then 'not_applicable' else 'succeeded' end
+	`, files[2].ID, files[3].ID); err != nil {
+		t.Fatal(err)
+	}
+	books := []InferredBook{
+		{RootID: "audiobooks", SourceFolder: "Shelf", GroupingKey: "first", Title: "First", MetadataSource: MetadataInferred, Confidence: .5, ReviewState: ReviewNeedsReview, SourceFileIDs: []uuid.UUID{files[0].ID}},
+		{RootID: "audiobooks", SourceFolder: "Shelf", GroupingKey: "second", Title: "Second", MetadataSource: MetadataInferred, Confidence: .5, ReviewState: ReviewNeedsReview, SourceFileIDs: []uuid.UUID{files[1].ID}},
+	}
+	if err := repository.ReplaceInferredBooks(ctx, "audiobooks", books); err != nil {
+		t.Fatal(err)
+	}
+	page, err := repository.ListBooks(ctx, BookQuery{Limit: 10, Sort: BookSortTitle})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := findBook(t, page.Items, nil, "First")
+	second := findBook(t, page.Items, nil, "Second")
+	var before int64
+	if err := pool.QueryRow(ctx, `select generation from catalog_generations where root_id='audiobooks'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	expected := make([]GroupingFileFingerprint, 0, len(files))
+	for _, file := range files {
+		expected = append(expected, GroupingFileFingerprint{FileID: file.ID, Size: file.Size, ModifiedAt: file.ModifiedAt})
+	}
+	correction := GroupingCorrection{
+		ID: uuid.New(), RootID: "audiobooks", SourceFolder: "Shelf", ExpectedFiles: expected,
+		Groups: []GroupingGroup{
+			{BookID: &first.ID, GroupingKey: first.GroupingKey, FileIDs: []uuid.UUID{files[0].ID, files[2].ID, files[3].ID}},
+			{BookID: &second.ID, GroupingKey: second.GroupingKey, FileIDs: []uuid.UUID{files[1].ID, files[3].ID}},
+		},
+	}
+	generation, err := repository.SaveGrouping(ctx, correction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generation.RootID != "audiobooks" || generation.Value != before+1 {
+		t.Fatalf("generation=%#v before=%d", generation, before)
+	}
+	var storedGeneration int64
+	if err := pool.QueryRow(ctx, `select generation from catalog_generations where root_id='audiobooks'`).Scan(&storedGeneration); err != nil || storedGeneration != generation.Value {
+		t.Fatalf("stored generation=%d err=%v", storedGeneration, err)
+	}
+	assertBookAssignmentPaths(t, ctx, pool, first.ID, []string{
+		"Shelf/Disc 1/First.m4b:audio", "Shelf/books.cue:sidecar", "Shelf/cover.jpg:cover",
+	})
+	assertBookAssignmentPaths(t, ctx, pool, second.ID, []string{
+		"Shelf/Disc 2/Second.m4b:audio", "Shelf/cover.jpg:cover",
+	})
+	var manualEvidence, lockedBooks int
+	if err := pool.QueryRow(ctx, `select count(*) from book_grouping_evidence where root_id='audiobooks' and reason_code='manual'`).Scan(&manualEvidence); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `select count(*) from books where id=any($1::uuid[]) and grouping_locked and review_state='confirmed'`, []uuid.UUID{first.ID, second.ID}).Scan(&lockedBooks); err != nil {
+		t.Fatal(err)
+	}
+	if manualEvidence != 2 || lockedBooks != 2 {
+		t.Fatalf("manual evidence=%d locked confirmed books=%d", manualEvidence, lockedBooks)
+	}
+	var jobKind string
+	var jobPayload map[string]any
+	if err := pool.QueryRow(ctx, `select kind,payload from worker_jobs where kind='publish_search'`).Scan(&jobKind, &jobPayload); err != nil {
+		t.Fatal(err)
+	}
+	if jobKind != JobPublishSearch || jobPayload["rootId"] != "audiobooks" {
+		t.Fatalf("publish job kind=%q payload=%#v", jobKind, jobPayload)
+	}
+	if _, err := pool.Exec(ctx, `
+		create function fail_grouping_publish() returns trigger language plpgsql as $$
+		begin
+			raise exception 'injected publish failure';
+		end
+		$$;
+		create trigger fail_grouping_publish before insert on worker_jobs
+		for each row when (new.kind='publish_search') execute function fail_grouping_publish()
+	`); err != nil {
+		t.Fatal(err)
+	}
+	failedCorrection := correction
+	failedCorrection.ID = uuid.New()
+	if _, err := repository.SaveGrouping(ctx, failedCorrection); err == nil {
+		t.Fatal("SaveGrouping accepted an unqueueable publication")
+	}
+	var afterQueueFailure int64
+	if err := pool.QueryRow(ctx, `
+		select generation from catalog_generations where root_id='audiobooks'
+	`).Scan(&afterQueueFailure); err != nil {
+		t.Fatal(err)
+	}
+	if afterQueueFailure != generation.Value {
+		t.Fatalf("queue failure advanced generation to %d, want %d", afterQueueFailure, generation.Value)
+	}
+	if _, err := pool.Exec(ctx, `drop trigger fail_grouping_publish on worker_jobs`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pool.Exec(ctx, `update source_files set size=size+1 where id=$1`, files[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.SaveGrouping(ctx, correction); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale SaveGrouping error=%v, want ErrConflict", err)
+	}
+	var afterFailed int64
+	var publishJobs int
+	if err := pool.QueryRow(ctx, `select generation from catalog_generations where root_id='audiobooks'`).Scan(&afterFailed); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `select count(*) from worker_jobs where kind='publish_search'`).Scan(&publishJobs); err != nil {
+		t.Fatal(err)
+	}
+	if afterFailed != generation.Value || publishJobs != 1 {
+		t.Fatalf("failed save generation=%d publish jobs=%d", afterFailed, publishJobs)
+	}
+}
+
+func assertBookAssignmentPaths(t *testing.T, ctx context.Context, pool *pgxpool.Pool, bookID uuid.UUID, want []string) {
+	t.Helper()
+	rows, err := pool.Query(ctx, `
+		select f.relative_path || ':' || bf.role
+		from book_files bf join source_files f on f.id=bf.file_id and f.root_id=bf.root_id
+		where bf.book_id=$1 order by f.relative_path
+	`, bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, value)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("assignments=%v want=%v", got, want)
+	}
 }
 
 func TestPostgresRepositoryScanMissingAndWorkerLeaseLifecycle(t *testing.T) {
@@ -639,7 +858,7 @@ func TestPostgresRepositorySupportsRootLevelBookAndGrouping(t *testing.T) {
 	if len(page.Items) != 1 || page.Items[0].SourceFolder != "" {
 		t.Fatalf("root-level books = %#v", page.Items)
 	}
-	if err := repository.SaveGrouping(ctx, GroupingCorrection{
+	if _, err := repository.SaveGrouping(ctx, GroupingCorrection{
 		ID:           uuid.New(),
 		RootID:       "audiobooks",
 		SourceFolder: "",
@@ -1003,7 +1222,7 @@ func TestPostgresGroupingSplitMergeAndIndependentReapplication(t *testing.T) {
 			},
 		},
 	}
-	if err := repository.SaveGrouping(ctx, split); err != nil {
+	if _, err := repository.SaveGrouping(ctx, split); err != nil {
 		t.Fatal(err)
 	}
 	var storedGroupsJSON []byte
@@ -1153,7 +1372,7 @@ func TestPostgresGroupingSplitMergeAndIndependentReapplication(t *testing.T) {
 			FileIDs:     []uuid.UUID{firstFile.ID, thirdFile.ID},
 		}},
 	}
-	if err := repository.SaveGrouping(ctx, merge); err != nil {
+	if _, err := repository.SaveGrouping(ctx, merge); err != nil {
 		t.Fatal(err)
 	}
 	assertPresentBookAndAudioAssignments(t, pool, "Anthology", 1, 2)

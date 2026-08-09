@@ -48,6 +48,8 @@ sealed interface BookReviewAction {
 
     data class AssignFile(val fileId: String, val groupId: Int) : BookReviewAction
 
+    data class ToggleCompanion(val fileId: String, val groupId: Int) : BookReviewAction
+
     data class MergeGroups(val sourceId: Int, val targetId: Int) : BookReviewAction
 
     data object SaveGrouping : BookReviewAction

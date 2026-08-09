@@ -78,7 +78,12 @@ data class BookFileDto(
     val name: String,
     val size: Long,
     val modifiedAt: String,
+    val role: String = "audio",
+    val companionKind: String = "",
+    val shared: Boolean = false,
 )
+
+typealias GroupingFileDto = BookFileDto
 
 @Serializable
 data class BookFilesDto(
@@ -99,9 +104,13 @@ data class GroupingContextBookDto(
 data class GroupingContextDto(
     val bookId: String,
     val rootId: String,
-    val sourceFolder: String,
-    val files: List<BookFileDto>,
+    val sourceFolder: String = "",
+    val scopePath: String = sourceFolder,
+    val reviewReason: String? = null,
+    val evidence: Map<String, List<String>> = emptyMap(),
+    val files: List<GroupingFileDto>,
     val books: List<GroupingContextBookDto>,
+    val canReorganize: Boolean = false,
 )
 
 @Serializable
@@ -135,6 +144,7 @@ data class BookDetailDto(
     val title: String,
     val authors: List<String>,
     val reviewState: String,
+    val reviewReason: String? = null,
     val sourceFolder: String,
     val subtitle: String? = null,
     val narrators: List<String> = emptyList(),

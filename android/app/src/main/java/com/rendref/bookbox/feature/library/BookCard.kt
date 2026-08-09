@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -37,6 +38,8 @@ sealed interface LibraryAction {
     data class ToggleSelected(override val bookId: String) : LibraryAction
 
     data class ViewRawFiles(override val bookId: String) : LibraryAction
+
+    data class ReviewGrouping(override val bookId: String) : LibraryAction
 }
 
 @Composable
@@ -171,6 +174,19 @@ fun AudiobookCard(
                     .padding(horizontal = 6.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.End,
             ) {
+                if (book.reviewState == "needs_review") {
+                    TextButton(
+                        onClick = { onAction(LibraryAction.ReviewGrouping(book.id)) },
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error,
+                        ),
+                        modifier = Modifier.semantics {
+                            contentDescription = "Review audiobook grouping"
+                        },
+                    ) {
+                        Text("!")
+                    }
+                }
                 TextButton(
                     onClick = { onAction(LibraryAction.ViewRawFiles(book.id)) },
                     modifier = Modifier.semantics {

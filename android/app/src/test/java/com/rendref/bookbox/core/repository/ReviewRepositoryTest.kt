@@ -9,12 +9,15 @@ import com.rendref.bookbox.core.storage.SavedConnection
 import java.io.IOException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReviewRepositoryTest {
@@ -139,7 +142,7 @@ class ReviewRepositoryTest {
                             {
                               "bookId":"$SIBLING_BOOK_ID",
                               "title":"Second",
-                              "fileIds":["$FILE_TWO_ID"]
+                              "fileIds":[]
                             }
                           ]
                         }
@@ -158,6 +161,89 @@ class ReviewRepositoryTest {
             assertFalse(result.books.flatMap { it.fileIds }.contains(LOOSE_FILE_ID))
         }
     }
+
+    @Test
+    fun `expanded grouping context decodes evidence roles companions capability and save generation`() =
+        runTest {
+            withRepository { server, repository ->
+                server.enqueue(
+                    MockResponse(
+                        body = """
+                            {
+                              "bookId":"$BOOK_ID",
+                              "rootId":"audiobooks",
+                              "scopePath":"Omnibus",
+                              "reviewReason":"probe_failed",
+                              "evidence":{
+                                "audio":["Omnibus/Disc 1/First.m4b"],
+                                "sidecar":["Omnibus/book.cue"]
+                              },
+                              "canReorganize":false,
+                              "files":[
+                                {"id":"$FILE_ONE_ID","relativePath":"Omnibus/Disc 1/First.m4b","name":"First.m4b","size":101,"modifiedAt":"2026-07-26T12:34:56Z","role":"audio","companionKind":"","shared":false},
+                                {"id":"$FILE_TWO_ID","relativePath":"Omnibus/Disc 2/Second.flac","name":"Second.flac","size":202,"modifiedAt":"2026-07-26T12:34:56Z","role":"audio","companionKind":"","shared":false},
+                                {"id":"$COMPANION_ID","relativePath":"Omnibus/book.cue","name":"book.cue","size":12,"modifiedAt":"2026-07-26T12:34:56Z","role":"sidecar","companionKind":"cue","shared":false},
+                                {"id":"$COVER_ID","relativePath":"Omnibus/cover.jpg","name":"cover.jpg","size":22,"modifiedAt":"2026-07-26T12:34:56Z","role":"cover","companionKind":"","shared":true}
+                              ],
+                              "books":[
+                                {"bookId":"$BOOK_ID","title":"First","fileIds":["$FILE_ONE_ID","$COMPANION_ID","$COVER_ID"]},
+                                {"bookId":"$SIBLING_BOOK_ID","title":"Second","fileIds":["$FILE_TWO_ID","$COVER_ID"]}
+                              ]
+                            }
+                        """.trimIndent(),
+                    ),
+                )
+
+                val context = repository.groupingContext(BOOK_ID)
+
+                assertEquals("Omnibus", context.scopePath)
+                assertEquals("probe_failed", context.reviewReason)
+                assertEquals(listOf("Omnibus/book.cue"), context.evidence["sidecar"])
+                assertFalse(context.canReorganize)
+                assertEquals("audio", context.files.first().role)
+                assertEquals("cue", context.files[2].companionKind)
+                assertTrue(context.files.last().shared)
+                assertEquals("/v1/books/$BOOK_ID/grouping", server.takeRequest().target)
+
+                server.enqueue(MockResponse(body = """{"catalogGeneration":8}"""))
+                val generation = repository.saveGrouping(
+                    BOOK_ID,
+                    groups = listOf(
+                        GroupingDecision(
+                            bookId = BOOK_ID,
+                            fileIds = listOf(FILE_ONE_ID),
+                            companionFileIds = listOf(COMPANION_ID, COVER_ID),
+                        ),
+                        GroupingDecision(
+                            bookId = SIBLING_BOOK_ID,
+                            fileIds = listOf(FILE_TWO_ID),
+                            companionFileIds = listOf(COVER_ID),
+                        ),
+                    ),
+                    expectedFiles = context.files,
+                )
+
+                assertEquals(8L, generation)
+                val body = Json.parseToJsonElement(
+                    server.takeRequest().body?.utf8().orEmpty(),
+                ).jsonObject
+                assertEquals(setOf("expectedFiles", "groups"), body.keys)
+                assertEquals(4, body.getValue("expectedFiles").jsonArray.size)
+                val groups = body.getValue("groups").jsonArray
+                assertEquals(2, groups.size)
+                assertEquals(
+                    listOf(FILE_ONE_ID, COMPANION_ID, COVER_ID),
+                    groups[0].jsonObject.getValue("fileIds").jsonArray.map {
+                        it.jsonPrimitive.content
+                    },
+                )
+                assertEquals(
+                    COVER_ID,
+                    groups[1].jsonObject.getValue("fileIds").jsonArray.last()
+                        .jsonPrimitive.content,
+                )
+            }
+        }
 
     @Test
     fun `confirmation sends one stored match id and grouping sends UUID assignments only`() =
@@ -272,3 +358,5 @@ private const val FILE_ONE_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 private const val FILE_TWO_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 private const val LOOSE_FILE_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 private const val SIBLING_BOOK_ID = "11111111-1111-4111-8111-111111111111"
+private const val COMPANION_ID = "22222222-2222-4222-8222-222222222222"
+private const val COVER_ID = "33333333-3333-4333-8333-333333333333"

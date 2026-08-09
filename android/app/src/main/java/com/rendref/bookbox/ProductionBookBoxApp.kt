@@ -369,6 +369,7 @@ internal fun ConnectedApp(
                         is LibraryAction.ToggleSelected ->
                             library.toggleSelection(action.bookId)
                         is LibraryAction.ViewRawFiles -> openRawFiles(action.bookId)
+                        is LibraryAction.ReviewGrouping -> openBook(action.bookId)
                     }
                 },
                 onAuthorChange = library::setAuthor,
@@ -626,6 +627,8 @@ private fun handleBookReviewAction(
         BookReviewAction.AddGroup -> viewModel.addGroup()
         is BookReviewAction.AssignFile ->
             viewModel.assignFileToGroup(action.fileId, action.groupId)
+        is BookReviewAction.ToggleCompanion ->
+            viewModel.toggleCompanionForGroup(action.fileId, action.groupId)
         is BookReviewAction.MergeGroups ->
             viewModel.mergeGroups(action.sourceId, action.targetId)
         BookReviewAction.SaveGrouping -> viewModel.saveGrouping()

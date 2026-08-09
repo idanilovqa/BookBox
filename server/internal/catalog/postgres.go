@@ -571,43 +571,72 @@ func (repository *PostgresRepository) GetGroupingContext(
 	}
 	defer transaction.Rollback(ctx)
 
-	result := GroupingContext{BookID: bookID}
+	result := GroupingContext{BookID: bookID, Evidence: map[string][]string{}}
+	var encodedEvidence []byte
 	if err := transaction.QueryRow(ctx, `
-		select root_id, source_folder
-		from books
-		where id=$1 and missing_at is null
-	`, bookID).Scan(&result.RootID, &result.SourceFolder); err != nil {
+		select b.root_id, b.source_folder, coalesce(e.reason_code,''),
+		       coalesce(e.evidence,'{}'::jsonb)
+		from books b
+		left join book_grouping_evidence e on e.book_id=b.id and e.root_id=b.root_id
+		where b.id=$1 and b.missing_at is null
+	`, bookID).Scan(&result.RootID, &result.ScopePath, &result.ReviewReason, &encodedEvidence); err != nil {
 		return GroupingContext{}, mapNotFound(err, "load grouping context book")
+	}
+	result.SourceFolder = result.ScopePath
+	if err := json.Unmarshal(encodedEvidence, &result.Evidence); err != nil {
+		var wrapped struct {
+			Values map[string][]string `json:"values"`
+		}
+		if wrappedErr := json.Unmarshal(encodedEvidence, &wrapped); wrappedErr != nil {
+			return GroupingContext{}, fmt.Errorf("decode grouping evidence: %w", err)
+		}
+		result.Evidence = wrapped.Values
+	}
+	if result.Evidence == nil {
+		result.Evidence = map[string][]string{}
 	}
 
 	fileRows, err := transaction.Query(ctx, `
 		select id, root_id, relative_path, size, modified_at,
-		       coalesce(sha256,''), media, scan_run_id, missing_at
+		       coalesce(sha256,''), media, scan_run_id, missing_at,
+		       file_kind, coalesce(companion_kind,''), probe_status,
+		       probe_version, coalesce(probe_error,''), probed_at
 		from source_files
 		where root_id=$1
 		  and missing_at is null
-		  and (
-		      ($2='' and position('/' in relative_path)=0)
-		      or (
-		          $2<>''
-		          and left(relative_path, length($2)+1)=$2 || '/'
-		          and position('/' in substring(relative_path from length($2)+2))=0
-		      )
-		  )
+		  and ($2='' or left(relative_path, length($2)+1)=$2 || '/')
+		  and file_kind in ('audio','cover','companion')
 		order by relative_path, id
-	`, result.RootID, result.SourceFolder)
+	`, result.RootID, result.ScopePath)
 	if err != nil {
 		return GroupingContext{}, fmt.Errorf("list grouping context files: %w", err)
 	}
 	for fileRows.Next() {
-		file, scanErr := scanSourceFile(fileRows)
-		if scanErr != nil {
+		var file GroupingContextFile
+		var media []byte
+		if scanErr := fileRows.Scan(
+			&file.ID, &file.RootID, &file.RelativePath, &file.Size,
+			&file.ModifiedAt, &file.SHA256, &media, &file.ScanRunID,
+			&file.MissingAt, &file.FileKind, &file.SourceFile.CompanionKind,
+			&file.ProbeStatus, &file.ProbeVersion, &file.ProbeError, &file.ProbedAt,
+		); scanErr != nil {
 			fileRows.Close()
-			return GroupingContext{}, scanErr
+			return GroupingContext{}, fmt.Errorf("scan grouping context file: %w", scanErr)
 		}
-		if isAudioPath(file.RelativePath) {
-			result.Files = append(result.Files, file)
+		if err := json.Unmarshal(media, &file.Media); err != nil {
+			fileRows.Close()
+			return GroupingContext{}, fmt.Errorf("decode grouping context media: %w", err)
 		}
+		file.CompanionKind = file.SourceFile.CompanionKind
+		switch file.FileKind {
+		case FileKindAudio:
+			file.Role = FileRoleAudio
+		case FileKindCover:
+			file.Role, file.Shared = FileRoleCover, true
+		case FileKindCompanion:
+			file.Role = FileRoleSidecar
+		}
+		result.Files = append(result.Files, file)
 	}
 	if err := fileRows.Err(); err != nil {
 		fileRows.Close()
@@ -620,7 +649,7 @@ func (repository *PostgresRepository) GetGroupingContext(
 		from books
 		where root_id=$1 and source_folder=$2 and missing_at is null
 		order by lower(title), title, id
-	`, result.RootID, result.SourceFolder)
+	`, result.RootID, result.ScopePath)
 	if err != nil {
 		return GroupingContext{}, fmt.Errorf("list grouping context books: %w", err)
 	}
@@ -645,6 +674,10 @@ func (repository *PostgresRepository) GetGroupingContext(
 	}
 	bookRows.Close()
 
+	availableFiles := make(map[uuid.UUID]struct{}, len(result.Files))
+	for _, file := range result.Files {
+		availableFiles[file.ID] = struct{}{}
+	}
 	assignmentRows, err := transaction.Query(ctx, `
 		select bf.book_id, f.id, f.relative_path
 		from books b
@@ -655,7 +688,7 @@ func (repository *PostgresRepository) GetGroupingContext(
 		  and b.missing_at is null
 		  and f.missing_at is null
 		order by b.id, f.relative_path, f.id
-	`, result.RootID, result.SourceFolder)
+	`, result.RootID, result.ScopePath)
 	if err != nil {
 		return GroupingContext{}, fmt.Errorf("list grouping context assignments: %w", err)
 	}
@@ -667,7 +700,8 @@ func (repository *PostgresRepository) GetGroupingContext(
 			return GroupingContext{}, fmt.Errorf("scan grouping context assignment: %w", err)
 		}
 		index, exists := bookIndexes[siblingID]
-		if exists && isAudioPath(relativePath) {
+		_, available := availableFiles[fileID]
+		if exists && available {
 			result.Books[index].FileIDs = append(result.Books[index].FileIDs, fileID)
 		}
 	}
@@ -681,7 +715,7 @@ func (repository *PostgresRepository) GetGroupingContext(
 		return GroupingContext{}, fmt.Errorf("commit grouping context: %w", err)
 	}
 	if result.Files == nil {
-		result.Files = []SourceFile{}
+		result.Files = []GroupingContextFile{}
 	}
 	if result.Books == nil {
 		result.Books = []GroupingContextBook{}
@@ -1034,47 +1068,51 @@ func cleanCandidateStrings(values []string) ([]string, error) {
 func (repository *PostgresRepository) SaveGrouping(
 	ctx context.Context,
 	correction GroupingCorrection,
-) error {
+) (CatalogGeneration, error) {
+	var zero CatalogGeneration
 	if correction.ID == uuid.Nil || !rootIDPattern.MatchString(correction.RootID) ||
 		ValidateSourceFolder(correction.SourceFolder) != nil || len(correction.Groups) == 0 {
-		return ErrInvalidData
+		return zero, ErrInvalidData
 	}
-	fileIDs := make([]uuid.UUID, 0)
-	seen := make(map[uuid.UUID]struct{})
+	legacy := len(correction.ExpectedFiles) == 0
+	assignmentCounts := make(map[uuid.UUID]int)
 	groupingKeys := make(map[string]struct{}, len(correction.Groups))
-	bookIDs := make([]uuid.UUID, 0, len(correction.Groups))
 	seenBookIDs := make(map[uuid.UUID]struct{}, len(correction.Groups))
 	for _, group := range correction.Groups {
 		if strings.TrimSpace(group.GroupingKey) == "" || len(group.FileIDs) == 0 {
-			return ErrInvalidData
+			return zero, ErrInvalidData
 		}
 		if _, exists := groupingKeys[group.GroupingKey]; exists {
-			return ErrInvalidData
+			return zero, ErrInvalidData
 		}
 		groupingKeys[group.GroupingKey] = struct{}{}
 		if group.BookID != nil {
 			if *group.BookID == uuid.Nil {
-				return ErrInvalidData
+				return zero, ErrInvalidData
 			}
 			if _, exists := seenBookIDs[*group.BookID]; exists {
-				return ErrInvalidData
+				return zero, ErrInvalidData
 			}
 			seenBookIDs[*group.BookID] = struct{}{}
 		}
+		groupFiles := make(map[uuid.UUID]struct{}, len(group.FileIDs))
 		for _, id := range group.FileIDs {
 			if id == uuid.Nil {
-				return ErrInvalidData
+				return zero, ErrInvalidData
 			}
-			if _, exists := seen[id]; exists {
-				return ErrInvalidData
+			if _, duplicate := groupFiles[id]; duplicate {
+				return zero, ErrInvalidData
 			}
-			seen[id] = struct{}{}
-			fileIDs = append(fileIDs, id)
+			groupFiles[id] = struct{}{}
+			assignmentCounts[id]++
+			if legacy && assignmentCounts[id] > 1 {
+				return zero, ErrInvalidData
+			}
 		}
 	}
 	transaction, err := repository.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin grouping save: %w", err)
+		return zero, fmt.Errorf("begin grouping save: %w", err)
 	}
 	defer transaction.Rollback(ctx)
 	folderFiles, err := loadGroupingFolderFiles(
@@ -1084,24 +1122,68 @@ func (repository *PostgresRepository) SaveGrouping(
 		correction.SourceFolder,
 	)
 	if err != nil {
-		return fmt.Errorf("list grouping folder files: %w", err)
+		return zero, fmt.Errorf("list grouping folder files: %w", err)
 	}
-	presentAudio := make(map[uuid.UUID]struct{})
+	if legacy {
+		folderFiles = directGroupingFolderFiles(folderFiles, correction.SourceFolder)
+	}
+	filesByID := make(map[uuid.UUID]groupingFolderFile, len(folderFiles))
 	for _, file := range folderFiles {
-		if isAudioPath(file.relativePath) {
-			presentAudio[file.id] = struct{}{}
+		filesByID[file.id] = file
+	}
+	if err := validateGroupingFingerprints(correction.ExpectedFiles, folderFiles); err != nil {
+		return zero, err
+	}
+	presentAudio := 0
+	for _, file := range folderFiles {
+		role := groupingFileRole(file)
+		count := assignmentCounts[file.id]
+		switch role {
+		case FileRoleAudio:
+			presentAudio++
+			if count != 1 {
+				return zero, ErrConflict
+			}
+		case FileRoleSidecar:
+			if !legacy && count != 1 {
+				return zero, ErrConflict
+			}
+		case FileRoleCover:
+			if !legacy && count < 1 {
+				return zero, ErrConflict
+			}
+		default:
+			if count != 0 {
+				return zero, ErrConflict
+			}
 		}
 	}
-	if len(presentAudio) == 0 || len(seen) != len(presentAudio) {
-		return ErrConflict
+	if presentAudio == 0 {
+		return zero, ErrConflict
 	}
-	for id := range seen {
-		if _, audio := presentAudio[id]; !audio {
-			return ErrConflict
+	for id, count := range assignmentCounts {
+		file, exists := filesByID[id]
+		if !exists {
+			return zero, ErrConflict
+		}
+		role := groupingFileRole(file)
+		if role == "" || (role != FileRoleCover && count != 1) ||
+			(role == FileRoleCover && legacy) {
+			return zero, ErrConflict
 		}
 	}
+	bookIDs := make([]uuid.UUID, 0, len(correction.Groups))
 	for index := range correction.Groups {
 		group := &correction.Groups[index]
+		audioIDs := make([]uuid.UUID, 0, len(group.FileIDs))
+		for _, fileID := range group.FileIDs {
+			if groupingFileRole(filesByID[fileID]) == FileRoleAudio {
+				audioIDs = append(audioIDs, fileID)
+			}
+		}
+		if len(audioIDs) == 0 {
+			return zero, ErrConflict
+		}
 		var matchedBookID uuid.UUID
 		if group.BookID == nil {
 			matchedBookID, err = createCorrectedBook(
@@ -1110,10 +1192,10 @@ func (repository *PostgresRepository) SaveGrouping(
 				correction.RootID,
 				correction.SourceFolder,
 				group.GroupingKey,
-				group.FileIDs,
+				audioIDs,
 			)
 			if err != nil {
-				return err
+				return zero, err
 			}
 			group.BookID = &matchedBookID
 		} else {
@@ -1125,15 +1207,19 @@ func (repository *PostgresRepository) SaveGrouping(
 			`, *group.BookID, correction.RootID, correction.SourceFolder,
 				group.GroupingKey).Scan(&matchedBookID); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
-					return ErrConflict
+					return zero, ErrConflict
 				}
-				return fmt.Errorf("validate grouping book: %w", err)
+				return zero, fmt.Errorf("validate grouping book: %w", err)
 			}
 		}
 		bookIDs = append(bookIDs, matchedBookID)
-		assignmentIDs, roles, err := groupingBookFiles(group.FileIDs, folderFiles)
+		selectedIDs := group.FileIDs
+		if legacy {
+			selectedIDs = audioIDs
+		}
+		assignmentIDs, roles, err := groupingBookFiles(selectedIDs, folderFiles)
 		if err != nil {
-			return err
+			return zero, err
 		}
 		if err := replaceBookFiles(
 			ctx,
@@ -1143,12 +1229,18 @@ func (repository *PostgresRepository) SaveGrouping(
 			assignmentIDs,
 			roles,
 		); err != nil {
-			return err
+			return zero, err
+		}
+		if err := upsertManualGroupingEvidence(
+			ctx, transaction, matchedBookID, correction.RootID,
+			assignmentIDs, roles, filesByID,
+		); err != nil {
+			return zero, err
 		}
 	}
 	groups, err := json.Marshal(correction.Groups)
 	if err != nil {
-		return ErrInvalidData
+		return zero, ErrInvalidData
 	}
 	if _, err := transaction.Exec(ctx, `
 		insert into grouping_corrections(id, root_id, source_folder, groups, updated_at)
@@ -1156,14 +1248,14 @@ func (repository *PostgresRepository) SaveGrouping(
 		on conflict (root_id, source_folder) do update
 		set groups=excluded.groups, updated_at=now()
 	`, correction.ID, correction.RootID, correction.SourceFolder, groups); err != nil {
-		return classifyConstraint(err, "save grouping correction")
+		return zero, classifyConstraint(err, "save grouping correction")
 	}
 	if _, err := transaction.Exec(ctx, `
 		update books
-		set grouping_locked=true, missing_at=null, updated_at=now()
+		set grouping_locked=true, review_state='confirmed', missing_at=null, updated_at=now()
 		where id=any($1::uuid[])
 	`, bookIDs); err != nil {
-		return fmt.Errorf("lock grouping: %w", err)
+		return zero, fmt.Errorf("lock grouping: %w", err)
 	}
 	missingRows, err := transaction.Query(ctx, `
 		update books
@@ -1175,20 +1267,20 @@ func (repository *PostgresRepository) SaveGrouping(
 		returning id
 	`, correction.RootID, correction.SourceFolder, bookIDs)
 	if err != nil {
-		return fmt.Errorf("soft-mark superseded grouped books: %w", err)
+		return zero, fmt.Errorf("soft-mark superseded grouped books: %w", err)
 	}
 	var superseded []uuid.UUID
 	for missingRows.Next() {
 		var id uuid.UUID
 		if err := missingRows.Scan(&id); err != nil {
 			missingRows.Close()
-			return fmt.Errorf("scan superseded grouped book: %w", err)
+			return zero, fmt.Errorf("scan superseded grouped book: %w", err)
 		}
 		superseded = append(superseded, id)
 	}
 	if err := missingRows.Err(); err != nil {
 		missingRows.Close()
-		return fmt.Errorf("iterate superseded grouped books: %w", err)
+		return zero, fmt.Errorf("iterate superseded grouped books: %w", err)
 	}
 	missingRows.Close()
 	for _, id := range superseded {
@@ -1201,11 +1293,120 @@ func (repository *PostgresRepository) SaveGrouping(
 			"missing",
 			nil,
 		); err != nil {
-			return err
+			return zero, err
 		}
 	}
+	var generation CatalogGeneration
+	if err := transaction.QueryRow(ctx, `
+		update catalog_generations
+		set generation=generation+1, updated_at=now()
+		where root_id=$1
+		returning root_id,generation,updated_at
+	`, correction.RootID).Scan(
+		&generation.RootID, &generation.Value, &generation.UpdatedAt,
+	); err != nil {
+		return zero, fmt.Errorf("advance grouping generation: %w", err)
+	}
+	jobID := uuid.New()
+	payload, err := marshalObject(map[string]any{
+		"rootId": correction.RootID, "catalogGeneration": generation.Value,
+	})
+	if err != nil {
+		return zero, err
+	}
+	if _, err := transaction.Exec(ctx, `
+		insert into worker_jobs(
+			id, kind, dedupe_key, payload, run_after, max_attempts
+		)
+		values ($1,$2,$3,$4,$5,5)
+		on conflict (kind,dedupe_key)
+			where dedupe_key is not null and status in ('queued','running')
+		do nothing
+	`, jobID, JobPublishSearch, "publish_search:"+correction.RootID,
+		payload, repository.now()); err != nil {
+		return zero, classifyConstraint(err, "queue grouping search publication")
+	}
 	if err := transaction.Commit(ctx); err != nil {
-		return fmt.Errorf("commit grouping save: %w", err)
+		return zero, fmt.Errorf("commit grouping save: %w", err)
+	}
+	return generation, nil
+}
+
+func directGroupingFolderFiles(files []groupingFolderFile, sourceFolder string) []groupingFolderFile {
+	direct := make([]groupingFolderFile, 0, len(files))
+	for _, file := range files {
+		folder := path.Dir(file.relativePath)
+		if folder == "." {
+			folder = ""
+		}
+		if folder == sourceFolder {
+			direct = append(direct, file)
+		}
+	}
+	return direct
+}
+
+func validateGroupingFingerprints(expected []GroupingFileFingerprint, files []groupingFolderFile) error {
+	if len(expected) == 0 {
+		return nil
+	}
+	if len(expected) != len(files) {
+		return ErrConflict
+	}
+	filesByID := make(map[uuid.UUID]groupingFolderFile, len(files))
+	for _, file := range files {
+		filesByID[file.id] = file
+	}
+	seen := make(map[uuid.UUID]struct{}, len(expected))
+	for _, fingerprint := range expected {
+		file, exists := filesByID[fingerprint.FileID]
+		if fingerprint.FileID == uuid.Nil || fingerprint.Size < 0 ||
+			fingerprint.ModifiedAt.IsZero() {
+			return ErrInvalidData
+		}
+		if _, duplicate := seen[fingerprint.FileID]; duplicate {
+			return ErrInvalidData
+		}
+		seen[fingerprint.FileID] = struct{}{}
+		if !exists || file.size != fingerprint.Size ||
+			!file.modifiedAt.Equal(fingerprint.ModifiedAt) {
+			return ErrConflict
+		}
+	}
+	return nil
+}
+
+func upsertManualGroupingEvidence(
+	ctx context.Context,
+	transaction pgx.Tx,
+	bookID uuid.UUID,
+	rootID string,
+	fileIDs []uuid.UUID,
+	roles map[uuid.UUID]string,
+	filesByID map[uuid.UUID]groupingFolderFile,
+) error {
+	values := map[string][]string{
+		FileRoleAudio: {}, FileRoleCover: {}, FileRoleSidecar: {},
+	}
+	for _, fileID := range fileIDs {
+		role := roles[fileID]
+		values[role] = append(values[role], filesByID[fileID].relativePath)
+	}
+	for role := range values {
+		sort.Strings(values[role])
+	}
+	evidence, err := json.Marshal(values)
+	if err != nil {
+		return ErrInvalidData
+	}
+	if _, err := transaction.Exec(ctx, `
+		insert into book_grouping_evidence(book_id,root_id,reason_code,evidence,updated_at)
+		values ($1,$2,'manual',$3,now())
+		on conflict (book_id) do update
+		set root_id=excluded.root_id, reason_code='manual',
+		    evidence=excluded.evidence, updated_at=now()
+	`, bookID, rootID, evidence); err != nil {
+		return classifyConstraint(err, "save manual grouping evidence")
 	}
 	return nil
 }
@@ -1220,8 +1421,12 @@ func isAudioPath(relativePath string) bool {
 }
 
 type groupingFolderFile struct {
-	id           uuid.UUID
-	relativePath string
+	id            uuid.UUID
+	relativePath  string
+	size          int64
+	modifiedAt    time.Time
+	fileKind      string
+	companionKind string
 }
 
 func loadGroupingFolderFiles(
@@ -1231,18 +1436,13 @@ func loadGroupingFolderFiles(
 	sourceFolder string,
 ) ([]groupingFolderFile, error) {
 	rows, err := transaction.Query(ctx, `
-		select id, relative_path
+		select id, relative_path, size, modified_at, file_kind,
+		       coalesce(companion_kind,'')
 		from source_files
 		where root_id=$1
 		  and missing_at is null
-		  and (
-		      ($2='' and position('/' in relative_path)=0)
-		      or (
-		          $2<>''
-		          and left(relative_path, length($2)+1)=$2 || '/'
-		          and position('/' in substring(relative_path from length($2)+2))=0
-		      )
-		  )
+		  and ($2='' or left(relative_path, length($2)+1)=$2 || '/')
+		  and file_kind in ('audio','cover','companion')
 		order by relative_path, id
 	`, rootID, sourceFolder)
 	if err != nil {
@@ -1252,7 +1452,10 @@ func loadGroupingFolderFiles(
 	files := make([]groupingFolderFile, 0)
 	for rows.Next() {
 		var file groupingFolderFile
-		if err := rows.Scan(&file.id, &file.relativePath); err != nil {
+		if err := rows.Scan(
+			&file.id, &file.relativePath, &file.size, &file.modifiedAt,
+			&file.fileKind, &file.companionKind,
+		); err != nil {
 			return nil, err
 		}
 		files = append(files, file)
@@ -1264,27 +1467,39 @@ func loadGroupingFolderFiles(
 }
 
 func groupingBookFiles(
-	audioIDs []uuid.UUID,
+	selectedIDs []uuid.UUID,
 	folderFiles []groupingFolderFile,
 ) ([]uuid.UUID, map[uuid.UUID]string, error) {
-	filesByID := make(map[uuid.UUID]string, len(folderFiles))
+	filesByID := make(map[uuid.UUID]groupingFolderFile, len(folderFiles))
 	for _, file := range folderFiles {
-		filesByID[file.id] = file.relativePath
+		filesByID[file.id] = file
 	}
-	fileIDs := make([]uuid.UUID, 0, len(audioIDs)+1)
-	roles := make(map[uuid.UUID]string, len(audioIDs)+1)
-	audioStems := make(map[string]struct{}, len(audioIDs))
-	for _, id := range audioIDs {
-		relativePath, exists := filesByID[id]
-		if !exists || !isAudioPath(relativePath) {
+	fileIDs := make([]uuid.UUID, 0, len(selectedIDs)+1)
+	roles := make(map[uuid.UUID]string, len(selectedIDs)+1)
+	audioStems := make(map[string]struct{}, len(selectedIDs))
+	explicitNonAudio := false
+	for _, id := range selectedIDs {
+		file, exists := filesByID[id]
+		if !exists {
+			return nil, nil, ErrConflict
+		}
+		role := groupingFileRole(file)
+		if role == "" {
 			return nil, nil, ErrConflict
 		}
 		fileIDs = append(fileIDs, id)
-		roles[id] = FileRoleAudio
-		audioStems[fileStem(relativePath)] = struct{}{}
+		roles[id] = role
+		if role == FileRoleAudio {
+			audioStems[fileStem(file.relativePath)] = struct{}{}
+		} else {
+			explicitNonAudio = true
+		}
+	}
+	if explicitNonAudio {
+		return fileIDs, roles, nil
 	}
 	for _, file := range folderFiles {
-		if isAudioPath(file.relativePath) {
+		if groupingFileRole(file) == FileRoleAudio {
 			continue
 		}
 		role := ""
@@ -1300,6 +1515,25 @@ func groupingBookFiles(
 		roles[file.id] = role
 	}
 	return fileIDs, roles, nil
+}
+
+func groupingFileRole(file groupingFolderFile) string {
+	switch file.fileKind {
+	case FileKindAudio:
+		if isAudioPath(file.relativePath) {
+			return FileRoleAudio
+		}
+		if isRecognizedSharedCover(file.relativePath) {
+			return FileRoleCover
+		}
+		return ""
+	case FileKindCover:
+		return FileRoleCover
+	case FileKindCompanion:
+		return FileRoleSidecar
+	default:
+		return ""
+	}
 }
 
 func fileStem(relativePath string) string {
@@ -2081,7 +2315,7 @@ func prepareInferredBooks(
 		if err := verifyAssignmentFiles(ctx, transaction, rootID, filtered); err != nil {
 			return nil, err
 		}
-		audioFileIDs, err := verifyFilesInExactFolder(
+		audioFileIDs, err := verifyFilesInGroupingScope(
 			ctx,
 			transaction,
 			rootID,
@@ -2204,7 +2438,7 @@ func directAudioFiles(
 	return files, nil
 }
 
-func verifyFilesInExactFolder(
+func verifyFilesInGroupingScope(
 	ctx context.Context,
 	transaction pgx.Tx,
 	rootID string,
@@ -2229,13 +2463,10 @@ func verifyFilesInExactFolder(
 		if err := rows.Scan(&id, &relativePath); err != nil {
 			return nil, fmt.Errorf("scan inferred file folder: %w", err)
 		}
-		actualFolder := path.Dir(relativePath)
-		if actualFolder == "." {
-			actualFolder = ""
-		}
-		if actualFolder != folder || !isAudioPath(relativePath) {
+		inScope := folder == "" || strings.HasPrefix(relativePath, folder+"/")
+		if !inScope || !isAudioPath(relativePath) {
 			role := roles[id]
-			if actualFolder != folder ||
+			if !inScope ||
 				(role != FileRoleCover && role != FileRoleSidecar) {
 				return nil, ErrConflict
 			}

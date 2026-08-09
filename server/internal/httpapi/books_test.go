@@ -250,6 +250,7 @@ type catalogAPIFake struct {
 	confirmedMatch  uuid.UUID
 	grouping        catalog.GroupingCorrection
 	groupingContext catalog.GroupingContext
+	groupingResult  catalog.CatalogGeneration
 	jobs            []catalog.WorkerJob
 	jobIDs          map[uuid.UUID]struct{}
 	dedupeJobs      map[string]catalog.WorkerJob
@@ -313,14 +314,14 @@ func (repository *catalogAPIFake) GetGroupingContext(
 	}
 	result := catalog.GroupingContext{
 		BookID: bookID, RootID: detail.Book.RootID,
-		SourceFolder: detail.Book.SourceFolder,
-		Files:        []catalog.SourceFile{},
-		Books:        []catalog.GroupingContextBook{},
+		ScopePath: detail.Book.SourceFolder,
+		Files:     []catalog.GroupingContextFile{},
+		Books:     []catalog.GroupingContextBook{},
 	}
 	seenFiles := make(map[uuid.UUID]struct{})
 	for id, candidate := range repository.details {
 		if candidate.Book.RootID != result.RootID ||
-			candidate.Book.SourceFolder != result.SourceFolder ||
+			candidate.Book.SourceFolder != result.ScopePath ||
 			candidate.Book.MissingAt != nil {
 			continue
 		}
@@ -330,14 +331,16 @@ func (repository *catalogAPIFake) GetGroupingContext(
 		}
 		for _, file := range candidate.Files {
 			if file.MissingAt != nil || file.RootID != result.RootID ||
-				!inSourceFolder(file.RelativePath, result.SourceFolder) ||
+				!inSourceFolder(file.RelativePath, result.ScopePath) ||
 				!isAudioPath(file.RelativePath) {
 				continue
 			}
 			sibling.FileIDs = append(sibling.FileIDs, file.ID)
 			if _, duplicate := seenFiles[file.ID]; !duplicate {
 				seenFiles[file.ID] = struct{}{}
-				result.Files = append(result.Files, file)
+				result.Files = append(result.Files, catalog.GroupingContextFile{
+					SourceFile: file, Role: catalog.FileRoleAudio,
+				})
 			}
 		}
 		result.Books = append(result.Books, sibling)
@@ -368,9 +371,15 @@ func (repository *catalogAPIFake) ConfirmMatch(
 func (repository *catalogAPIFake) SaveGrouping(
 	_ context.Context,
 	grouping catalog.GroupingCorrection,
-) error {
+) (catalog.CatalogGeneration, error) {
 	repository.grouping = grouping
-	return repository.err
+	if repository.err != nil {
+		return catalog.CatalogGeneration{}, repository.err
+	}
+	if repository.groupingResult.Value == 0 {
+		repository.groupingResult = catalog.CatalogGeneration{RootID: grouping.RootID, Value: 2}
+	}
+	return repository.groupingResult, nil
 }
 
 func (repository *catalogAPIFake) Enqueue(

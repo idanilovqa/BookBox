@@ -66,7 +66,7 @@ class AppJourneyTest {
                           "rootId":"audiobooks",
                           "title":"Dune",
                           "authors":["Frank Herbert"],
-                          "reviewState":"matched",
+                          "reviewState":"confirmed",
                           "sourceFolder":"Frank Herbert/Dune"
                         }
                         """.trimIndent(),

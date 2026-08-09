@@ -6,6 +6,7 @@ import com.rendref.bookbox.core.model.BookFileDto
 import com.rendref.bookbox.core.model.BookFilesDto
 import com.rendref.bookbox.core.model.GroupingContextBookDto
 import com.rendref.bookbox.core.model.GroupingContextDto
+import com.rendref.bookbox.core.model.GroupingFileDto
 import com.rendref.bookbox.core.model.MatchSearchDto
 import com.rendref.bookbox.core.model.MetadataCandidateDto
 import com.rendref.bookbox.core.repository.GroupingDecision
@@ -183,6 +184,77 @@ class BookDetailViewModelTest {
         }
 
     @Test
+    fun `needs review automatically opens expanded grouping and confirms returned generation`() =
+        runTest(dispatcher) {
+            val context = expandedGroupingContext()
+            val source = FakeReviewSource(
+                detail = BookDetailDto(
+                    id = BOOK_ID,
+                    rootId = "audiobooks",
+                    title = "Dune",
+                    authors = listOf("Frank Herbert"),
+                    reviewState = "needs_review",
+                    reviewReason = "probe_failed",
+                    sourceFolder = "Omnibus",
+                ),
+                groupingContext = context,
+                savedGeneration = 8,
+            )
+
+            val viewModel = BookDetailViewModel(BOOK_ID, source)
+            advanceUntilIdle()
+
+            assertEquals(ReviewPane.GROUPING, viewModel.state.value.pane)
+            assertEquals(listOf(BOOK_ID), source.groupingRequests)
+            assertEquals("Omnibus", viewModel.state.value.groupingScopePath)
+            assertEquals("probe_failed", viewModel.state.value.groupingReviewReason)
+            assertEquals(
+                listOf("Omnibus/book.cue"),
+                viewModel.state.value.groupingEvidence["sidecar"],
+            )
+            assertFalse(viewModel.state.value.canReorganize)
+            assertEquals(
+                listOf(
+                    "Omnibus/Disc 1/First.m4b",
+                    "Omnibus/Disc 2/Second.flac",
+                    "Omnibus/book.cue",
+                    "Omnibus/cover.jpg",
+                ),
+                viewModel.state.value.groupingFiles.map { it.relativePath },
+            )
+
+            val (first, second) = viewModel.state.value.groups
+            assertEquals(setOf(FILE_ONE_ID), first.fileIds)
+            assertEquals(setOf(COMPANION_ID, COVER_ID), first.companionFileIds)
+            assertEquals(setOf(FILE_TWO_ID), second.fileIds)
+            assertEquals(setOf(COVER_ID), second.companionFileIds)
+
+            viewModel.assignFileToGroup(FILE_TWO_ID, first.id)
+            assertEquals(setOf(FILE_ONE_ID, FILE_TWO_ID), viewModel.state.value.groups[0].fileIds)
+            assertTrue(viewModel.state.value.groups[1].fileIds.isEmpty())
+            viewModel.assignFileToGroup(FILE_TWO_ID, second.id)
+            viewModel.toggleCompanionForGroup(COMPANION_ID, second.id)
+            assertFalse(COMPANION_ID in viewModel.state.value.groups[0].companionFileIds)
+            assertTrue(COMPANION_ID in viewModel.state.value.groups[1].companionFileIds)
+            assertTrue(viewModel.state.value.groups.all { COVER_ID in it.companionFileIds })
+            assertTrue(viewModel.state.value.canSaveGrouping)
+
+            viewModel.saveGrouping()
+            advanceUntilIdle()
+
+            assertEquals(8L, viewModel.state.value.catalogGeneration)
+            assertEquals(context.files, source.savedExpectedFiles.single())
+            assertEquals(
+                setOf(COVER_ID),
+                source.savedGroupings.single()[0].companionFileIds,
+            )
+            assertEquals(
+                setOf(COMPANION_ID, COVER_ID),
+                source.savedGroupings.single()[1].companionFileIds,
+            )
+        }
+
+    @Test
     fun `pane switches ignore deferred results from the previous review operation`() =
         runTest(dispatcher) {
             val firstSearch = CompletableDeferred<MatchSearchDto>()
@@ -239,20 +311,16 @@ private class FakeReviewSource(
     private val queuedSearches: ArrayDeque<CompletableDeferred<MatchSearchDto>>? = null,
     private val groupingContext: GroupingContextDto = defaultGroupingContext(),
     private val queuedGroupingContext: CompletableDeferred<GroupingContextDto>? = null,
+    private val detail: BookDetailDto = defaultBookDetail(),
+    private val savedGeneration: Long = 1,
 ) : ReviewSource {
     val searches = mutableListOf<Triple<String, String, String>>()
     val groupingRequests = mutableListOf<String>()
     val confirmedMatches = mutableListOf<Pair<String, String>>()
     val savedGroupings = mutableListOf<List<GroupingDecision>>()
+    val savedExpectedFiles = mutableListOf<List<GroupingFileDto>>()
 
-    override suspend fun bookDetail(bookId: String) = BookDetailDto(
-        id = bookId,
-        rootId = "audiobooks",
-        title = "Dune",
-        authors = listOf("Frank Herbert"),
-        reviewState = "needs_review",
-        sourceFolder = "Frank Herbert/Dune",
-    )
+    override suspend fun bookDetail(bookId: String) = detail.copy(id = bookId)
 
     override suspend fun bookFiles(bookId: String) = BookFilesDto(
         bookId = bookId,
@@ -288,11 +356,75 @@ private class FakeReviewSource(
     override suspend fun saveGrouping(
         bookId: String,
         groups: List<GroupingDecision>,
-    ) {
+        expectedFiles: List<GroupingFileDto>,
+    ): Long {
         savedGroupings += groups
+        savedExpectedFiles += expectedFiles
+        return savedGeneration
     }
 
 }
+
+private fun defaultBookDetail() = BookDetailDto(
+    id = BOOK_ID,
+    rootId = "audiobooks",
+    title = "Dune",
+    authors = listOf("Frank Herbert"),
+    reviewState = "confirmed",
+    sourceFolder = "Frank Herbert/Dune",
+)
+
+private fun expandedGroupingContext() = GroupingContextDto(
+    bookId = BOOK_ID,
+    rootId = "audiobooks",
+    scopePath = "Omnibus",
+    reviewReason = "probe_failed",
+    evidence = mapOf(
+        "audio" to listOf("Omnibus/Disc 1/First.m4b"),
+        "sidecar" to listOf("Omnibus/book.cue"),
+    ),
+    canReorganize = false,
+    files = listOf(
+        groupingFile(FILE_ONE_ID, "Omnibus/Disc 1/First.m4b", "audio"),
+        groupingFile(FILE_TWO_ID, "Omnibus/Disc 2/Second.flac", "audio"),
+        groupingFile(
+            COMPANION_ID,
+            "Omnibus/book.cue",
+            role = "sidecar",
+            companionKind = "cue",
+        ),
+        groupingFile(COVER_ID, "Omnibus/cover.jpg", role = "cover", shared = true),
+    ),
+    books = listOf(
+        GroupingContextBookDto(
+            BOOK_ID,
+            "First",
+            listOf(FILE_ONE_ID, COMPANION_ID, COVER_ID),
+        ),
+        GroupingContextBookDto(
+            SIBLING_BOOK_ID,
+            "Second",
+            listOf(FILE_TWO_ID, COVER_ID),
+        ),
+    ),
+)
+
+private fun groupingFile(
+    id: String,
+    relativePath: String,
+    role: String,
+    companionKind: String = "",
+    shared: Boolean = false,
+) = GroupingFileDto(
+    id = id,
+    relativePath = relativePath,
+    name = relativePath.substringAfterLast('/'),
+    size = 100,
+    modifiedAt = "2026-07-26T00:00:00Z",
+    role = role,
+    companionKind = companionKind,
+    shared = shared,
+)
 
 private fun defaultGroupingContext() = GroupingContextDto(
     bookId = BOOK_ID,
@@ -343,3 +475,5 @@ private const val FILE_ONE_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 private const val FILE_TWO_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 private const val LOOSE_FILE_ID = "12121212-1212-4121-8121-121212121212"
 private const val SIBLING_BOOK_ID = "13131313-1313-4131-8131-131313131313"
+private const val COMPANION_ID = "14141414-1414-4141-8141-141414141414"
+private const val COVER_ID = "15151515-1515-4151-8151-151515151515"

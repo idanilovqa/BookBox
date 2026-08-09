@@ -1,6 +1,7 @@
 package com.rendref.bookbox.feature.book
 
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -39,9 +41,8 @@ fun GroupingScreen(
     modifier: Modifier = Modifier,
 ) {
     var mergeSourceId by remember { mutableStateOf<Int?>(null) }
-    val audioFiles = state.groupingFiles.filter { file ->
-        AUDIO_SUFFIXES.any { file.name.endsWith(it, ignoreCase = true) }
-    }
+    val audioFiles = state.groupingFiles.filter { it.role == "audio" }
+    val companionFiles = state.groupingFiles.filter { it.role != "audio" }
     LazyColumn(
         modifier = modifier
             .testTag("grouping-list")
@@ -57,6 +58,14 @@ fun GroupingScreen(
                 fontWeight = FontWeight.SemiBold,
             )
             Text("Each audio file must belong to exactly one logical book.")
+            state.groupingReviewReason?.let { reason ->
+                Text("Review reason: ${reason.displayLabel()}")
+            }
+            state.groupingEvidence.toSortedMap().forEach { (role, paths) ->
+                paths.forEach { path ->
+                    Text("${role.displayLabel()} evidence: $path")
+                }
+            }
         }
         item {
             ReviewStatusMessages(
@@ -81,6 +90,14 @@ fun GroupingScreen(
                         Text(it, style = MaterialTheme.typography.bodyMedium)
                     }
                     audioFiles.forEach { file ->
+                        val displayPath = if (
+                            state.groupingScopePath.isNotEmpty() ||
+                            state.groupingReviewReason != null
+                        ) {
+                            file.relativePath
+                        } else {
+                            file.name
+                        }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -95,7 +112,7 @@ fun GroupingScreen(
                                 )
                                 .semantics {
                                     contentDescription =
-                                        "Assign ${file.name} to logical book $groupNumber"
+                                        "Assign $displayPath to logical book $groupNumber"
                                 },
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -103,7 +120,39 @@ fun GroupingScreen(
                                 selected = file.id in group.fileIds,
                                 onClick = null,
                             )
-                            Text(file.name)
+                            Text(displayPath)
+                        }
+                    }
+                    companionFiles.forEach { file ->
+                        val displayPath = file.relativePath
+                        val selected = file.id in group.companionFileIds
+                        val verb = if (file.shared) "Share" else "Assign"
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .toggleable(
+                                    value = selected,
+                                    role = Role.Checkbox,
+                                    onValueChange = {
+                                        onAction(
+                                            BookReviewAction.ToggleCompanion(file.id, group.id),
+                                        )
+                                    },
+                                )
+                                .semantics {
+                                    contentDescription = if (file.shared) {
+                                        "$verb $displayPath with logical book $groupNumber"
+                                    } else {
+                                        "$verb $displayPath to logical book $groupNumber"
+                                    }
+                                },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = selected,
+                                onCheckedChange = null,
+                            )
+                            Text(displayPath)
                         }
                     }
                     if (state.groups.size > 1) {
@@ -158,19 +207,8 @@ fun GroupingScreen(
                     .fillMaxWidth()
                     .padding(bottom = 24.dp),
             ) {
-                Text("Save catalog grouping")
+                Text("Confirm grouping")
             }
         }
     }
 }
-
-private val AUDIO_SUFFIXES = listOf(
-    ".m4b",
-    ".m4a",
-    ".mp3",
-    ".aac",
-    ".flac",
-    ".ogg",
-    ".opus",
-    ".wav",
-)

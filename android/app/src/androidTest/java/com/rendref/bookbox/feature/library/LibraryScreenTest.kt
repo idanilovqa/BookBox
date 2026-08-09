@@ -118,6 +118,31 @@ class LibraryScreenTest {
     }
 
     @Test
+    fun needsReviewCardExposesAccessibleGroupingReviewAction() {
+        val actions = mutableListOf<LibraryAction>()
+        val provisional = dune.copy(
+            reviewState = "needs_review",
+            reviewReason = "probe_failed",
+        )
+        composeRule.setContent {
+            MaterialTheme {
+                AudiobookCard(
+                    book = provisional,
+                    selected = false,
+                    onAction = actions::add,
+                    modifier = Modifier.width(180.dp),
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Review audiobook grouping")
+            .assertIsDisplayed()
+            .performClick()
+
+        assertEquals(LibraryAction.ReviewGrouping(dune.id), actions.single())
+    }
+
+    @Test
     fun duplicateGroupStartsCollapsedExpandsAcrossRootsAndRoutesEachBook() {
         val actions = mutableListOf<LibraryAction>()
         composeRule.setContent {

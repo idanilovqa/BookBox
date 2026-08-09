@@ -17,6 +17,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import com.rendref.bookbox.core.model.BookDetailDto
 import com.rendref.bookbox.core.model.BookFileDto
+import com.rendref.bookbox.core.model.GroupingFileDto
 import com.rendref.bookbox.core.model.MetadataAttributionDto
 import com.rendref.bookbox.core.model.MetadataCandidateDto
 import org.junit.Assert.assertEquals
@@ -179,7 +180,92 @@ class BookReviewTest {
         composeRule.onAllNodesWithText("part-1.m4b").assertCountEquals(2)
         composeRule.onAllNodesWithText("part-2.m4b").assertCountEquals(2)
         composeRule.onNodeWithText("Add logical book").assertIsDisplayed()
-        composeRule.onNodeWithText("Save catalog grouping").performClick()
+        composeRule.onNodeWithText("Confirm grouping").performClick()
+        assertEquals(BookReviewAction.SaveGrouping, actions.last())
+        assertNoMutationActions()
+    }
+
+    @Test
+    fun groupingShowsEvidenceNestedFilesAndCompanionAssignments() {
+        val actions = mutableListOf<BookReviewAction>()
+        composeRule.setContent {
+            MaterialTheme {
+                GroupingScreen(
+                    reviewState.copy(
+                        pane = ReviewPane.GROUPING,
+                        groupingReviewReason = "probe_failed",
+                        groupingEvidence = mapOf(
+                            "sidecar" to listOf("Omnibus/book.cue"),
+                        ),
+                        groupingFiles = listOf(
+                            groupingFile(
+                                FILE_ONE_ID,
+                                "Omnibus/Disc 1/First.m4b",
+                                "audio",
+                            ),
+                            groupingFile(
+                                FILE_TWO_ID,
+                                "Omnibus/Disc 2/Second.flac",
+                                "audio",
+                            ),
+                            groupingFile(
+                                COMPANION_ID,
+                                "Omnibus/book.cue",
+                                "sidecar",
+                                companionKind = "cue",
+                            ),
+                            groupingFile(
+                                COVER_ID,
+                                "Omnibus/cover.jpg",
+                                "cover",
+                                shared = true,
+                            ),
+                        ),
+                        groups = listOf(
+                            GroupingDraft(
+                                localId = 1,
+                                bookId = BOOK_ID,
+                                fileIds = setOf(FILE_ONE_ID),
+                                companionFileIds = setOf(COMPANION_ID, COVER_ID),
+                            ),
+                            GroupingDraft(
+                                localId = 2,
+                                bookId = null,
+                                fileIds = setOf(FILE_TWO_ID),
+                                companionFileIds = setOf(COVER_ID),
+                            ),
+                        ),
+                        canSaveGrouping = true,
+                    ),
+                    onAction = actions::add,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Probe failed", substring = true).assertIsDisplayed()
+        composeRule.onAllNodesWithText("Omnibus/book.cue", substring = true)[0]
+            .assertIsDisplayed()
+        composeRule.onAllNodesWithText("Omnibus/Disc 1/First.m4b")
+            .assertCountEquals(2)
+        composeRule.onAllNodesWithText("Omnibus/Disc 2/Second.flac")
+            .assertCountEquals(2)
+
+        composeRule.onNodeWithContentDescription(
+            "Assign Omnibus/Disc 2/Second.flac to logical book 1",
+        ).performClick()
+        assertEquals(BookReviewAction.AssignFile(FILE_TWO_ID, 1), actions.last())
+
+        composeRule.onNodeWithContentDescription(
+            "Assign Omnibus/book.cue to logical book 2",
+        ).performClick()
+        assertEquals(BookReviewAction.ToggleCompanion(COMPANION_ID, 2), actions.last())
+
+        composeRule.onNodeWithContentDescription(
+            "Share Omnibus/cover.jpg with logical book 2",
+        ).assertIsDisplayed()
+        composeRule.onNodeWithText("Add logical book").performClick()
+        assertEquals(BookReviewAction.AddGroup, actions.last())
+        composeRule.onNodeWithText("Confirm grouping").performClick()
         assertEquals(BookReviewAction.SaveGrouping, actions.last())
         assertNoMutationActions()
     }
@@ -274,7 +360,26 @@ private fun bookFile(id: String, name: String) = BookFileDto(
     "2026-07-26T00:00:00Z",
 )
 
+private fun groupingFile(
+    id: String,
+    relativePath: String,
+    role: String,
+    companionKind: String = "",
+    shared: Boolean = false,
+) = GroupingFileDto(
+    id = id,
+    relativePath = relativePath,
+    name = relativePath.substringAfterLast('/'),
+    size = 100,
+    modifiedAt = "2026-07-26T00:00:00Z",
+    role = role,
+    companionKind = companionKind,
+    shared = shared,
+)
+
 private const val BOOK_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 private const val MATCH_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 private const val FILE_ONE_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 private const val FILE_TWO_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+private const val COMPANION_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+private const val COVER_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"

@@ -171,11 +171,22 @@ type BookDetail struct {
 }
 
 type GroupingContext struct {
-	BookID       uuid.UUID
-	RootID       string
-	SourceFolder string
-	Files        []SourceFile
-	Books        []GroupingContextBook
+	BookID        uuid.UUID
+	RootID        string
+	SourceFolder  string
+	ScopePath     string
+	ReviewReason  string
+	Evidence      map[string][]string
+	Files         []GroupingContextFile
+	Books         []GroupingContextBook
+	CanReorganize bool
+}
+
+type GroupingContextFile struct {
+	SourceFile
+	Role          string
+	CompanionKind string
+	Shared        bool
 }
 
 type GroupingContextBook struct {
@@ -229,11 +240,18 @@ type GroupingGroup struct {
 }
 
 type GroupingCorrection struct {
-	ID           uuid.UUID
-	RootID       string
-	SourceFolder string
-	Groups       []GroupingGroup
-	UpdatedAt    time.Time
+	ID            uuid.UUID
+	RootID        string
+	SourceFolder  string
+	ExpectedFiles []GroupingFileFingerprint
+	Groups        []GroupingGroup
+	UpdatedAt     time.Time
+}
+
+type GroupingFileFingerprint struct {
+	FileID     uuid.UUID `json:"fileId"`
+	Size       int64     `json:"size"`
+	ModifiedAt time.Time `json:"modifiedAt"`
 }
 
 type WorkerJob struct {

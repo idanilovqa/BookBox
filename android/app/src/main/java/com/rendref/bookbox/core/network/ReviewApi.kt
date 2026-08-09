@@ -5,6 +5,7 @@ import com.rendref.bookbox.core.model.ApiJson
 import com.rendref.bookbox.core.model.BookDetailDto
 import com.rendref.bookbox.core.model.BookFilesDto
 import com.rendref.bookbox.core.model.GroupingContextDto
+import com.rendref.bookbox.core.model.GroupingFileDto
 import com.rendref.bookbox.core.model.MatchSearchDto
 import com.rendref.bookbox.core.model.MetadataCandidateDto
 import java.io.IOException
@@ -40,6 +41,7 @@ class ReviewApi(
                 if (
                     detail.id != bookId ||
                     !ROOT_ID.matches(detail.rootId) ||
+                    !validReviewPair(detail.reviewState, detail.reviewReason) ||
                     !validRelativePath(detail.sourceFolder, allowEmpty = true) ||
                     detail.title.isBlank() ||
                     !detail.title.isSafeDisplayText() ||
@@ -112,13 +114,30 @@ class ReviewApi(
             .get()
             .build()
         return executeJson<GroupingContextDto>(request).also { response ->
-            val availableFileIds = response.files.map { it.id }.toSet()
+            val availableFiles = response.files.associateBy { it.id }
+            val availableFileIds = availableFiles.keys
             val assignedFileIds = response.books.flatMap { it.fileIds }
+            val assignmentCounts = assignedFileIds.groupingBy { it }.eachCount()
+            val scopePath = response.scopePath.ifEmpty { response.sourceFolder }
             if (
                 response.bookId != bookId ||
                 !ROOT_ID.matches(response.rootId) ||
-                !validRelativePath(response.sourceFolder, allowEmpty = true) ||
-                response.files.distinctBy { it.id }.size != response.files.size ||
+                !validRelativePath(scopePath, allowEmpty = true) ||
+                response.sourceFolder.let {
+                    it.isNotEmpty() && !validRelativePath(it, allowEmpty = true)
+                } ||
+                availableFiles.size != response.files.size ||
+                response.reviewReason?.let {
+                    it.isBlank() || !it.isSafeDisplayText()
+                } == true ||
+                response.evidence.any { (role, paths) ->
+                    role !in GROUPING_ROLES ||
+                        paths.distinct().size != paths.size ||
+                        paths.any {
+                            !validRelativePath(it, allowEmpty = false) ||
+                                !it.isWithin(scopePath)
+                        }
+                } ||
                 response.files.any { file ->
                     !UUID.matches(file.id) ||
                         file.size < 0 ||
@@ -127,11 +146,10 @@ class ReviewApi(
                         '/' in file.name ||
                         '\\' in file.name ||
                         !validRelativePath(file.relativePath, allowEmpty = false) ||
-                        file.relativePath != childPath(response.sourceFolder, file.name) ||
+                        file.relativePath.substringAfterLast('/') != file.name ||
+                        !file.relativePath.isWithin(scopePath) ||
                         !validInstant(file.modifiedAt) ||
-                        AUDIO_SUFFIXES.none {
-                            file.name.endsWith(it, ignoreCase = true)
-                        }
+                        !validGroupingFile(file)
                 } ||
                 response.books.size !in 1..MAX_GROUPS ||
                 response.books.distinctBy { it.bookId }.size != response.books.size ||
@@ -145,7 +163,10 @@ class ReviewApi(
                             !UUID.matches(it) || it !in availableFileIds
                         }
                 } ||
-                assignedFileIds.distinct().size != assignedFileIds.size
+                response.files.any { file ->
+                    val count = assignmentCounts[file.id] ?: 0
+                    !file.shared && count > 1
+                }
             ) {
                 throw IOException("Server returned invalid grouping context")
             }
@@ -215,9 +236,56 @@ class ReviewApi(
         val request = jsonRequest(
             bookUrl(bookId).newBuilder().addPathSegment("grouping").build(),
             "PUT",
-            ApiJson.encodeToString(GroupingRequest(groups)),
+            ApiJson.encodeToString(GroupingRequest(groups = groups)),
         )
         executeNoContent(request)
+    }
+
+    suspend fun saveGrouping(
+        bookId: String,
+        groups: List<ReviewGroupingRequest>,
+        expectedFiles: List<GroupingFileDto>,
+    ): Long {
+        requireUuid(bookId)
+        require(groups.size in 2..MAX_GROUPS)
+        require(
+            expectedFiles.isNotEmpty() &&
+                expectedFiles.distinctBy { it.id }.size == expectedFiles.size,
+        )
+        val expectedById = expectedFiles.associateBy { it.id }
+        val assigned = groups.flatMap(ReviewGroupingRequest::fileIds)
+        val counts = assigned.groupingBy { it }.eachCount()
+        val existingBookIds = groups.mapNotNull(ReviewGroupingRequest::bookId)
+        require(
+            groups.all { it.bookId == null || UUID.matches(it.bookId) } &&
+                groups.all { group ->
+                    group.fileIds.isNotEmpty() &&
+                        group.fileIds.distinct().size == group.fileIds.size &&
+                        group.fileIds.all { it in expectedById } &&
+                        group.fileIds.any { expectedById[it]?.role == "audio" }
+                } &&
+                existingBookIds.distinct().size == existingBookIds.size &&
+                expectedFiles.all { file ->
+                    UUID.matches(file.id) && file.size >= 0 && validInstant(file.modifiedAt) &&
+                        if (file.shared) (counts[file.id] ?: 0) >= 1
+                        else counts[file.id] == 1
+                },
+        )
+        val request = jsonRequest(
+            bookUrl(bookId).newBuilder().addPathSegment("grouping").build(),
+            "PUT",
+            ApiJson.encodeToString(
+                GroupingRequest(
+                    expectedFiles = expectedFiles.map {
+                        GroupingExpectedFileRequest(it.id, it.size, it.modifiedAt)
+                    },
+                    groups = groups,
+                ),
+            ),
+        )
+        return executeJson<GroupingSaveResponse>(request).catalogGeneration.also {
+            if (it <= 0) throw IOException("Server returned an invalid catalog generation")
+        }
     }
 
     private fun bookUrl(bookId: String): HttpUrl = baseUrl.newBuilder()
@@ -291,7 +359,20 @@ data class ReviewGroupingRequest(
 )
 
 @Serializable
-private data class GroupingRequest(val groups: List<ReviewGroupingRequest>)
+private data class GroupingExpectedFileRequest(
+    val fileId: String,
+    val size: Long,
+    val modifiedAt: String,
+)
+
+@Serializable
+private data class GroupingRequest(
+    val expectedFiles: List<GroupingExpectedFileRequest> = emptyList(),
+    val groups: List<ReviewGroupingRequest>,
+)
+
+@Serializable
+private data class GroupingSaveResponse(val catalogGeneration: Long)
 
 private fun jsonRequest(url: HttpUrl, method: String, body: String): Request =
     Request.Builder()
@@ -364,6 +445,24 @@ private fun requireUuid(value: String) {
 private fun childPath(parent: String, name: String): String =
     if (parent.isEmpty()) name else "$parent/$name"
 
+private fun String.isWithin(scopePath: String): Boolean =
+    scopePath.isEmpty() || startsWith("$scopePath/")
+
+private fun validGroupingFile(file: GroupingFileDto): Boolean = when (file.role) {
+    "audio" -> !file.shared && file.companionKind.isEmpty() && AUDIO_SUFFIXES.any {
+        file.name.endsWith(it, ignoreCase = true)
+    }
+    "cover" -> file.shared && file.companionKind.isEmpty()
+    "sidecar" -> !file.shared && file.companionKind in COMPANION_KINDS
+    else -> false
+}
+
+private fun validReviewPair(state: String, reason: String?): Boolean = when (state) {
+    "needs_review" -> !reason.isNullOrBlank() && reason.isSafeDisplayText()
+    "confirmed", "unreviewed" -> reason == null
+    else -> false
+}
+
 private fun HttpUrl.sameOrigin(other: HttpUrl): Boolean =
     scheme == other.scheme && host == other.host && port == other.port
 
@@ -389,3 +488,5 @@ private val AUDIO_SUFFIXES = setOf(
     ".opus",
     ".wav",
 )
+private val GROUPING_ROLES = setOf("audio", "cover", "sidecar")
+private val COMPANION_KINDS = setOf("cue", "nfo", "opf", "playlist", "ebook", "other")

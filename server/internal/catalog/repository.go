@@ -44,7 +44,7 @@ type Repository interface {
 	GetGroupingContext(context.Context, uuid.UUID) (GroupingContext, error)
 	SaveMatches(context.Context, uuid.UUID, []MetadataMatch) error
 	ConfirmMatch(context.Context, uuid.UUID, uuid.UUID) error
-	SaveGrouping(context.Context, GroupingCorrection) error
+	SaveGrouping(context.Context, GroupingCorrection) (CatalogGeneration, error)
 	Enqueue(context.Context, WorkerJob) error
 	EnqueueDeduplicated(context.Context, WorkerJob, string) (WorkerJob, error)
 	RecoverExpiredJobs(context.Context, time.Time) error

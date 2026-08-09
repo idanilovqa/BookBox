@@ -4,6 +4,7 @@ import com.rendref.bookbox.core.model.AcceptedJobDto
 import com.rendref.bookbox.core.model.BookDetailDto
 import com.rendref.bookbox.core.model.BookFilesDto
 import com.rendref.bookbox.core.model.GroupingContextDto
+import com.rendref.bookbox.core.model.GroupingFileDto
 import com.rendref.bookbox.core.model.MatchSearchDto
 import com.rendref.bookbox.core.network.ReviewApi
 import com.rendref.bookbox.core.network.ReviewGroupingRequest
@@ -11,6 +12,7 @@ import com.rendref.bookbox.core.network.ReviewGroupingRequest
 data class GroupingDecision(
     val bookId: String?,
     val fileIds: List<String>,
+    val companionFileIds: Collection<String> = emptyList(),
 )
 
 interface ReviewSource {
@@ -29,7 +31,20 @@ interface ReviewSource {
 
     suspend fun confirmMatch(bookId: String, matchId: String): AcceptedJobDto
 
-    suspend fun saveGrouping(bookId: String, groups: List<GroupingDecision>)
+    suspend fun saveGrouping(bookId: String, groups: List<GroupingDecision>) {
+        throw UnsupportedOperationException(
+            "Grouping save is not implemented for $bookId (${groups.size} groups)",
+        )
+    }
+
+    suspend fun saveGrouping(
+        bookId: String,
+        groups: List<GroupingDecision>,
+        expectedFiles: List<GroupingFileDto>,
+    ): Long {
+        saveGrouping(bookId, groups)
+        return 1
+    }
 }
 
 class ReviewRepository(
@@ -56,6 +71,21 @@ class ReviewRepository(
         groups: List<GroupingDecision>,
     ) = api.saveGrouping(
         bookId,
-        groups.map { ReviewGroupingRequest(it.bookId, it.fileIds) },
+        groups.map { it.toRequest() },
+    )
+
+    override suspend fun saveGrouping(
+        bookId: String,
+        groups: List<GroupingDecision>,
+        expectedFiles: List<GroupingFileDto>,
+    ) = api.saveGrouping(
+        bookId,
+        groups.map { it.toRequest() },
+        expectedFiles,
     )
 }
+
+private fun GroupingDecision.toRequest() = ReviewGroupingRequest(
+    bookId,
+    fileIds + companionFileIds,
+)

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rendref.bookbox.core.model.BookDetailDto
 import com.rendref.bookbox.core.model.BookFileDto
+import com.rendref.bookbox.core.model.GroupingFileDto
 import com.rendref.bookbox.core.model.MetadataCandidateDto
 import com.rendref.bookbox.core.repository.GroupingDecision
 import com.rendref.bookbox.core.repository.ReviewSource
@@ -21,17 +22,25 @@ enum class ReviewPane {
 }
 
 data class GroupingDraft(
-    val id: Int,
+    val localId: Int,
     val bookId: String?,
     val fileIds: Set<String>,
     val title: String? = null,
-)
+    val companionFileIds: Set<String> = emptySet(),
+) {
+    val id: Int get() = localId
+}
 
 data class BookReviewState(
     val pane: ReviewPane = ReviewPane.DETAIL,
     val detail: BookDetailDto? = null,
     val files: List<BookFileDto> = emptyList(),
-    val groupingFiles: List<BookFileDto> = emptyList(),
+    val groupingFiles: List<GroupingFileDto> = emptyList(),
+    val groupingScopePath: String = "",
+    val groupingReviewReason: String? = null,
+    val groupingEvidence: Map<String, List<String>> = emptyMap(),
+    val canReorganize: Boolean = false,
+    val catalogGeneration: Long = 0,
     val matches: List<MetadataCandidateDto> = emptyList(),
     val searchTitle: String = "",
     val searchAuthor: String = "",
@@ -70,6 +79,9 @@ class BookDetailViewModel(
                     searchIsbn = detail.identifiers["isbn"].orEmpty(),
                     isLoading = false,
                 )
+                if (detail.reviewState == "needs_review") {
+                    openGrouping()
+                }
             } catch (failure: CancellationException) {
                 throw failure
             } catch (_: Exception) {
@@ -195,6 +207,10 @@ class BookDetailViewModel(
         mutableState.value = mutableState.value.copy(
             pane = ReviewPane.GROUPING,
             groupingFiles = emptyList(),
+            groupingScopePath = "",
+            groupingReviewReason = null,
+            groupingEvidence = emptyMap(),
+            canReorganize = false,
             groups = emptyList(),
             canSaveGrouping = false,
             isLoading = true,
@@ -203,16 +219,32 @@ class BookDetailViewModel(
         groupingJob = viewModelScope.launch {
             try {
                 val context = reviews.groupingContext(bookId)
+                val filesById = context.files.associateBy { it.id }
+                val sharedCompanions = context.files
+                    .filter { it.shared }
+                    .mapTo(mutableSetOf()) { it.id }
                 val groups = context.books.mapIndexed { index, book ->
+                    val audioIds = book.fileIds.filterTo(mutableSetOf()) {
+                        filesById[it]?.role == "audio"
+                    }
+                    val companionIds = book.fileIds.filterTo(mutableSetOf()) {
+                        filesById[it]?.role != "audio"
+                    }
                     GroupingDraft(
-                        id = index + 1,
+                        localId = index + 1,
                         bookId = book.bookId,
-                        fileIds = book.fileIds.toSet(),
+                        fileIds = audioIds,
                         title = book.title,
+                        companionFileIds = companionIds + sharedCompanions,
                     )
                 }.toMutableList()
                 if (groups.size == 1) {
-                    groups += GroupingDraft(2, null, emptySet())
+                    groups += GroupingDraft(
+                        2,
+                        null,
+                        emptySet(),
+                        companionFileIds = sharedCompanions,
+                    )
                 }
                 nextGroupId = (groups.maxOfOrNull { it.id } ?: 0) + 1
                 if (
@@ -223,6 +255,10 @@ class BookDetailViewModel(
                 }
                 mutableState.value = mutableState.value.copy(
                     groupingFiles = context.files,
+                    groupingScopePath = context.scopePath,
+                    groupingReviewReason = context.reviewReason,
+                    groupingEvidence = context.evidence,
+                    canReorganize = context.canReorganize,
                     groups = groups,
                     canSaveGrouping = validGrouping(groups, context.files),
                     isLoading = false,
@@ -247,7 +283,14 @@ class BookDetailViewModel(
     fun addGroup() {
         if (mutableState.value.groups.size >= MAX_GROUPS) return
         updateGroups(
-            mutableState.value.groups + GroupingDraft(nextGroupId++, null, emptySet()),
+            mutableState.value.groups + GroupingDraft(
+                nextGroupId++,
+                null,
+                emptySet(),
+                companionFileIds = companionFiles()
+                    .filter { it.shared }
+                    .mapTo(mutableSetOf()) { it.id },
+            ),
         )
     }
 
@@ -274,7 +317,10 @@ class BookDetailViewModel(
         updateGroups(
             groups.filterNot { it.id == sourceId }.map { group ->
                 if (group.id == targetId) {
-                    group.copy(fileIds = group.fileIds + source.fileIds)
+                    group.copy(
+                        fileIds = group.fileIds + source.fileIds,
+                        companionFileIds = group.companionFileIds + source.companionFileIds,
+                    )
                 } else {
                     group
                 }
@@ -282,19 +328,50 @@ class BookDetailViewModel(
         )
     }
 
+    fun toggleCompanionForGroup(fileId: String, groupId: Int) {
+        val file = companionFiles().firstOrNull { it.id == fileId } ?: return
+        val target = mutableState.value.groups.firstOrNull { it.id == groupId } ?: return
+        val removing = fileId in target.companionFileIds
+        updateGroups(
+            mutableState.value.groups.map { group ->
+                when {
+                    group.id == groupId && removing -> group.copy(
+                        companionFileIds = group.companionFileIds - fileId,
+                    )
+                    group.id == groupId -> group.copy(
+                        companionFileIds = group.companionFileIds + fileId,
+                    )
+                    !file.shared -> group.copy(
+                        companionFileIds = group.companionFileIds - fileId,
+                    )
+                    else -> group
+                }
+            },
+        )
+    }
+
     fun saveGrouping() {
         val groups = mutableState.value.groups
-        if (!validGrouping(groups, audioFiles())) return
+        val expectedFiles = mutableState.value.groupingFiles
+        if (!validGrouping(groups, expectedFiles)) return
         mutableState.value = mutableState.value.copy(isSaving = true, errorMessage = null)
         viewModelScope.launch {
             try {
-                reviews.saveGrouping(
+                val generation = reviews.saveGrouping(
                     bookId,
-                    groups.map { GroupingDecision(it.bookId, it.fileIds.sorted()) },
+                    groups.map {
+                        GroupingDecision(
+                            it.bookId,
+                            it.fileIds.sorted(),
+                            it.companionFileIds.toSortedSet(),
+                        )
+                    },
+                    expectedFiles,
                 )
                 mutableState.value = mutableState.value.copy(
                     isSaving = false,
                     message = "Grouping saved in the catalog.",
+                    catalogGeneration = generation,
                 )
             } catch (failure: CancellationException) {
                 throw failure
@@ -310,7 +387,7 @@ class BookDetailViewModel(
     private fun updateGroups(groups: List<GroupingDraft>) {
         mutableState.value = mutableState.value.copy(
             groups = groups,
-            canSaveGrouping = validGrouping(groups, audioFiles()),
+            canSaveGrouping = validGrouping(groups, mutableState.value.groupingFiles),
         )
     }
 
@@ -327,32 +404,25 @@ class BookDetailViewModel(
     }
 
     private fun audioFiles(): List<BookFileDto> =
-        mutableState.value.groupingFiles.filter { file ->
-            AUDIO_EXTENSIONS.any { extension ->
-                file.name.endsWith(extension, ignoreCase = true)
-            }
-        }
+        mutableState.value.groupingFiles.filter { it.role == "audio" }
+
+    private fun companionFiles(): List<GroupingFileDto> =
+        mutableState.value.groupingFiles.filter { it.role != "audio" }
 }
 
 private fun validGrouping(
     groups: List<GroupingDraft>,
-    audioFiles: List<BookFileDto>,
+    files: List<GroupingFileDto>,
 ): Boolean {
     if (groups.size < 2 || groups.any { it.fileIds.isEmpty() }) return false
     val assigned = groups.flatMap { it.fileIds }
-    val expected = audioFiles.map { it.id }
-    return assigned.size == assigned.distinct().size &&
-        assigned.toSet() == expected.toSet()
+    val expected = files.filter { it.role == "audio" }.map { it.id }
+    if (assigned.size != assigned.distinct().size || assigned.toSet() != expected.toSet()) {
+        return false
+    }
+    return files.filter { it.role != "audio" }.all { file ->
+        val count = groups.count { file.id in it.companionFileIds }
+        if (file.shared) count >= 1 else count == 1
+    }
 }
-
-private val AUDIO_EXTENSIONS = setOf(
-    ".m4b",
-    ".m4a",
-    ".mp3",
-    ".aac",
-    ".flac",
-    ".ogg",
-    ".opus",
-    ".wav",
-)
 private const val MAX_GROUPS = 100

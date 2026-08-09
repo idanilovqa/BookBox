@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"bookbox.local/server/internal/catalog"
 	"bookbox.local/server/internal/config"
 	"bookbox.local/server/internal/metadata"
+	"github.com/google/uuid"
 )
 
 func TestCatalogReviewRoutesOnlyChangeDatabaseAndQueueState(t *testing.T) {
@@ -33,6 +33,7 @@ func TestCatalogReviewRoutesOnlyChangeDatabaseAndQueueState(t *testing.T) {
 	bookID := uuid.New()
 	fileID := uuid.New()
 	matchID := uuid.New()
+	modified := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	repository := &catalogAPIFake{details: map[uuid.UUID]catalog.BookDetail{
 		bookID: {
 			Book: catalog.Book{
@@ -42,6 +43,7 @@ func TestCatalogReviewRoutesOnlyChangeDatabaseAndQueueState(t *testing.T) {
 			},
 			Files: []catalog.SourceFile{{
 				ID: fileID, RootID: "audio", RelativePath: "Book/book.m4b",
+				Size: 5, ModifiedAt: modified,
 			}},
 		},
 	}}
@@ -86,16 +88,26 @@ func TestCatalogReviewRoutesOnlyChangeDatabaseAndQueueState(t *testing.T) {
 	}
 
 	grouping := newJSONRequest(t, http.MethodPut, "/v1/books/"+bookID.String()+"/grouping",
-		map[string]any{"groups": []map[string]any{{
+		map[string]any{"expectedFiles": []map[string]any{{
+			"fileId": fileID.String(), "size": 5, "modifiedAt": modified,
+		}}, "groups": []map[string]any{{
 			"bookId": bookID.String(), "fileIds": []string{fileID.String()},
 		}}})
 	grouping.SetPathValue("bookId", bookID.String())
 	groupingResponse := performHandler(groupingHandler(repository), grouping)
-	if groupingResponse.Code != http.StatusNoContent ||
+	var groupingResult struct {
+		CatalogGeneration int64 `json:"catalogGeneration"`
+	}
+	if err := json.Unmarshal(groupingResponse.Body.Bytes(), &groupingResult); err != nil {
+		t.Fatal(err)
+	}
+	if groupingResponse.Code != http.StatusOK || groupingResult.CatalogGeneration != 2 ||
 		repository.grouping.RootID != "audio" ||
 		repository.grouping.SourceFolder != "Book" ||
 		len(repository.grouping.Groups) != 1 ||
-		!slices.Equal(repository.grouping.Groups[0].FileIDs, []uuid.UUID{fileID}) {
+		!slices.Equal(repository.grouping.Groups[0].FileIDs, []uuid.UUID{fileID}) ||
+		len(repository.grouping.ExpectedFiles) != 1 ||
+		repository.grouping.ExpectedFiles[0].FileID != fileID {
 		t.Fatalf("grouping = %d %s, saved %#v",
 			groupingResponse.Code, groupingResponse.Body, repository.grouping)
 	}
@@ -162,11 +174,17 @@ func TestCatalogHandlersApplyBodyUUIDAndGroupingValidation(t *testing.T) {
 	t.Parallel()
 
 	bookID := uuid.New()
+	fileID := uuid.New()
+	modifiedAt := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	repository := &catalogAPIFake{details: map[uuid.UUID]catalog.BookDetail{
 		bookID: {
 			Book: catalog.Book{
 				ID: bookID, RootID: "audio", SourceFolder: "Book", GroupingKey: "folder-key",
 			},
+			Files: []catalog.SourceFile{{
+				ID: fileID, RootID: "audio", RelativePath: "Book/book.m4b",
+				Size: 1, ModifiedAt: modifiedAt,
+			}},
 		},
 	}}
 
@@ -200,9 +218,14 @@ func TestCatalogHandlersApplyBodyUUIDAndGroupingValidation(t *testing.T) {
 
 	repository.err = catalog.ErrConflict
 	grouping := newJSONRequest(t, http.MethodPut, "/v1/books/"+bookID.String()+"/grouping",
-		map[string]any{"groups": []map[string]any{{
-			"bookId": bookID.String(), "fileIds": []string{uuid.New().String()},
-		}}})
+		map[string]any{
+			"expectedFiles": []map[string]any{{
+				"fileId": fileID.String(), "size": int64(1), "modifiedAt": modifiedAt,
+			}},
+			"groups": []map[string]any{{
+				"bookId": bookID.String(), "fileIds": []string{fileID.String()},
+			}},
+		})
 	grouping.SetPathValue("bookId", bookID.String())
 	if response := performHandler(groupingHandler(repository), grouping); response.Code != http.StatusConflict ||
 		!strings.Contains(response.Body.String(), `"code":"catalog_conflict"`) {
@@ -218,14 +241,15 @@ func TestGroupingRejectsCrossFolderDuplicateAndIncompleteAssignments(t *testing.
 	secondFile := uuid.New()
 	otherBookID := uuid.New()
 	otherFile := uuid.New()
+	modified := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	details := map[uuid.UUID]catalog.BookDetail{
 		bookID: {
 			Book: catalog.Book{
 				ID: bookID, RootID: "audio", SourceFolder: "Book", GroupingKey: "folder-key",
 			},
 			Files: []catalog.SourceFile{
-				{ID: firstFile, RootID: "audio", RelativePath: "Book/one.m4b"},
-				{ID: secondFile, RootID: "audio", RelativePath: "Book/two.m4b"},
+				{ID: firstFile, RootID: "audio", RelativePath: "Book/one.m4b", Size: 1, ModifiedAt: modified},
+				{ID: secondFile, RootID: "audio", RelativePath: "Book/two.m4b", Size: 2, ModifiedAt: modified},
 			},
 		},
 		otherBookID: {
@@ -273,7 +297,13 @@ func TestGroupingRejectsCrossFolderDuplicateAndIncompleteAssignments(t *testing.
 			t.Parallel()
 			repository := &catalogAPIFake{details: details}
 			request := newJSONRequest(t, http.MethodPut, "/v1/books/"+bookID.String()+"/grouping",
-				map[string]any{"groups": test.groups})
+				map[string]any{
+					"expectedFiles": []map[string]any{
+						{"fileId": firstFile.String(), "size": 1, "modifiedAt": modified},
+						{"fileId": secondFile.String(), "size": 2, "modifiedAt": modified},
+					},
+					"groups": test.groups,
+				})
 			request.SetPathValue("bookId", bookID.String())
 			response := performHandler(groupingHandler(repository), request)
 			if response.Code != test.status {
@@ -286,29 +316,39 @@ func TestGroupingRejectsCrossFolderDuplicateAndIncompleteAssignments(t *testing.
 	}
 }
 
-func TestGroupingContextReturnsOnlyRelativeFolderAudioAndSiblingAssignments(t *testing.T) {
+func TestGroupingContextReturnsSubtreeEvidenceRolesCompanionsAndCapability(t *testing.T) {
 	t.Parallel()
 
 	bookID := uuid.New()
 	siblingID := uuid.New()
 	firstFileID := uuid.New()
 	looseFileID := uuid.New()
+	companionID := uuid.New()
+	coverID := uuid.New()
 	modified := time.Date(2026, 7, 26, 12, 34, 56, 0, time.UTC)
 	repository := &catalogAPIFake{groupingContext: catalog.GroupingContext{
-		BookID: bookID, RootID: "audio", SourceFolder: "Omnibus",
-		Files: []catalog.SourceFile{
+		BookID: bookID, RootID: "audio", ScopePath: "Omnibus",
+		ReviewReason: "probe_failed", CanReorganize: true,
+		Evidence: map[string][]string{
+			catalog.FileRoleAudio:   {"Omnibus/Disc 1/First.m4b"},
+			catalog.FileRoleSidecar: {"Omnibus/book.cue"},
+		},
+		Files: []catalog.GroupingContextFile{
 			{
-				ID: firstFileID, RootID: "audio", RelativePath: "Omnibus/First.m4b",
-				Size: 101, ModifiedAt: modified, SHA256: strings.Repeat("a", 64),
-				Media: map[string]any{"absolutePath": "H:/Audiobooks/Omnibus/First.m4b"},
+				SourceFile: catalog.SourceFile{ID: firstFileID, RootID: "audio", RelativePath: "Omnibus/Disc 1/First.m4b",
+					Size: 101, ModifiedAt: modified, SHA256: strings.Repeat("a", 64),
+					FileKind: catalog.FileKindAudio, Media: map[string]any{"absolutePath": "H:/Audiobooks/Omnibus/First.m4b"}},
+				Role: catalog.FileRoleAudio,
 			},
 			{
-				ID: looseFileID, RootID: "audio", RelativePath: "Omnibus/Loose.flac",
-				Size: 202, ModifiedAt: modified,
+				SourceFile: catalog.SourceFile{ID: looseFileID, RootID: "audio", RelativePath: "Omnibus/Disc 2/Loose.flac",
+					Size: 202, ModifiedAt: modified, FileKind: catalog.FileKindAudio}, Role: catalog.FileRoleAudio,
 			},
+			{SourceFile: catalog.SourceFile{ID: companionID, RootID: "audio", RelativePath: "Omnibus/book.cue", Size: 12, ModifiedAt: modified, FileKind: catalog.FileKindCompanion, CompanionKind: catalog.CompanionCue}, Role: catalog.FileRoleSidecar, CompanionKind: catalog.CompanionCue},
+			{SourceFile: catalog.SourceFile{ID: coverID, RootID: "audio", RelativePath: "Omnibus/cover.jpg", Size: 22, ModifiedAt: modified, FileKind: catalog.FileKindCover}, Role: catalog.FileRoleCover, Shared: true},
 		},
 		Books: []catalog.GroupingContextBook{
-			{BookID: bookID, Title: "First", FileIDs: []uuid.UUID{firstFileID}},
+			{BookID: bookID, Title: "First", FileIDs: []uuid.UUID{firstFileID, companionID, coverID}},
 			{BookID: siblingID, Title: "Second", FileIDs: []uuid.UUID{}},
 		},
 	}}
@@ -324,15 +364,21 @@ func TestGroupingContextReturnsOnlyRelativeFolderAudioAndSiblingAssignments(t *t
 		t.Fatalf("response = %d %s", response.Code, response.Body)
 	}
 	var body struct {
-		BookID       string `json:"bookId"`
-		RootID       string `json:"rootId"`
-		SourceFolder string `json:"sourceFolder"`
-		Files        []struct {
-			ID           string    `json:"id"`
-			RelativePath string    `json:"relativePath"`
-			Name         string    `json:"name"`
-			Size         int64     `json:"size"`
-			ModifiedAt   time.Time `json:"modifiedAt"`
+		BookID        string              `json:"bookId"`
+		RootID        string              `json:"rootId"`
+		ScopePath     string              `json:"scopePath"`
+		ReviewReason  string              `json:"reviewReason"`
+		Evidence      map[string][]string `json:"evidence"`
+		CanReorganize bool                `json:"canReorganize"`
+		Files         []struct {
+			ID            string    `json:"id"`
+			RelativePath  string    `json:"relativePath"`
+			Name          string    `json:"name"`
+			Size          int64     `json:"size"`
+			ModifiedAt    time.Time `json:"modifiedAt"`
+			Role          string    `json:"role"`
+			CompanionKind string    `json:"companionKind"`
+			Shared        bool      `json:"shared"`
 		} `json:"files"`
 		Books []struct {
 			BookID  string   `json:"bookId"`
@@ -344,17 +390,23 @@ func TestGroupingContextReturnsOnlyRelativeFolderAudioAndSiblingAssignments(t *t
 		t.Fatal(err)
 	}
 	if body.BookID != bookID.String() || body.RootID != "audio" ||
-		body.SourceFolder != "Omnibus" ||
-		len(body.Files) != 2 ||
+		body.ScopePath != "Omnibus" || body.ReviewReason != "probe_failed" ||
+		!body.CanReorganize ||
+		!slices.Equal(body.Evidence[catalog.FileRoleSidecar], []string{"Omnibus/book.cue"}) ||
+		len(body.Files) != 4 ||
 		body.Files[0].ID != firstFileID.String() ||
-		body.Files[0].RelativePath != "Omnibus/First.m4b" ||
+		body.Files[0].RelativePath != "Omnibus/Disc 1/First.m4b" ||
 		body.Files[0].Name != "First.m4b" ||
 		body.Files[0].Size != 101 ||
 		!body.Files[0].ModifiedAt.Equal(modified) ||
+		body.Files[0].Role != catalog.FileRoleAudio ||
 		body.Files[1].ID != looseFileID.String() ||
+		body.Files[2].CompanionKind != catalog.CompanionCue ||
+		body.Files[2].Role != catalog.FileRoleSidecar || body.Files[2].Shared ||
+		body.Files[3].Role != catalog.FileRoleCover || !body.Files[3].Shared ||
 		len(body.Books) != 2 ||
 		body.Books[0].BookID != bookID.String() ||
-		!slices.Equal(body.Books[0].FileIDs, []string{firstFileID.String()}) ||
+		!slices.Equal(body.Books[0].FileIDs, []string{firstFileID.String(), companionID.String(), coverID.String()}) ||
 		body.Books[1].BookID != siblingID.String() ||
 		body.Books[1].FileIDs == nil ||
 		len(body.Books[1].FileIDs) != 0 {
@@ -376,6 +428,9 @@ func TestGroupingAcceptsEveryPresentFolderAudioIncludingUnassignedFiles(t *testi
 	bookID := uuid.New()
 	assignedID := uuid.New()
 	unassignedID := uuid.New()
+	companionID := uuid.New()
+	coverID := uuid.New()
+	modified := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	repository := &catalogAPIFake{
 		details: map[uuid.UUID]catalog.BookDetail{
 			bookID: {
@@ -389,10 +444,12 @@ func TestGroupingAcceptsEveryPresentFolderAudioIncludingUnassignedFiles(t *testi
 			},
 		},
 		groupingContext: catalog.GroupingContext{
-			BookID: bookID, RootID: "audio", SourceFolder: "Omnibus",
-			Files: []catalog.SourceFile{
-				{ID: assignedID, RootID: "audio", RelativePath: "Omnibus/First.m4b"},
-				{ID: unassignedID, RootID: "audio", RelativePath: "Omnibus/Loose.flac"},
+			BookID: bookID, RootID: "audio", ScopePath: "Omnibus",
+			Files: []catalog.GroupingContextFile{
+				{SourceFile: catalog.SourceFile{ID: assignedID, RootID: "audio", RelativePath: "Omnibus/Disc 1/First.m4b", Size: 10, ModifiedAt: modified, FileKind: catalog.FileKindAudio}, Role: catalog.FileRoleAudio},
+				{SourceFile: catalog.SourceFile{ID: unassignedID, RootID: "audio", RelativePath: "Omnibus/Disc 2/Loose.flac", Size: 20, ModifiedAt: modified, FileKind: catalog.FileKindAudio}, Role: catalog.FileRoleAudio},
+				{SourceFile: catalog.SourceFile{ID: companionID, RootID: "audio", RelativePath: "Omnibus/book.cue", Size: 30, ModifiedAt: modified, FileKind: catalog.FileKindCompanion, CompanionKind: catalog.CompanionCue}, Role: catalog.FileRoleSidecar, CompanionKind: catalog.CompanionCue},
+				{SourceFile: catalog.SourceFile{ID: coverID, RootID: "audio", RelativePath: "Omnibus/cover.jpg", Size: 40, ModifiedAt: modified, FileKind: catalog.FileKindCover}, Role: catalog.FileRoleCover, Shared: true},
 			},
 			Books: []catalog.GroupingContextBook{{
 				BookID: bookID, Title: "First", GroupingKey: "first",
@@ -400,21 +457,82 @@ func TestGroupingAcceptsEveryPresentFolderAudioIncludingUnassignedFiles(t *testi
 			}},
 		},
 	}
+	duplicateShared := newJSONRequest(
+		t,
+		http.MethodPut,
+		"/v1/books/"+bookID.String()+"/grouping",
+		map[string]any{
+			"expectedFiles": []map[string]any{
+				{"fileId": assignedID.String(), "size": 10, "modifiedAt": modified},
+				{"fileId": unassignedID.String(), "size": 20, "modifiedAt": modified},
+				{"fileId": companionID.String(), "size": 30, "modifiedAt": modified},
+				{"fileId": coverID.String(), "size": 40, "modifiedAt": modified},
+			},
+			"groups": []map[string]any{
+				{"bookId": bookID.String(), "fileIds": []string{assignedID.String(), companionID.String(), coverID.String(), coverID.String()}},
+				{"fileIds": []string{unassignedID.String(), coverID.String()}},
+			},
+		},
+	)
+	duplicateShared.SetPathValue("bookId", bookID.String())
+	if response := performHandler(groupingHandler(repository), duplicateShared); response.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate shared response = %d %s", response.Code, response.Body)
+	}
 	request := newJSONRequest(
 		t,
 		http.MethodPut,
 		"/v1/books/"+bookID.String()+"/grouping",
-		map[string]any{"groups": []map[string]any{
-			{"bookId": bookID.String(), "fileIds": []string{assignedID.String()}},
-			{"fileIds": []string{unassignedID.String()}},
-		}},
+		map[string]any{
+			"expectedFiles": []map[string]any{
+				{"fileId": assignedID.String(), "size": 10, "modifiedAt": modified},
+				{"fileId": unassignedID.String(), "size": 20, "modifiedAt": modified},
+				{"fileId": companionID.String(), "size": 30, "modifiedAt": modified},
+				{"fileId": coverID.String(), "size": 40, "modifiedAt": modified},
+			},
+			"groups": []map[string]any{
+				{"bookId": bookID.String(), "fileIds": []string{assignedID.String(), companionID.String(), coverID.String()}},
+				{"fileIds": []string{unassignedID.String(), coverID.String()}},
+			},
+		},
 	)
 	request.SetPathValue("bookId", bookID.String())
 	response := performHandler(groupingHandler(repository), request)
-	if response.Code != http.StatusNoContent ||
-		len(repository.grouping.Groups) != 2 {
+	var result struct {
+		CatalogGeneration int64 `json:"catalogGeneration"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || result.CatalogGeneration != 2 ||
+		len(repository.grouping.Groups) != 2 || len(repository.grouping.ExpectedFiles) != 4 ||
+		!slices.Contains(repository.grouping.Groups[0].FileIDs, companionID) ||
+		!slices.Contains(repository.grouping.Groups[0].FileIDs, coverID) ||
+		!slices.Contains(repository.grouping.Groups[1].FileIDs, coverID) {
 		t.Fatalf("response = %d %s, grouping = %#v",
 			response.Code, response.Body, repository.grouping)
+	}
+}
+
+func TestGroupingRejectsStaleFileFingerprintBeforeSave(t *testing.T) {
+	t.Parallel()
+	bookID, fileID := uuid.New(), uuid.New()
+	modified := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	repository := &catalogAPIFake{groupingContext: catalog.GroupingContext{
+		BookID: bookID, RootID: "audio", ScopePath: "Book",
+		Files: []catalog.GroupingContextFile{{
+			SourceFile: catalog.SourceFile{ID: fileID, RootID: "audio", RelativePath: "Book/book.m4b", Size: 10, ModifiedAt: modified, FileKind: catalog.FileKindAudio},
+			Role:       catalog.FileRoleAudio,
+		}},
+		Books: []catalog.GroupingContextBook{{BookID: bookID, Title: "Book", GroupingKey: "book", FileIDs: []uuid.UUID{fileID}}},
+	}}
+	request := newJSONRequest(t, http.MethodPut, "/v1/books/"+bookID.String()+"/grouping", map[string]any{
+		"expectedFiles": []map[string]any{{"fileId": fileID.String(), "size": 9, "modifiedAt": modified}},
+		"groups":        []map[string]any{{"bookId": bookID.String(), "fileIds": []string{fileID.String()}}},
+	})
+	request.SetPathValue("bookId", bookID.String())
+	response := performHandler(groupingHandler(repository), request)
+	if response.Code != http.StatusConflict || repository.grouping.ID != uuid.Nil {
+		t.Fatalf("response=%d %s saved=%#v", response.Code, response.Body, repository.grouping)
 	}
 }
 
