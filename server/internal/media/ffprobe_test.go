@@ -149,7 +149,8 @@ func TestFFProbeTimesOut(t *testing.T) {
 	}
 }
 
-func TestFFProbeOpenFileFailsClosedWithoutDescriptorInheritance(t *testing.T) {
+func TestFFProbeOpenFileStreamsDescriptorOnWindows(t *testing.T) {
+	requirePOSIX(t)
 	mediaPath := filepath.Join(t.TempDir(), "Book.m4b")
 	if err := os.WriteFile(mediaPath, []byte("fixture"), 0o600); err != nil {
 		t.Fatal(err)
@@ -159,14 +160,25 @@ func TestFFProbeOpenFileFailsClosedWithoutDescriptorInheritance(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
+	if err := os.Remove(mediaPath); err != nil {
+		t.Fatal(err)
+	}
+	binary := writeProbeFixture(t, `
+test "$7" = "pipe:0"
+test -n "$BOOKBOX_FFPROBE_INPUT_PATH"
+test "$(cat)" = "fixture"
+printf '%s\n' '{"format":{"duration":"12","tags":{"title":"Book"}},"streams":[{"codec_type":"audio","codec_name":"aac"}]}'`)
 
-	_, err = NewFFProbe("must-not-run").probeOpenFileForOS(
+	metadata, err := NewFFProbe(binary).probeOpenFileForOS(
 		context.Background(),
 		file,
 		"windows",
 	)
-	if !errors.Is(err, ErrProbeFailed) {
-		t.Fatalf("error = %v, want fail-closed ErrProbeFailed", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Title != "Book" || metadata.Duration != 12*time.Second {
+		t.Fatalf("metadata = %#v", metadata)
 	}
 }
 

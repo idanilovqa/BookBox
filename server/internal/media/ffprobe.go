@@ -60,16 +60,30 @@ func (p *FFProbe) probeOpenFileForOS(
 	if file == nil {
 		return Metadata{}, ErrProbeFailed
 	}
-	if goos != "linux" {
+	switch goos {
+	case "linux":
+		return p.run(ctx, "/proc/self/fd/3", []*os.File{file})
+	case "windows":
+		return p.runWithInput(ctx, "pipe:0", nil, file, file.Name())
+	default:
 		return Metadata{}, ErrProbeFailed
 	}
-	return p.run(ctx, "/proc/self/fd/3", []*os.File{file})
 }
 
 func (p *FFProbe) run(
 	ctx context.Context,
 	input string,
 	extraFiles []*os.File,
+) (Metadata, error) {
+	return p.runWithInput(ctx, input, extraFiles, nil, "")
+}
+
+func (p *FFProbe) runWithInput(
+	ctx context.Context,
+	input string,
+	extraFiles []*os.File,
+	stdin *os.File,
+	sourceName string,
 ) (Metadata, error) {
 	timeout := p.timeout
 	if timeout <= 0 {
@@ -88,6 +102,10 @@ func (p *FFProbe) run(
 		input,
 	)
 	command.ExtraFiles = extraFiles
+	command.Stdin = stdin
+	if sourceName != "" {
+		command.Env = append(os.Environ(), "BOOKBOX_FFPROBE_INPUT_PATH="+sourceName)
+	}
 	command.WaitDelay = 100 * time.Millisecond
 	stdout := newBoundedBuffer(p.stdoutLimit, defaultStdoutLimit)
 	stderr := newBoundedBuffer(p.stderrLimit, defaultStderrLimit)
