@@ -67,6 +67,19 @@ func TestCommitReorganizationAtomicallyPersistsGroupingAndFollowups(t *testing.T
 	if _, err := repository.QueueReorganization(ctx, preview.OperationID, "owner"); err != nil {
 		t.Fatal(err)
 	}
+	if err := repository.SetReorganizationMoveStatus(ctx, preview.OperationID, 1, "rolled_back"); err != nil {
+		t.Fatalf("rollback planned move after moved-journal failure: %v", err)
+	}
+	var moveState string
+	if err := pool.QueryRow(ctx, `select state from reorganization_moves where operation_id=$1 and move_order=1`, preview.OperationID).Scan(&moveState); err != nil {
+		t.Fatal(err)
+	}
+	if moveState != "rolled_back" {
+		t.Fatalf("move state = %q, want rolled_back", moveState)
+	}
+	if _, err := pool.Exec(ctx, `update reorganization_moves set state='planned' where operation_id=$1`, preview.OperationID); err != nil {
+		t.Fatal(err)
+	}
 	operation, err := repository.LoadReorganization(ctx, preview.OperationID, "owner")
 	if err != nil {
 		t.Fatal(err)

@@ -416,7 +416,7 @@ func (repository *PostgresRepository) SetReorganizationMoveStatus(ctx context.Co
 		update reorganization_moves set state=$3,last_error=null
 		where operation_id=$1 and move_order=$2 and (
 			($3='moved' and state='planned') or
-			($3 in ('rolled_back','failed') and state='moved')
+			($3 in ('rolled_back','failed') and state in ('planned','moved'))
 		)
 	`, id, order, status)
 	if err != nil {
