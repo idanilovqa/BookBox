@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,44 +11,103 @@ import (
 	"time"
 
 	"bookbox.local/server/internal/config"
+	"bookbox.local/server/internal/monitor"
 )
 
 type runnerFunc func(context.Context) error
 
 func (run runnerFunc) Run(ctx context.Context) error { return run(ctx) }
 
-func TestMonitorFailureWarnsWhileWorkerContinues(t *testing.T) {
-	monitorErr := errors.New("watcher failed")
-	monitorCalled := make(chan struct{})
-	warned := make(chan error, 1)
-	workerRan := false
-	err := runWorkerWithMonitor(t.Context(), runnerFunc(func(context.Context) error {
-		<-monitorCalled
-		workerRan = true
-		return nil
-	}), runnerFunc(func(context.Context) error {
-		close(monitorCalled)
-		return monitorErr
-	}), func(err error) { warned <- err })
-	if err != nil || !workerRan {
-		t.Fatalf("err=%v workerRan=%v", err, workerRan)
-	}
-	select {
-	case got := <-warned:
-		if !errors.Is(got, monitorErr) {
-			t.Fatalf("warning=%v", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("monitor warning missing")
+func TestWorkerShutdownCancelsAndJoinsMonitor(t *testing.T) {
+	monitorStopped := false
+	err := runWorkerWithMonitors(t.Context(), runnerFunc(func(context.Context) error { return nil }),
+		[]rootMonitorRunner{{rootID: "audio", runner: runnerFunc(func(ctx context.Context) error {
+			<-ctx.Done()
+			monitorStopped = true
+			return nil
+		})}}, nil)
+	if err != nil || !monitorStopped {
+		t.Fatalf("err=%v monitorStopped=%v", err, monitorStopped)
 	}
 }
 
-func TestWorkerShutdownCancelsAndJoinsMonitor(t *testing.T) {
-	monitorStopped := false
-	err := runWorkerWithMonitor(t.Context(), runnerFunc(func(context.Context) error { return nil }),
-		runnerFunc(func(ctx context.Context) error { <-ctx.Done(); monitorStopped = true; return nil }), nil)
-	if err != nil || !monitorStopped {
-		t.Fatalf("err=%v monitorStopped=%v", err, monitorStopped)
+func TestRootSupervisorsIsolateFailuresAndJoinHealthyRoots(t *testing.T) {
+	failureWarned := make(chan error, 1)
+	healthyStarted := make(chan struct{})
+	healthyStopped := make(chan struct{})
+	created := make(chan string, 4)
+	roots := []config.Root{{ID: "missing"}, {ID: "healthy"}}
+	supervisors := newRootSupervisors(roots, func(root config.Root) monitor.Runner {
+		created <- root.ID
+		if root.ID == "missing" {
+			return runnerFunc(func(context.Context) error { return errors.New("private path failed") })
+		}
+		return runnerFunc(func(ctx context.Context) error {
+			select {
+			case <-healthyStarted:
+			default:
+				close(healthyStarted)
+			}
+			<-ctx.Done()
+			close(healthyStopped)
+			return nil
+		})
+	}, func(err error) {
+		select {
+		case failureWarned <- err:
+		default:
+		}
+	})
+	worker := runnerFunc(func(context.Context) error {
+		warning := <-failureWarned
+		if !strings.Contains(warning.Error(), `root "missing"`) ||
+			strings.Contains(warning.Error(), "private path") {
+			return fmt.Errorf("unsafe root warning: %v", warning)
+		}
+		<-healthyStarted
+		select {
+		case <-healthyStopped:
+			return errors.New("healthy root stopped after another root failed")
+		default:
+			return nil
+		}
+	})
+
+	if err := runWorkerWithMonitors(t.Context(), worker, supervisors, func(error) {}); err != nil {
+		t.Fatal(err)
+	}
+	<-healthyStopped
+	seen := map[string]int{}
+	for len(created) > 0 {
+		seen[<-created]++
+	}
+	if seen["missing"] == 0 || seen["healthy"] != 1 {
+		t.Fatalf("created runners = %v", seen)
+	}
+}
+
+func TestTerminalRootSupervisorFailureWarnsWithoutLeakingCause(t *testing.T) {
+	warned := make(chan error, 1)
+	monitors := []rootMonitorRunner{{
+		rootID: "audiobooks",
+		runner: runnerFunc(func(context.Context) error {
+			return errors.New(`watch failed at C:\Private\Library`)
+		}),
+	}}
+	worker := runnerFunc(func(context.Context) error {
+		<-warned
+		return nil
+	})
+	var warning error
+	if err := runWorkerWithMonitors(t.Context(), worker, monitors, func(err error) {
+		warning = err
+		warned <- err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if warning == nil || !strings.Contains(warning.Error(), "audiobooks") ||
+		strings.Contains(warning.Error(), `C:\Private`) {
+		t.Fatalf("warning = %v", warning)
 	}
 }
 

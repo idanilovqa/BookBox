@@ -133,25 +133,68 @@ func run(args []string) error {
 		syscall.SIGTERM,
 	)
 	defer stop()
-	return runWorkerWithMonitor(ctx, runtime, monitor.New(repository, cfg.Roots), func(err error) {
+	supervisors := newRootSupervisors(cfg.Roots, func(root config.Root) monitor.Runner {
+		return monitor.New(repository, []config.Root{root})
+	}, func(err error) {
 		log.Printf("warning: root monitor unavailable: %v", err)
+	})
+	return runWorkerWithMonitors(ctx, runtime, supervisors, func(err error) {
+		log.Printf("warning: %v", err)
 	})
 }
 
 type contextRunner interface{ Run(context.Context) error }
 
-func runWorkerWithMonitor(ctx context.Context, runtime, rootMonitor contextRunner, warn func(error)) error {
+type rootMonitorRunner struct {
+	rootID string
+	runner contextRunner
+}
+
+func newRootSupervisors(
+	roots []config.Root,
+	newRunner func(config.Root) monitor.Runner,
+	warn func(error),
+) []rootMonitorRunner {
+	supervisors := make([]rootMonitorRunner, 0, len(roots))
+	for _, configuredRoot := range roots {
+		root := configuredRoot
+		supervisors = append(supervisors, rootMonitorRunner{
+			rootID: root.ID,
+			runner: monitor.Supervisor{
+				New: func() monitor.Runner { return newRunner(root) },
+				Warn: func(err error) {
+					if warn != nil {
+						warn(fmt.Errorf("root %q: %w", root.ID, err))
+					}
+				},
+			},
+		})
+	}
+	return supervisors
+}
+
+func runWorkerWithMonitors(
+	ctx context.Context,
+	runtime contextRunner,
+	rootMonitors []rootMonitorRunner,
+	warn func(error),
+) error {
 	runCtx, cancel := context.WithCancel(ctx)
-	monitorDone := make(chan struct{})
-	go func() {
-		defer close(monitorDone)
-		if err := rootMonitor.Run(runCtx); err != nil && runCtx.Err() == nil && warn != nil {
-			warn(err)
-		}
-	}()
+	monitorDone := make(chan struct{}, len(rootMonitors))
+	for _, configuredMonitor := range rootMonitors {
+		rootMonitor := configuredMonitor
+		go func() {
+			defer func() { monitorDone <- struct{}{} }()
+			if err := rootMonitor.runner.Run(runCtx); err != nil && runCtx.Err() == nil && warn != nil {
+				warn(fmt.Errorf("root %q monitor supervisor stopped", rootMonitor.rootID))
+			}
+		}()
+	}
 	err := runtime.Run(runCtx)
 	cancel()
-	<-monitorDone
+	for range rootMonitors {
+		<-monitorDone
+	}
 	return err
 }
 
