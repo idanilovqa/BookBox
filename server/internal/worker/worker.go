@@ -159,13 +159,13 @@ func (worker *Worker) scheduleScans(ctx context.Context, now time.Time) error {
 		job := catalog.WorkerJob{
 			ID:       uuid.New(),
 			Kind:     catalog.JobScanRoot,
-			Payload:  map[string]any{"rootId": root.ID},
+			Payload:  map[string]any{"rootId": root.ID, "relativePath": "", "full": true},
 			RunAfter: now,
 		}
 		if _, err := worker.Repo.EnqueueDeduplicated(
 			ctx,
 			job,
-			"scan_root:"+root.ID,
+			"scan_root:"+root.ID+":",
 		); err != nil {
 			return err
 		}
@@ -214,6 +214,10 @@ type Scanner interface {
 	Scan(context.Context, config.Root) (scanner.Result, error)
 }
 
+type InventoryScanner interface {
+	Scan(context.Context, config.Root, scanner.Scope) (scanner.InventoryResult, error)
+}
+
 type ScanRepository interface {
 	BeginScan(context.Context, string) (catalog.ScanRun, error)
 	UpsertSourceFiles(context.Context, uuid.UUID, []catalog.SourceFile) error
@@ -230,15 +234,19 @@ type ScanRepository interface {
 type ScanRootHandler struct {
 	Repo         ScanRepository
 	Scanner      Scanner
+	Inventory    InventoryScanner
 	Roots        map[string]config.Root
 	ValidateRoot func(string) error
+	LoadTree     func(context.Context, string, string) (grouping.Tree, error)
+	InferTree    func(grouping.Tree) grouping.Result
 }
 
 func (handler *ScanRootHandler) Handle(
 	ctx context.Context,
 	job catalog.WorkerJob,
 ) error {
-	if handler == nil || handler.Repo == nil || handler.Scanner == nil ||
+	if handler == nil || handler.Repo == nil ||
+		(handler.Scanner == nil && handler.Inventory == nil) ||
 		job.Kind != catalog.JobScanRoot {
 		return errors.New("invalid scan job")
 	}
@@ -256,6 +264,9 @@ func (handler *ScanRootHandler) Handle(
 	}
 	if err := validateRoot(root.ContainerPath); err != nil {
 		return fmt.Errorf("validate scan root: %w", err)
+	}
+	if handler.Inventory != nil {
+		return handler.handleInventory(ctx, job, root)
 	}
 	run, err := handler.Repo.BeginScan(ctx, rootID)
 	if err != nil {
@@ -367,18 +378,23 @@ func (handler *ScanRootHandler) queueIncompleteBooks(
 
 func sourceFile(scanRunID uuid.UUID, file scanner.File) catalog.SourceFile {
 	mediaValues := map[string]any{
-		"role":       string(file.Kind),
-		"durationMs": file.Metadata.Duration.Milliseconds(),
-		"title":      file.Metadata.Title,
-		"album":      file.Metadata.Album,
-		"author":     file.Metadata.Author,
-		"artist":     file.Metadata.Artist,
-		"narrator":   file.Metadata.Narrator,
-		"genre":      file.Metadata.Genre,
-		"date":       file.Metadata.Date,
-		"audioCodec": file.Metadata.AudioCodec,
-		"width":      file.Metadata.Width,
-		"height":     file.Metadata.Height,
+		"role":        string(file.Kind),
+		"durationMs":  file.Metadata.Duration.Milliseconds(),
+		"title":       file.Metadata.Title,
+		"album":       file.Metadata.Album,
+		"albumArtist": file.Metadata.AlbumArtist,
+		"author":      file.Metadata.Author,
+		"artist":      file.Metadata.Artist,
+		"narrator":    file.Metadata.Narrator,
+		"genre":       file.Metadata.Genre,
+		"date":        file.Metadata.Date,
+		"series":      file.Metadata.Series,
+		"track":       file.Metadata.Track,
+		"disc":        file.Metadata.Disc,
+		"identifiers": file.Metadata.Identifiers,
+		"audioCodec":  file.Metadata.AudioCodec,
+		"width":       file.Metadata.Width,
+		"height":      file.Metadata.Height,
 	}
 	if file.ProbeError != "" {
 		mediaValues["probeError"] = file.ProbeError

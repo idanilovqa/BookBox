@@ -51,6 +51,14 @@ func TestWorkerSchedulesStartupAndSixHourScans(t *testing.T) {
 	}; !slices.Equal(got, want) {
 		t.Fatalf("scheduled roots = %v, want %v", got, want)
 	}
+	if len(repository.enqueuedJobs) != 4 {
+		t.Fatalf("scheduled jobs = %#v, want startup and periodic jobs for both roots", repository.enqueuedJobs)
+	}
+	for _, job := range repository.enqueuedJobs {
+		if job.Payload["relativePath"] != "" || job.Payload["full"] != true {
+			t.Fatalf("scheduled payload = %#v, want relativePath empty and full=true", job.Payload)
+		}
+	}
 	if repository.claims != 2 {
 		t.Fatalf("claims = %d, want 2 idle polls", repository.claims)
 	}
@@ -552,6 +560,7 @@ type jobRepositoryFake struct {
 	claims        int
 	completions   []error
 	enqueuedRoots []string
+	enqueuedJobs  []catalog.WorkerJob
 	recoveries    int
 	events        []string
 }
@@ -605,6 +614,7 @@ func (repository *jobRepositoryFake) EnqueueDeduplicated(
 	_ string,
 ) (catalog.WorkerJob, error) {
 	repository.events = append(repository.events, "enqueue")
+	repository.enqueuedJobs = append(repository.enqueuedJobs, job)
 	repository.enqueuedRoots = append(
 		repository.enqueuedRoots,
 		job.Payload["rootId"].(string),

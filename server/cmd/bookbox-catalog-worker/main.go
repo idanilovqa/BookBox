@@ -177,32 +177,40 @@ func runConfiguredProgram(ctx context.Context, cfg config.Config, logger *log.Lo
 	if err != nil {
 		return err
 	}
+	stagedRepository := worker.NewPostgresStagedRepository(repository)
+	fileProbe := worker.NewSourceFileProber(resolver, media.NewFFProbe(options.ffprobePath))
 	scanHandler := &worker.ScanRootHandler{
-		Repo: repository,
-		Scanner: scanner.New(
-			media.NewFFProbe(options.ffprobePath),
-			scanner.Options{},
-		),
-		Roots: rootByID,
+		Repo: stagedRepository, Inventory: scanner.NewInventory(scanner.Options{}),
+		Roots: rootByID, LoadTree: stagedRepository.LoadGroupingTree,
 	}
+	probeHandler := &worker.ProbeFileHandler{Repo: stagedRepository, Prober: fileProbe}
+	companionHandler := &worker.InspectCompanionHandler{
+		Repo: stagedRepository, Inspector: worker.NewCompanionInspector(resolver),
+	}
+	regroupHandler := &worker.RegroupScopeHandler{Repo: stagedRepository}
+	searchHandler := &worker.PublishSearchHandler{Repo: stagedRepository}
 	enrichHandler := &worker.EnrichBookHandler{
-		Repo: repository, Matcher: metadata.NewMatcher(providers...),
+		Repo: stagedRepository, Matcher: metadata.NewMatcher(providers...),
 	}
 	publishHandler := &worker.PublishCoverHandler{
-		Repo:       repository,
+		Repo:       stagedRepository,
 		Downloader: covers.NewDownloader(&http.Client{Timeout: 30 * time.Second}),
 		Publisher:  covers.NewPublisher(resolver, repository, options.coverBackupRoot),
 	}
 	host, _ := os.Hostname()
 	runtime := &worker.Worker{
-		Repo:         repository,
+		Repo:         stagedRepository,
 		Roots:        cfg.Roots,
 		WorkerID:     strings.TrimSpace(host) + ":" + uuid.NewString(),
 		ScanInterval: options.scanInterval,
 		Handlers: map[string]worker.Handler{
-			catalog.JobScanRoot:     scanHandler,
-			catalog.JobEnrichBook:   enrichHandler,
-			catalog.JobPublishCover: publishHandler,
+			catalog.JobScanRoot:         scanHandler,
+			catalog.JobProbeFile:        probeHandler,
+			catalog.JobInspectCompanion: companionHandler,
+			catalog.JobRegroupScope:     regroupHandler,
+			catalog.JobPublishSearch:    searchHandler,
+			catalog.JobEnrichBook:       enrichHandler,
+			catalog.JobPublishCover:     publishHandler,
 		},
 	}
 	supervisors := newRootSupervisors(cfg.Roots, func(root config.Root) monitor.Runner {

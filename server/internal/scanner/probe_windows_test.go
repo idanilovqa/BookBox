@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -68,7 +69,7 @@ func TestWindowsProbeRejectsFileReplacementDuringProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !probe.called || len(result.Files) != 1 || result.Files[0].ProbeError != "probe_failed" ||
-		result.Files[0].Metadata != (media.Metadata{}) {
+		!reflect.DeepEqual(result.Files[0].Metadata, media.Metadata{}) {
 		t.Fatalf("replacement was accepted: files=%#v", result.Files)
 	}
 }

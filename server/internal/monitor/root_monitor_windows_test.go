@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,8 +135,12 @@ func expectNativeRootJob(t *testing.T, repository *repositoryFake, rootID string
 		t.Fatalf("repository did not record job for key index %d: jobs=%d", jobIndex, len(jobs))
 	}
 	job := jobs[jobIndex]
-	if job.Kind != catalog.JobScanRoot || job.Payload["rootId"] != rootID {
-		t.Fatalf("enqueued job = %#v, want kind=%q payload rootId=%q", job, catalog.JobScanRoot, rootID)
+	relativePath, relativeOK := job.Payload["relativePath"].(string)
+	full, fullOK := job.Payload["full"].(bool)
+	if job.Kind != catalog.JobScanRoot || job.Payload["rootId"] != rootID ||
+		!relativeOK || filepath.IsAbs(relativePath) || strings.Contains(relativePath, `\`) ||
+		!fullOK || full {
+		t.Fatalf("enqueued job = %#v, want scoped root-relative non-full scan", job)
 	}
 }
 
@@ -144,7 +149,7 @@ func waitForNativeRootJob(repository *repositoryFake, rootID string, baseline in
 	for time.Now().Before(deadline) {
 		keys := repository.snapshot()
 		for offset, key := range keys[baseline:] {
-			if key == "scan_root:"+rootID {
+			if strings.HasPrefix(key, "scan_root:"+rootID+":") {
 				return baseline + offset
 			}
 		}

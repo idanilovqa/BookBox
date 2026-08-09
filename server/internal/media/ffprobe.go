@@ -194,11 +194,21 @@ func parseFFProbe(raw []byte) (Metadata, error) {
 	tags := lowerCaseTags(document.Format.Tags)
 	metadata.Title = tags["title"]
 	metadata.Album = tags["album"]
+	metadata.AlbumArtist = tags["album_artist"]
 	metadata.Artist = tags["artist"]
 	metadata.Author = firstNonEmpty(tags["author"], tags["album_artist"], tags["artist"])
 	metadata.Narrator = firstNonEmpty(tags["narrator"], tags["performer"])
 	metadata.Genre = tags["genre"]
 	metadata.Date = firstNonEmpty(tags["date"], tags["year"])
+	metadata.Series = firstNonEmpty(tags["series"], tags["show"])
+	metadata.Track = firstNonEmpty(tags["track"], tags["tracknumber"])
+	metadata.Disc = firstNonEmpty(tags["disc"], tags["discnumber"])
+	metadata.Identifiers = map[string]string{}
+	for _, key := range []string{"isbn", "asin", "isrc"} {
+		if value := tags[key]; value != "" {
+			metadata.Identifiers[key] = value
+		}
+	}
 	return metadata, nil
 }
 

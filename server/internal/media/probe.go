@@ -16,17 +16,22 @@ var (
 )
 
 type Metadata struct {
-	Duration   time.Duration
-	Title      string
-	Album      string
-	Author     string
-	Artist     string
-	Narrator   string
-	Genre      string
-	Date       string
-	AudioCodec string
-	Width      int
-	Height     int
+	Duration    time.Duration
+	Title       string
+	Album       string
+	AlbumArtist string
+	Author      string
+	Artist      string
+	Narrator    string
+	Genre       string
+	Date        string
+	Series      string
+	Track       string
+	Disc        string
+	Identifiers map[string]string
+	AudioCodec  string
+	Width       int
+	Height      int
 }
 
 type Probe interface {

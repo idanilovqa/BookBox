@@ -77,14 +77,13 @@ func (s *sourceFake) snapshot() ([]string, bool) {
 	return append([]string(nil), s.added...), s.closed
 }
 
-func TestRootMonitorCoalescesPerRootAndSchedulesRunningFollowup(t *testing.T) {
+func TestRootMonitorCoalescesSiblingChangesToParentScope(t *testing.T) {
 	a := t.TempDir()
-	b := t.TempDir()
-	source := &sourceFake{events: make(chan event, 4), errs: make(chan error, 1)}
+	source := &sourceFake{events: make(chan event, 2), errs: make(chan error, 1)}
 	var timers []chan time.Time
 	var timerMu sync.Mutex
 	repo := &repositoryFake{base: catalog.WorkerJob{ID: uuid.MustParse("11111111-1111-1111-1111-111111111111"), Status: catalog.JobRunning}}
-	m := New(repo, []config.Root{{ID: "a", ContainerPath: a}, {ID: "b", ContainerPath: b}})
+	m := New(repo, []config.Root{{ID: "audiobooks", ContainerPath: a}})
 	m.newSource = func() (eventSource, error) { return source, nil }
 	m.after = func(time.Duration) <-chan time.Time {
 		timerMu.Lock()
@@ -97,14 +96,13 @@ func TestRootMonitorCoalescesPerRootAndSchedulesRunningFollowup(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- m.Run(ctx) }()
-	source.events <- event{name: filepath.Join(a, "one"), op: fsnotify.Write}
-	source.events <- event{name: filepath.Join(a, "two"), op: fsnotify.Create}
-	source.events <- event{name: filepath.Join(b, "three"), op: fsnotify.Remove}
+	source.events <- event{name: filepath.Join(a, "Author", "Book", "Disc 1", "01.mp3"), op: fsnotify.Write}
+	source.events <- event{name: filepath.Join(a, "Author", "Book", "Disc 2", "01.mp3"), op: fsnotify.Remove}
 	for {
 		timerMu.Lock()
 		n := len(timers)
 		timerMu.Unlock()
-		if n == 3 {
+		if n == 2 {
 			break
 		}
 		time.Sleep(time.Millisecond)
@@ -112,20 +110,19 @@ func TestRootMonitorCoalescesPerRootAndSchedulesRunningFollowup(t *testing.T) {
 	timerMu.Lock()
 	timers[0] <- time.Now()
 	timers[1] <- time.Now()
-	timers[2] <- time.Now()
 	timerMu.Unlock()
-	wantA := "scan_root:a"
-	wantB := "scan_root:b"
 	deadline := time.After(time.Second)
 	for {
 		keys := repo.snapshot()
-		if len(keys) >= 4 {
-			if keys[0] != wantA && keys[0] != wantB {
-				t.Fatalf("keys=%v", keys)
+		if len(keys) >= 2 {
+			wantScan := "scan_root:audiobooks:Author/Book"
+			wantFollowup := "scan_root_followup:audiobooks:Author/Book:11111111-1111-1111-1111-111111111111"
+			if !contains(keys, wantScan) || !contains(keys, wantFollowup) {
+				t.Fatalf("keys=%v, want %q and %q", keys, wantScan, wantFollowup)
 			}
-			if !contains(keys, "scan_root_followup:a:11111111-1111-1111-1111-111111111111") || !contains(keys, "scan_root_followup:b:11111111-1111-1111-1111-111111111111") {
-				t.Fatalf("keys=%v", keys)
-			}
+			jobs := repo.snapshotJobs()
+			assertScanPayload(t, jobs[0], "audiobooks", "Author/Book", false)
+			assertScanPayload(t, jobs[1], "audiobooks", "Author/Book", false)
 			break
 		}
 		select {
@@ -134,6 +131,26 @@ func TestRootMonitorCoalescesPerRootAndSchedulesRunningFollowup(t *testing.T) {
 		default:
 			time.Sleep(time.Millisecond)
 		}
+	}
+}
+
+func TestRootMonitorUsesStableScopedFollowupDedupeKey(t *testing.T) {
+	runningID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	repository := &repositoryFake{base: catalog.WorkerJob{ID: runningID, Status: catalog.JobRunning}}
+	monitor := New(repository, []config.Root{{ID: "audiobooks", ContainerPath: t.TempDir()}})
+
+	for range 2 {
+		if err := monitor.enqueue(t.Context(), "audiobooks", "Author/Book"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := "scan_root_followup:audiobooks:Author/Book:" + runningID.String()
+	keys := repository.snapshot()
+	if len(keys) != 4 || keys[1] != want || keys[3] != want {
+		t.Fatalf("keys=%v, want repeated stable follow-up key %q", keys, want)
+	}
+	for _, job := range repository.snapshotJobs() {
+		assertScanPayload(t, job, "audiobooks", "Author/Book", false)
 	}
 }
 
@@ -213,7 +230,7 @@ func TestRootMonitorValidatesQueueResponsesAndConfiguration(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			m := New(test.repository, []config.Root{root})
-			err := m.enqueue(t.Context(), root.ID)
+			err := m.enqueue(t.Context(), root.ID, "Author/Book")
 			if (err != nil) != test.wantError || len(test.repository.snapshot()) != test.wantKeys {
 				t.Fatalf("err=%v keys=%v", err, test.repository.snapshot())
 			}
@@ -242,6 +259,15 @@ func TestRootMonitorValidatesQueueResponsesAndConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func assertScanPayload(t *testing.T, job catalog.WorkerJob, rootID, relativePath string, full bool) {
+	t.Helper()
+	if job.Kind != catalog.JobScanRoot || job.Payload["rootId"] != rootID ||
+		job.Payload["relativePath"] != relativePath || job.Payload["full"] != full {
+		t.Fatalf("scan payload=%#v, want rootId=%q relativePath=%q full=%v", job, rootID, relativePath, full)
+	}
+}
+
 func contains(values []string, want string) bool {
 	for _, v := range values {
 		if v == want {
