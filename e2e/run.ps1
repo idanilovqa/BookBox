@@ -972,11 +972,18 @@ worker:
         throw 'Initial catalog-search E2E did not return its sanitized result summary.'
     }
 
-    # The watched directory existed before startup. Creating the file now must
-    # beat the six-hour authoritative fallback through native fsnotify.
+    # The watched directory existed before startup. In Hybrid mode, creating
+    # the file must beat the six-hour fallback through native fsnotify. Docker
+    # Desktop does not guarantee Linux inotify delivery for Windows bind mounts,
+    # so Container mode requests the same scan deterministically at startup.
     Copy-Item `
         -LiteralPath (Join-Path $normal 'chapter01.mp3') `
         -Destination (Join-Path $monitorFolder 'Needlebox Watched.mp3')
+    if ($DeploymentMode -eq 'Container') {
+        Invoke-DockerChecked (
+            $composeArgs + @('restart', 'bookbox-catalog-worker')
+        ) | Out-Null
+    }
     $monitoredSearch = @(& $catalogSearchTest `
         -HarnessInvocation `
         -BaseUrl 'http://127.0.0.1:18787' `

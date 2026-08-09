@@ -106,6 +106,7 @@ $requirements = [ordered]@{
     'array-safe binding capture' = '(?s)\$actual\s*=\s*@\(\s*@\(Invoke-DockerChecked.*?Where-Object.*?\)'
     'hybrid native stop before container stop' = "(?s)if\s*\(\s*\`$DeploymentMode\s+-eq\s+'Hybrid'\s*\)\s*\{\s*Stop-OwnedNativeWorker.*?\}\s*else\s*\{\s*Invoke-DockerChecked.*?'stop'.*?bookbox-catalog-worker"
     'container-only worker restart' = "(?s)if\s*\(\s*\`$DeploymentMode\s+-eq\s+'Container'.*?\)\s*\{\s*Invoke-DockerChecked.*?'up'.*?bookbox-catalog-worker"
+    'container monitored-file startup scan' = "(?s)Copy-Item.*?if\s*\(\s*\`$DeploymentMode\s+-eq\s+'Container'\s*\)\s*\{\s*Invoke-DockerChecked.*?'restart'.*?bookbox-catalog-worker.*?\}\s*\`$monitoredSearch"
     'hybrid-only PostgreSQL reservation' = "(?s)if\s*\(\s*\`$DeploymentMode\s+-eq\s+'Hybrid'\s*\)\s*\{.*?taskPorts\.Add\(55432\)"
     'hybrid-only PostgreSQL environment' = "(?s)if\s*\(\s*\`$DeploymentMode\s+-eq\s+'Hybrid'\s*\)\s*\{.*?BOOKBOX_POSTGRES_HOST_PORT=55432"
     'hybrid-only PostgreSQL gate' = "(?s)if\s*\(\s*\`$DeploymentMode\s+-eq\s+'Hybrid'\s*\)\s*\{.*?Assert-TaskPortBound.*?postgres"
