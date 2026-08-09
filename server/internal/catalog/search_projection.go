@@ -102,7 +102,7 @@ func BuildSearchProjection(input SearchProjectionInput) (SearchProjection, error
 	for _, bookID := range bookIDs {
 		book := books[bookID]
 		reviewReason := ""
-		if evidence, exists := input.Evidence[bookID]; exists {
+		if evidence, exists := input.Evidence[bookID]; book.ReviewState == ReviewNeedsReview && exists {
 			reviewReason = evidence.ReasonCode
 		}
 		duration, known, filenames, _, err := audiobookMedia(assignments[bookID], files)

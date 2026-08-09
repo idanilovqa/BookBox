@@ -52,6 +52,34 @@ func TestBuildSearchProjectionCarriesReviewReasonAndGeneration(t *testing.T) {
 	}
 }
 
+func TestBuildSearchProjectionOmitsReviewReasonForUnreviewedBooks(t *testing.T) {
+	bookID := uuid.MustParse("33333333-3333-4333-8333-333333333333")
+	fileID := uuid.MustParse("44444444-4444-4444-8444-444444444444")
+	projection, err := BuildSearchProjection(SearchProjectionInput{
+		RootID: "audiobooks", ScanRunID: uuid.New(),
+		CompletedAt: time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC),
+		Generation:  CatalogGeneration{RootID: "audiobooks", Value: 2},
+		Books: []Book{{
+			ID: bookID, RootID: "audiobooks", SourceFolder: "Mixed Shelf",
+			Title: "Dune", ReviewState: ReviewUnreviewed,
+		}},
+		Files: []SourceFile{
+			projectionFile(fileID, "Mixed Shelf/Dune.m4b", FileRoleAudio, 0),
+		},
+		Assignments: map[uuid.UUID][]uuid.UUID{bookID: {fileID}},
+		Evidence: map[uuid.UUID]GroupingEvidence{
+			bookID: {ReasonCode: "distinct_identity", ReviewState: ReviewUnreviewed},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := audiobookDocument(t, projection, bookID)
+	if document.ReviewReason != "" {
+		t.Fatalf("unreviewed document reason = %q, want empty", document.ReviewReason)
+	}
+}
+
 func TestPublishSearchProjectionRejectsStaleGenerationAndPreservesPriorSnapshot(t *testing.T) {
 	repository, pool, ctx, scan := task6RepositoryFixture(t)
 	prior := task6Projection(t, "audiobooks", scan.ID, 1, "Prior Title")
