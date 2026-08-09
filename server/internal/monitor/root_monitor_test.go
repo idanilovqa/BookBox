@@ -50,16 +50,32 @@ func (r *repositoryFake) snapshotJobs() []catalog.WorkerJob {
 }
 
 type sourceFake struct {
+	mu     sync.Mutex
 	events chan event
 	errs   chan error
 	added  []string
 	closed bool
 }
 
-func (s *sourceFake) Add(p string) error   { s.added = append(s.added, p); return nil }
-func (s *sourceFake) Close() error         { s.closed = true; return nil }
+func (s *sourceFake) Add(p string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.added = append(s.added, p)
+	return nil
+}
+func (s *sourceFake) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	return nil
+}
 func (s *sourceFake) Events() <-chan event { return s.events }
 func (s *sourceFake) Errors() <-chan error { return s.errs }
+func (s *sourceFake) snapshot() ([]string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.added...), s.closed
+}
 
 func TestRootMonitorCoalescesPerRootAndSchedulesRunningFollowup(t *testing.T) {
 	a := t.TempDir()
@@ -140,7 +156,11 @@ func TestRootMonitorRegistersTreesFiltersEventsAndCloses(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- m.Run(ctx) }()
-	for len(source.added) < 2 {
+	for {
+		added, _ := source.snapshot()
+		if len(added) >= 2 {
+			break
+		}
 		time.Sleep(time.Millisecond)
 	}
 	source.events <- event{name: created, op: fsnotify.Create}
@@ -151,14 +171,16 @@ func TestRootMonitorRegistersTreesFiltersEventsAndCloses(t *testing.T) {
 	if len(repo.snapshot()) != 1 {
 		t.Fatalf("keys=%v", repo.snapshot())
 	}
-	if !contains(source.added, created) {
-		t.Fatalf("added=%v", source.added)
+	added, _ := source.snapshot()
+	if !contains(added, created) {
+		t.Fatalf("added=%v", added)
 	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if !source.closed {
+	_, closed := source.snapshot()
+	if !closed {
 		t.Fatal("source not closed")
 	}
 }
