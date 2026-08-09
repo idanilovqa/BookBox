@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,82 @@ import (
 type runnerFunc func(context.Context) error
 
 func (run runnerFunc) Run(ctx context.Context) error { return run(ctx) }
+
+func TestParseCommandModesLegacyAndDefaults(t *testing.T) {
+	defaultPath := defaultWorkerConfigPath()
+	tests := []struct {
+		name string
+		args []string
+		mode commandMode
+		path string
+	}{
+		{name: "default", mode: commandRun, path: defaultPath},
+		{name: "explicit run", args: []string{"run", "--config", "run.yml"}, mode: commandRun, path: "run.yml"},
+		{name: "service", args: []string{"service", "--config", "service.yml"}, mode: commandService, path: "service.yml"},
+		{name: "legacy", args: []string{"--config", "legacy.yml"}, mode: commandRun, path: "legacy.yml"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			command, err := parseCommand(test.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if command.Mode != test.mode || command.ConfigPath != test.path {
+				t.Fatalf("command = %#v, want mode=%q path=%q", command, test.mode, test.path)
+			}
+		})
+	}
+}
+
+func TestParseCommandRejectsUnknownCommandsAndExtraArguments(t *testing.T) {
+	for _, args := range [][]string{
+		{"unknown"},
+		{"run", "extra"},
+		{"service", "--config", "worker.yml", "extra"},
+		{"run", "--unknown"},
+	} {
+		if command, err := parseCommand(args); err == nil {
+			t.Fatalf("parseCommand(%q) = %#v, want error", args, command)
+		}
+	}
+}
+
+func TestOpenServiceLoggerWritesAndClosesOwnedLog(t *testing.T) {
+	directory := t.TempDir()
+	logger, closer, err := openServiceLogger(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.Print("catalog worker lifecycle")
+	if err := closer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(directory, "catalog-worker.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "catalog worker lifecycle") {
+		t.Fatalf("service log = %q", contents)
+	}
+}
+
+func TestServiceTerminalLogIsSanitizedAndSilentForExpectedCancellation(t *testing.T) {
+	var output bytes.Buffer
+	logger := log.New(&output, "", 0)
+	logServiceTerminal(logger, context.Background(), errors.New(`database C:\Private password=secret`))
+	if text := output.String(); !strings.Contains(text, "class=unavailable") ||
+		strings.Contains(text, "Private") || strings.Contains(text, "secret") {
+		t.Fatalf("terminal log = %q", text)
+	}
+
+	output.Reset()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	logServiceTerminal(logger, ctx, context.Canceled)
+	if output.Len() != 0 {
+		t.Fatalf("expected cancellation log = %q", output.String())
+	}
+}
 
 func TestWorkerShutdownCancelsAndJoinsMonitor(t *testing.T) {
 	monitorStopped := false

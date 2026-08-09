@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -27,7 +28,22 @@ import (
 	"bookbox.local/server/internal/monitor"
 	"bookbox.local/server/internal/scanner"
 	"bookbox.local/server/internal/worker"
+	"bookbox.local/server/internal/workerlog"
 )
+
+const windowsServiceName = "BookBoxCatalogWorker"
+
+type commandMode string
+
+const (
+	commandRun     commandMode = "run"
+	commandService commandMode = "service"
+)
+
+type workerCommand struct {
+	Mode       commandMode
+	ConfigPath string
+}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -36,14 +52,12 @@ func main() {
 }
 
 func run(args []string) error {
-	flags := flag.NewFlagSet("bookbox-catalog-worker", flag.ContinueOnError)
-	configPath := flags.String(
-		"config",
-		"/etc/bookbox/config.yml",
-		"path to the server configuration",
-	)
-	if err := flags.Parse(args); err != nil {
+	command, err := parseCommand(args)
+	if err != nil {
 		return err
+	}
+	if command.Mode == commandService {
+		return runServiceCommand(command.ConfigPath)
 	}
 	ctx, stop := signal.NotifyContext(
 		context.Background(),
@@ -51,7 +65,37 @@ func run(args []string) error {
 		syscall.SIGTERM,
 	)
 	defer stop()
-	return runProgram(ctx, *configPath, log.Default())
+	return runProgram(ctx, command.ConfigPath, log.Default())
+}
+
+func parseCommand(args []string) (workerCommand, error) {
+	mode := commandRun
+	modeArgs := args
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		switch args[0] {
+		case string(commandRun):
+			mode = commandRun
+		case string(commandService):
+			mode = commandService
+		default:
+			return workerCommand{}, errors.New("unknown catalog worker command")
+		}
+		modeArgs = args[1:]
+	}
+	flags := flag.NewFlagSet("bookbox-catalog-worker", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	configPath := flags.String(
+		"config",
+		defaultWorkerConfigPath(),
+		"path to the server configuration",
+	)
+	if err := flags.Parse(modeArgs); err != nil {
+		return workerCommand{}, err
+	}
+	if flags.NArg() != 0 {
+		return workerCommand{}, errors.New("unexpected catalog worker arguments")
+	}
+	return workerCommand{Mode: mode, ConfigPath: *configPath}, nil
 }
 
 func runProgram(ctx context.Context, configPath string, logger *log.Logger) error {
@@ -61,6 +105,13 @@ func runProgram(ctx context.Context, configPath string, logger *log.Logger) erro
 	cfg, err := config.LoadWorker(configPath)
 	if err != nil {
 		return err
+	}
+	return runConfiguredProgram(ctx, cfg, logger)
+}
+
+func runConfiguredProgram(ctx context.Context, cfg config.Config, logger *log.Logger) error {
+	if logger == nil {
+		return errors.New("catalog worker logger is required")
 	}
 	dsn, err := config.LoadDatabaseDSN(cfg.Database)
 	if err != nil {
@@ -152,6 +203,44 @@ func runProgram(ctx context.Context, configPath string, logger *log.Logger) erro
 	return runWorkerWithMonitors(ctx, runtime, supervisors, func(err error) {
 		logger.Printf("warning: %v", err)
 	})
+}
+
+func runServiceCommand(configPath string) error {
+	return runWindowsService(windowsServiceName, func(ctx context.Context) error {
+		cfg, err := config.LoadWorker(configPath)
+		if err != nil {
+			return err
+		}
+		logger, closer, err := openServiceLogger(cfg.Worker.LogDirectory)
+		if err != nil {
+			return err
+		}
+		defer closer.Close()
+		err = runConfiguredProgram(ctx, cfg, logger)
+		logServiceTerminal(logger, ctx, err)
+		return err
+	})
+}
+
+func logServiceTerminal(logger *log.Logger, ctx context.Context, err error) {
+	if err == nil || logger == nil {
+		return
+	}
+	if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+		return
+	}
+	logger.Printf("error: catalog worker service stopped (class=%s)", readinessErrorClass(err))
+}
+
+func openServiceLogger(directory string) (*log.Logger, io.Closer, error) {
+	if strings.TrimSpace(directory) == "" {
+		return nil, nil, errors.New("catalog worker service log directory is required")
+	}
+	writer, err := workerlog.Open(directory, 10<<20, 4)
+	if err != nil {
+		return nil, nil, err
+	}
+	return log.New(writer, "", log.Ldate|log.Ltime|log.LUTC), writer, nil
 }
 
 type contextRunner interface{ Run(context.Context) error }
