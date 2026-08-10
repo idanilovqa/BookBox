@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -153,6 +154,7 @@ func fullInventoryFileScope(relativePath string, scopes []string) (string, bool)
 
 type StagedScanRepository interface {
 	ApplyInventory(context.Context, catalog.InventoryUpdate) (catalog.InventoryDelta, error)
+	DrainReadyFingerprintOutbox(context.Context, time.Time, int) (int, error)
 	CurrentCatalogGeneration(context.Context, string) (catalog.CatalogGeneration, error)
 	FinalizeInventoryAndPublish(
 		context.Context,
@@ -265,15 +267,8 @@ func (handler *ScanRootHandler) handleInventory(
 			return handler.failScan(ctx, run.ID, "scoped catalog publication failed", err)
 		}
 	}
-	for _, file := range delta.ProbeFiles {
-		if err := enqueueFingerprintJob(ctx, handler.Repo, catalog.JobProbeFile, file); err != nil {
-			return err
-		}
-	}
-	for _, file := range delta.InspectCompanions {
-		if err := enqueueFingerprintJob(ctx, handler.Repo, catalog.JobInspectCompanion, file); err != nil {
-			return err
-		}
+	if _, err := repository.DrainReadyFingerprintOutbox(ctx, time.Now().UTC(), 256); err != nil {
+		return fmt.Errorf("dispatch fingerprint work: %w", err)
 	}
 	if err := queueIncompleteBooks(ctx, handler.Repo, root.ID); err != nil {
 		return fmt.Errorf("queue metadata enrichment: %w", err)
@@ -300,28 +295,6 @@ func excludeDeferredMissingFiles(
 	}
 	tree.Files = files
 	return tree
-}
-
-func enqueueFingerprintJob(
-	ctx context.Context,
-	repository interface {
-		EnqueueDeduplicated(context.Context, catalog.WorkerJob, string) (catalog.WorkerJob, error)
-	},
-	kind string,
-	file catalog.SourceFile,
-) error {
-	key := kind + ":" + file.ID.String() + ":" + strconv.FormatInt(file.Size, 10) +
-		":" + strconv.FormatInt(file.ModifiedAt.UnixNano(), 10)
-	_, err := repository.EnqueueDeduplicated(ctx, catalog.WorkerJob{
-		ID: uuid.New(), Kind: kind,
-		Payload: map[string]any{
-			"fileId": file.ID.String(), "rootId": file.RootID,
-			"relativePath":  file.RelativePath,
-			"size":          strconv.FormatInt(file.Size, 10),
-			"modifiedNanos": strconv.FormatInt(file.ModifiedAt.UnixNano(), 10),
-		},
-	}, key)
-	return err
 }
 
 type SourceFileResolver interface {

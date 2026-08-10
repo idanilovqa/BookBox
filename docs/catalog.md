@@ -39,6 +39,14 @@ drive is missing, the worker records a failed attempt and retains the prior
 catalog and search projection. Filesystem events speed up indexing, while the
 six-hour full-root scan remains the authoritative fallback.
 
+Fingerprint work is activated through a durable PostgreSQL outbox only when a
+full or scoped inventory finalization commits successfully. Partial inventories
+cannot make probe jobs claimable. A bounded dispatcher delivers outbox entries
+to worker jobs; the entry remains until the matching probe or companion result
+commits, so worker crashes and exhausted delivery attempts can be retried. The
+upgrade migration recovers pending fingerprints from the latest successfully
+published inventory without exposing source paths in routine status output.
+
 ## Indexed library search
 
 After a successful scan, the worker atomically publishes one PostgreSQL search

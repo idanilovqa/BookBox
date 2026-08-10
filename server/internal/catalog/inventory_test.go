@@ -145,6 +145,87 @@ func TestApplyInventoryQueuesOnlyNewOrChangedFilesAndPreservesProbeState(t *test
 	}
 }
 
+func TestApplyPartialInventoryCreatesNoClaimableOrDormantFingerprintWork(t *testing.T) {
+	modified := inventoryInstant(2)
+	processedAt := inventoryInstant(3)
+	unchangedSucceeded := storedInventoryFile{
+		ID: uuid.New(), Path: "processed.mp3", Size: 7, ModifiedAt: modified,
+		FileKind: FileKindAudio, ProbeStatus: ProbeSucceeded, ProbeVersion: 1,
+		ProbedAt: &processedAt,
+	}
+	unchangedFailed := storedInventoryFile{
+		ID: uuid.New(), Path: "failed.mp3", Size: 8, ModifiedAt: modified,
+		FileKind: FileKindAudio, ProbeStatus: ProbeFailed, ProbeVersion: 1,
+		ProbeError: "unsupported", ProbedAt: &processedAt,
+	}
+	repository, pool, firstScan := inventoryRepositoryFixture(t, unchangedSucceeded, unchangedFailed)
+	newAudio := inventoryFile(uuid.New(), "new.mp3", FileKindAudio, "", 11, modified)
+	newCompanion := inventoryFile(uuid.New(), "book.nfo", FileKindCompanion, CompanionNFO, 12, modified)
+
+	if _, err := repository.ApplyInventory(context.Background(), InventoryUpdate{
+		ScanRunID: firstScan.ID, RootID: "audiobooks", Complete: false,
+		Files: []InventoryFile{
+			newAudio,
+			newCompanion,
+			inventoryFile(unchangedSucceeded.ID, unchangedSucceeded.Path, FileKindAudio, "", unchangedSucceeded.Size, modified),
+			inventoryFile(unchangedFailed.ID, unchangedFailed.Path, FileKindAudio, "", unchangedFailed.Size, modified),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinishScan(context.Background(), firstScan.ID, ScanResult{
+		Success: false, Partial: true, Error: "incomplete",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	secondScan, err := repository.BeginScan(context.Background(), "audiobooks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta, err := repository.ApplyInventory(context.Background(), InventoryUpdate{
+		ScanRunID: secondScan.ID, RootID: "audiobooks", Complete: true,
+		Files: []InventoryFile{
+			newAudio,
+			newCompanion,
+			inventoryFile(unchangedSucceeded.ID, unchangedSucceeded.Path, FileKindAudio, "", unchangedSucceeded.Size, modified),
+			inventoryFile(unchangedFailed.ID, unchangedFailed.Path, FileKindAudio, "", unchangedFailed.Size, modified),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertInventoryDeltaPaths(t, delta.UnchangedFiles,
+		"book.nfo", "failed.mp3", "new.mp3", "processed.mp3")
+
+	var workerJobs int
+	if err := pool.QueryRow(context.Background(), `select count(*) from worker_jobs`).Scan(&workerJobs); err != nil {
+		t.Fatal(err)
+	}
+	if workerJobs != 0 {
+		t.Fatalf("ApplyInventory created %d claimable worker jobs", workerJobs)
+	}
+	var intents int
+	if err := pool.QueryRow(context.Background(), `select count(*) from fingerprint_job_outbox`).Scan(&intents); err != nil {
+		t.Fatal(err)
+	}
+	if intents != 0 {
+		t.Fatalf("ApplyInventory created %d dormant intents before finalization", intents)
+	}
+}
+
+func TestApplyInventoryRejectsModifiedTimesOutsideUnixNanoRange(t *testing.T) {
+	repository, _, scan := inventoryRepositoryFixture(t)
+	file := inventoryAudioFile("future.mp3")
+	file.ModifiedAt = time.Date(2500, time.January, 1, 0, 0, 0, 0, time.UTC)
+	_, err := repository.ApplyInventory(context.Background(), InventoryUpdate{
+		ScanRunID: scan.ID, RootID: "audiobooks", Complete: true,
+		Files: []InventoryFile{file},
+	})
+	if !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("out-of-range modified time error=%v, want ErrInvalidData", err)
+	}
+}
+
 func TestApplyInventoryMissingBehavior(t *testing.T) {
 	t.Run("partial inventory preserves unseen files", func(t *testing.T) {
 		repository, pool, scan := inventoryRepositoryFixture(t,
@@ -166,6 +247,9 @@ func TestApplyInventoryMissingBehavior(t *testing.T) {
 	t.Run("complete full inventory defers every unseen file until finalization", func(t *testing.T) {
 		unseen := storedAudioInventoryFile("unseen.mp3")
 		seen := storedAudioInventoryFile("seen.mp3")
+		seen.ProbeStatus = ProbePending
+		seen.ProbeVersion = 0
+		seen.Media = map[string]any{}
 		repository, pool, scan := inventoryRepositoryFixture(t,
 			seen, unseen,
 		)
@@ -191,6 +275,9 @@ func TestApplyInventoryMissingBehavior(t *testing.T) {
 		if inventoryMissingCount(t, pool) != 0 {
 			t.Fatal("failed finalization committed deferred missing files")
 		}
+		if got := fingerprintOutboxCount(t, pool, seen.ID); got != 0 {
+			t.Fatalf("failed finalization activated %d fingerprint intents", got)
+		}
 		if _, err := repository.FinalizeInventoryAndPublish(context.Background(), InventoryFinalization{
 			ScanRunID: scan.ID, RootID: "audiobooks",
 			Books: []InferredBook{searchTestBook("audiobooks", "", "seen", seen.ID)},
@@ -203,6 +290,9 @@ func TestApplyInventoryMissingBehavior(t *testing.T) {
 		if inventoryMissingCount(t, pool) != 1 {
 			t.Fatalf("successful finalization missing rows=%d, want 1", inventoryMissingCount(t, pool))
 		}
+		if got := fingerprintOutboxCount(t, pool, seen.ID); got != 1 {
+			t.Fatalf("successful finalization activated %d fingerprint intents, want 1", got)
+		}
 	})
 
 	t.Run("complete scoped inventory marks only its unseen subtree during atomic finalization", func(t *testing.T) {
@@ -213,6 +303,9 @@ func TestApplyInventoryMissingBehavior(t *testing.T) {
 			ProbeStatus: ProbeNotApplicable,
 		}
 		seen := storedAudioInventoryFile("Author/Book/seen.mp3")
+		seen.ProbeStatus = ProbePending
+		seen.ProbeVersion = 0
+		seen.Media = map[string]any{}
 		repository, pool, scan := inventoryRepositoryFixture(t,
 			seen, inside, outside,
 		)
@@ -251,6 +344,9 @@ func TestApplyInventoryMissingBehavior(t *testing.T) {
 		if inventoryMissingCount(t, pool) != 0 {
 			t.Fatal("failed scoped finalization committed deferred missing files")
 		}
+		if got := fingerprintOutboxCount(t, pool, seen.ID); got != 0 {
+			t.Fatalf("failed scoped finalization activated %d fingerprint intents", got)
+		}
 		finalized, err := finalizer.FinalizeScopedInventoryAndPublish(context.Background(), scan.ID, GroupingRefinement{
 			RootID: "audiobooks", ScopePath: "Author/Book", ExpectedGeneration: current.Value,
 			Books: []InferredBook{book}, Evidence: map[string]GroupingEvidence{
@@ -283,7 +379,21 @@ func TestApplyInventoryMissingBehavior(t *testing.T) {
 		if snapshotGeneration != finalized.Value {
 			t.Fatalf("scoped snapshot generation=%d, want %d", snapshotGeneration, finalized.Value)
 		}
+		if got := fingerprintOutboxCount(t, pool, seen.ID); got != 1 {
+			t.Fatalf("successful scoped finalization activated %d fingerprint intents, want 1", got)
+		}
 	})
+}
+
+func fingerprintOutboxCount(t *testing.T, pool *pgxpool.Pool, fileID uuid.UUID) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(context.Background(), `
+		select count(*) from fingerprint_job_outbox where file_id=$1
+	`, fileID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
 }
 
 func TestApplyInventoryRestoresStoredIDAndQueuesCurrentFingerprint(t *testing.T) {

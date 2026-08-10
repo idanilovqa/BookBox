@@ -215,7 +215,7 @@ func validateInventoryUpdate(update InventoryUpdate) error {
 	ids := make(map[uuid.UUID]struct{}, len(update.Files))
 	for _, file := range update.Files {
 		if file.ID == uuid.Nil || file.RootID != update.RootID || file.Size < 0 ||
-			file.ModifiedAt.IsZero() {
+			file.ModifiedAt.IsZero() || !validFingerprintTime(file.ModifiedAt) {
 			return ErrInvalidData
 		}
 		if err := ValidateRelativePath(file.RelativePath); err != nil {

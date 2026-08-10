@@ -44,6 +44,7 @@ func (function HandlerFunc) Handle(
 type JobRepository interface {
 	LeaseRepository
 	RecoverExpiredJobs(context.Context, time.Time) error
+	DrainReadyFingerprintOutbox(context.Context, time.Time, int) (int, error)
 	ClaimJob(context.Context, string, time.Time) (catalog.WorkerJob, error)
 	CompleteJob(context.Context, uuid.UUID, uuid.UUID, error) error
 	EnqueueDeduplicated(
@@ -93,6 +94,9 @@ func (worker *Worker) Run(ctx context.Context) error {
 	if err := worker.scheduleScans(ctx, now); err != nil {
 		return fmt.Errorf("schedule startup scans: %w", err)
 	}
+	if _, err := worker.Repo.DrainReadyFingerprintOutbox(ctx, now, 256); err != nil {
+		return fmt.Errorf("drain fingerprint outbox: %w", err)
+	}
 	nextScan := now.Add(scanInterval)
 
 	for {
@@ -100,6 +104,9 @@ func (worker *Worker) Run(ctx context.Context) error {
 			return nil
 		}
 		now = clock().UTC()
+		if _, err := worker.Repo.DrainReadyFingerprintOutbox(ctx, now, 256); err != nil {
+			return fmt.Errorf("drain fingerprint outbox: %w", err)
+		}
 		if !now.Before(nextScan) {
 			if err := worker.scheduleScans(ctx, now); err != nil {
 				return fmt.Errorf("schedule periodic scans: %w", err)

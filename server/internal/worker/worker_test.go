@@ -83,9 +83,13 @@ func TestWorkerRecoversExpiredJobsBeforeSchedulingStartupScans(t *testing.T) {
 	if repository.recoveries != 1 {
 		t.Fatalf("recoveries=%d, want one", repository.recoveries)
 	}
+	if repository.outboxDrains < 2 {
+		t.Fatalf("outbox drains=%d, want startup and loop maintenance", repository.outboxDrains)
+	}
 	if len(repository.events) < 2 ||
-		repository.events[0] != "recover" || repository.events[1] != "enqueue" {
-		t.Fatalf("startup events=%v, want recovery before scan enqueue", repository.events)
+		repository.events[0] != "recover" || repository.events[1] != "enqueue" ||
+		len(repository.events) < 3 || repository.events[2] != "drain_fingerprint_outbox" {
+		t.Fatalf("startup events=%v, want recovery, scan enqueue, then outbox drain", repository.events)
 	}
 }
 
@@ -562,6 +566,7 @@ type jobRepositoryFake struct {
 	enqueuedRoots []string
 	enqueuedJobs  []catalog.WorkerJob
 	recoveries    int
+	outboxDrains  int
 	events        []string
 }
 
@@ -572,6 +577,16 @@ func (repository *jobRepositoryFake) RecoverExpiredJobs(
 	repository.recoveries++
 	repository.events = append(repository.events, "recover")
 	return nil
+}
+
+func (repository *jobRepositoryFake) DrainReadyFingerprintOutbox(
+	context.Context,
+	time.Time,
+	int,
+) (int, error) {
+	repository.outboxDrains++
+	repository.events = append(repository.events, "drain_fingerprint_outbox")
+	return 0, nil
 }
 
 func (repository *jobRepositoryFake) ClaimJob(

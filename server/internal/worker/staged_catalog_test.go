@@ -41,12 +41,11 @@ func TestScanRootPublishesProvisionalCatalogBeforeProbeJobs(t *testing.T) {
 	if repository.finalizations != 1 {
 		t.Fatalf("finalizations = %d, want 1", repository.finalizations)
 	}
-	if got := repository.events; !reflect.DeepEqual(got, []string{"apply", "load_tree", "finalize", "enqueue:" + catalog.JobProbeFile}) {
+	if got := repository.events; !reflect.DeepEqual(got, []string{"apply", "load_tree", "finalize", "drain_fingerprint_outbox"}) {
 		t.Fatalf("events = %v", got)
 	}
-	wantKey := "probe_file:" + audio.ID.String() + ":17:" + stagedFingerprintNanos(now)
-	if !reflect.DeepEqual(repository.dedupeKeys, []string{wantKey}) {
-		t.Fatalf("dedupe keys = %v, want %q", repository.dedupeKeys, wantKey)
+	if repository.outboxDrains != 1 {
+		t.Fatalf("outbox drains=%d, want 1", repository.outboxDrains)
 	}
 	if repository.probeCalls != 0 {
 		t.Fatalf("probe calls during inventory = %d", repository.probeCalls)
@@ -70,6 +69,9 @@ func TestScanRootPartialInventoryDoesNotFinalizeOrMarkComplete(t *testing.T) {
 	}
 	if repository.finalizations != 0 || repository.finish.Success || !repository.finish.Partial {
 		t.Fatalf("finalizations=%d finish=%#v", repository.finalizations, repository.finish)
+	}
+	if repository.outboxDrains != 0 {
+		t.Fatalf("partial inventory drained outbox %d times", repository.outboxDrains)
 	}
 }
 
@@ -224,7 +226,7 @@ func TestScanRootExcludesDeferredMissingFilesFromGrouping(t *testing.T) {
 	}
 }
 
-func TestScanRootUsesDeterministicFingerprintDedupeKeys(t *testing.T) {
+func TestScanRootDrainsDurableFingerprintOutboxAfterFinalization(t *testing.T) {
 	now := time.Date(2026, 8, 8, 12, 0, 0, 456, time.UTC)
 	audio := stagedSourceFile("Book/01.mp3", catalog.FileKindAudio, now)
 	companion := stagedSourceFile("Book/book.opf", catalog.FileKindCompanion, now.Add(time.Second))
@@ -245,12 +247,9 @@ func TestScanRootUsesDeterministicFingerprintDedupeKeys(t *testing.T) {
 	if err := handler.Handle(context.Background(), stagedScanJob("audiobooks", "", true)); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{
-		"probe_file:" + audio.ID.String() + ":17:" + stagedFingerprintNanos(audio.ModifiedAt),
-		"inspect_companion:" + companion.ID.String() + ":17:" + stagedFingerprintNanos(companion.ModifiedAt),
-	}
-	if !reflect.DeepEqual(repository.dedupeKeys, want) {
-		t.Fatalf("dedupe keys = %v, want %v", repository.dedupeKeys, want)
+	if repository.outboxDrains != 1 || len(repository.jobs) != 0 {
+		t.Fatalf("outbox drains=%d direct jobs=%#v, want one drain and no direct jobs",
+			repository.outboxDrains, repository.jobs)
 	}
 }
 
@@ -549,6 +548,7 @@ type stagedRepositoryFake struct {
 	finalizations     int
 	refinements       int
 	probeCalls        int
+	outboxDrains      int
 	probeChanged      bool
 	probeStoreErr     error
 	companionChanged  bool
@@ -598,6 +598,16 @@ func (fake *stagedRepositoryFake) ApplyInventory(
 	fake.events = append(fake.events, "apply")
 	fake.inventoryUpdates = append(fake.inventoryUpdates, update)
 	return fake.delta, nil
+}
+
+func (fake *stagedRepositoryFake) DrainReadyFingerprintOutbox(
+	context.Context,
+	time.Time,
+	int,
+) (int, error) {
+	fake.events = append(fake.events, "drain_fingerprint_outbox")
+	fake.outboxDrains++
+	return 0, nil
 }
 
 func (fake *stagedRepositoryFake) LoadGroupingTree(

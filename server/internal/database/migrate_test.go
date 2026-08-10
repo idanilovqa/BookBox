@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -65,8 +66,8 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 	if err := pool.QueryRow(ctx, "select count(*) from schema_migrations").Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 6 {
-		t.Fatalf("schema migration rows = %d, want 6", applied)
+	if applied != 7 {
+		t.Fatalf("schema migration rows = %d, want 7", applied)
 	}
 
 	var rejectsCrossRootScan bool
@@ -105,6 +106,193 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 		values ($1, 'two', 'Book/file.m4b', 1, $2, $3)
 	`, uuid.New(), time.Now().UTC(), scanID); err == nil {
 		t.Fatal("source_files accepted a scan run belonging to another root")
+	}
+}
+
+func TestMigrateBackfillsOnlyNeverEnqueuedPendingFingerprints(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	for version, name := range []string{
+		"0001_catalog.sql",
+		"0002_worker_job_deduplication.sql",
+		"0003_library_search.sql",
+		"0004_staged_catalog.sql",
+		"0005_reorganization_payload.sql",
+		"0006_library_search_review_invariant.sql",
+	} {
+		contents, err := migrations.Files.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, string(contents)); err != nil {
+			t.Fatalf("apply %s: %v", name, err)
+		}
+		if _, err := pool.Exec(ctx,
+			`insert into schema_migrations(version) values ($1)`, version+1,
+		); err != nil {
+			t.Fatalf("record %s: %v", name, err)
+		}
+	}
+
+	const rootID = "pending-backfill"
+	if _, err := pool.Exec(ctx,
+		`insert into library_roots(id, display_name) values ($1, 'Pending backfill')`, rootID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	publishedScan := uuid.New()
+	runningScan := uuid.New()
+	partialScan := uuid.New()
+	failedScan := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		insert into scan_runs(id,root_id,started_at,finished_at,status,error) values
+			($1,$5,'2026-08-08T11:00:00Z','2026-08-08T11:30:00Z','succeeded',null),
+			($2,$5,'2026-08-08T12:00:00Z',null,'running',null),
+			($3,$5,'2026-08-08T10:00:00Z','2026-08-08T10:15:00Z','partial','incomplete'),
+			($4,$5,'2026-08-08T09:00:00Z','2026-08-08T09:05:00Z','failed','unavailable')
+	`, publishedScan, runningScan, partialScan, failedScan, rootID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		insert into catalog_generations(root_id,generation,inventory_scan_run_id)
+		values ($1,2,$2)
+	`, rootID, publishedScan); err != nil {
+		t.Fatal(err)
+	}
+	modified := time.Date(2026, 8, 8, 12, 0, 0, 123000, time.UTC)
+	pendingAudio := uuid.New()
+	pendingCompanion := uuid.New()
+	missingAudio := uuid.New()
+	processedAudio := uuid.New()
+	deadHistoryAudio := uuid.New()
+	runningAudio := uuid.New()
+	partialAudio := uuid.New()
+	failedAudio := uuid.New()
+	invalidTimestampAudio := uuid.New()
+	for _, file := range []struct {
+		id                        uuid.UUID
+		scanID                    uuid.UUID
+		path, kind, ckind, status string
+		missing                   bool
+	}{
+		{pendingAudio, publishedScan, "Book/new.mp3", "audio", "", "pending", false},
+		{pendingCompanion, publishedScan, "Book/book.nfo", "companion", "nfo", "pending", false},
+		{missingAudio, publishedScan, "Book/missing.mp3", "audio", "", "pending", true},
+		{processedAudio, publishedScan, "Book/done.mp3", "audio", "", "succeeded", false},
+		{deadHistoryAudio, publishedScan, "Book/dead.mp3", "audio", "", "pending", false},
+		{runningAudio, runningScan, "Book/running.mp3", "audio", "", "pending", false},
+		{partialAudio, partialScan, "Book/partial.mp3", "audio", "", "pending", false},
+		{failedAudio, failedScan, "Book/failed.mp3", "audio", "", "pending", false},
+	} {
+		if _, err := pool.Exec(ctx, `
+			insert into source_files(
+				id, root_id, relative_path, size, modified_at, file_kind,
+				companion_kind, probe_status, scan_run_id, missing_at
+			) values ($1,$2,$3,17,$4::timestamptz,$5,nullif($6,''),$7,$8,
+			          case when $9::boolean then $4::timestamptz else null end)
+		`, file.id, rootID, file.path, modified, file.kind, file.ckind, file.status,
+			file.scanID, file.missing); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `
+		insert into source_files(
+			id,root_id,relative_path,size,modified_at,file_kind,probe_status,scan_run_id
+		) values ($1,$2,'Book/future.mp3',17,'2500-01-01T00:00:00Z','audio','pending',$3)
+	`, invalidTimestampAudio, rootID, publishedScan); err != nil {
+		t.Fatal(err)
+	}
+	modifiedNanos := modified.UnixNano()
+	deadKey := "probe_file:" + deadHistoryAudio.String() + ":17:" + strconv.FormatInt(modifiedNanos, 10)
+	if _, err := pool.Exec(ctx, `
+		insert into worker_jobs(
+			id,kind,dedupe_key,payload,status,attempts,max_attempts,last_error
+		) values ($1,'probe_file',$2,'{}'::jsonb,'dead',5,5,'exhausted')
+	`, uuid.New(), deadKey); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var migrationCount int
+	if err := pool.QueryRow(ctx, `select count(*) from schema_migrations`).Scan(&migrationCount); err != nil {
+		t.Fatal(err)
+	}
+	if migrationCount != 7 {
+		t.Fatalf("schema migration rows=%d, want 7", migrationCount)
+	}
+
+	type fingerprintIntent struct {
+		fileID, scanID                      uuid.UUID
+		root, kind, relativePath            string
+		expectedSize, expectedModifiedNanos int64
+	}
+	rows, err := pool.Query(ctx, `
+		select file_id,scan_run_id,root_id,job_kind,relative_path,
+		       expected_size,expected_modified_nanos
+		from fingerprint_job_outbox
+		order by job_kind,relative_path
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []fingerprintIntent
+	for rows.Next() {
+		var intent fingerprintIntent
+		if err := rows.Scan(&intent.fileID, &intent.scanID, &intent.root, &intent.kind,
+			&intent.relativePath, &intent.expectedSize, &intent.expectedModifiedNanos); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, intent)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := []fingerprintIntent{
+		{
+			fileID: pendingCompanion, scanID: publishedScan, root: rootID,
+			kind: "inspect_companion", relativePath: "Book/book.nfo",
+			expectedSize: 17, expectedModifiedNanos: modifiedNanos,
+		},
+		{
+			fileID: deadHistoryAudio, scanID: publishedScan, root: rootID,
+			kind: "probe_file", relativePath: "Book/dead.mp3",
+			expectedSize: 17, expectedModifiedNanos: modifiedNanos,
+		},
+		{
+			fileID: pendingAudio, scanID: publishedScan, root: rootID,
+			kind: "probe_file", relativePath: "Book/new.mp3",
+			expectedSize: 17, expectedModifiedNanos: modifiedNanos,
+		},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("backfilled outbox=%#v, want %#v", got, want)
+	}
+
+	var queuedJobs, allJobs int
+	if err := pool.QueryRow(ctx, `
+		select count(*) filter (where status='queued'),count(*) from worker_jobs
+	`).Scan(&queuedJobs, &allJobs); err != nil {
+		t.Fatal(err)
+	}
+	if queuedJobs != 0 || allJobs != 1 {
+		t.Fatalf("migration left queued/all worker jobs=%d/%d, want 0/1", queuedJobs, allJobs)
+	}
+
+	var invalidStatus, invalidError string
+	var invalidProbedAt *time.Time
+	if err := pool.QueryRow(ctx, `
+		select probe_status,coalesce(probe_error,''),probed_at
+		from source_files where id=$1
+	`, invalidTimestampAudio).Scan(&invalidStatus, &invalidError, &invalidProbedAt); err != nil {
+		t.Fatal(err)
+	}
+	if invalidStatus != "failed" || invalidError != "fingerprint_timestamp_out_of_range" ||
+		invalidProbedAt == nil {
+		t.Fatalf("invalid timestamp sanitized status/error/probed_at=%q/%q/%v",
+			invalidStatus, invalidError, invalidProbedAt)
 	}
 }
 

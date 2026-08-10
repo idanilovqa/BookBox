@@ -87,8 +87,25 @@ func TestCommitReorganizationAtomicallyPersistsGroupingAndFollowups(t *testing.T
 	if err := repository.SetReorganizationStatus(ctx, operation.ID, "running", ""); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, `
+		insert into fingerprint_job_outbox(
+			file_id,root_id,job_kind,relative_path,expected_size,
+			expected_modified_at,expected_modified_nanos,scan_run_id,next_dispatch_at
+		) values ($1,'audiobooks','probe_file','Incoming/Book/book.m4b',100,$2,$3,$4,now())
+	`, audioID, postgresTime(modified), modified.UnixNano(), scan.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err := repository.CommitReorganizationGrouping(ctx, operation); err != nil {
 		t.Fatal(err)
+	}
+	var authorizedPath string
+	if err := pool.QueryRow(ctx, `
+		select relative_path from fingerprint_job_outbox where file_id=$1
+	`, audioID).Scan(&authorizedPath); err != nil {
+		t.Fatal(err)
+	}
+	if authorizedPath != "Author/Book/book.m4b" {
+		t.Fatalf("reorganized fingerprint intent path=%q", authorizedPath)
 	}
 
 	var generation int64

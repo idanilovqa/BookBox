@@ -108,6 +108,11 @@ func (repository *PostgresRepository) FinalizeInventoryAndPublish(
 	if err := publishSearchProjectionTx(ctx, transaction, projection); err != nil {
 		return CatalogGeneration{}, err
 	}
+	if err := activateFingerprintOutboxTx(
+		ctx, transaction, finalization.RootID, finalization.ScanRunID, "", completedAt,
+	); err != nil {
+		return CatalogGeneration{}, err
+	}
 	if _, err := transaction.Exec(ctx, `
 		update library_roots set scanned_at=$2, updated_at=now() where id=$1
 	`, finalization.RootID, completedAt); err != nil {
@@ -186,6 +191,11 @@ func (repository *PostgresRepository) FinalizeScopedInventoryAndPublish(
 	}
 	if err := buildAndPublishRefinedProjectionTx(
 		ctx, transaction, refinement.RootID, scanID, completedAt,
+	); err != nil {
+		return CatalogGeneration{}, err
+	}
+	if err := activateFingerprintOutboxTx(
+		ctx, transaction, refinement.RootID, scanID, refinement.ScopePath, completedAt,
 	); err != nil {
 		return CatalogGeneration{}, err
 	}

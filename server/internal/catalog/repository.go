@@ -33,6 +33,7 @@ type Repository interface {
 	UpsertSourceFiles(context.Context, uuid.UUID, []SourceFile) error
 	FinishScan(context.Context, uuid.UUID, ScanResult) error
 	ApplyInventory(context.Context, InventoryUpdate) (InventoryDelta, error)
+	DrainReadyFingerprintOutbox(context.Context, time.Time, int) (int, error)
 	IncrementCatalogGeneration(context.Context, string) (CatalogGeneration, error)
 	ReplaceInferredBooks(context.Context, string, []InferredBook) error
 	FinalizeSuccessfulScan(context.Context, uuid.UUID, []InferredBook) error

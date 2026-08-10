@@ -79,7 +79,7 @@ func (repository *PostgresRepository) SaveProbeResult(
 	failure string,
 ) (CatalogGeneration, bool, error) {
 	values := probeMediaValues(metadata, failure)
-	return repository.saveStagedFileResult(ctx, expected, values, failure)
+	return repository.saveStagedFileResult(ctx, expected, values, failure, JobProbeFile)
 }
 
 func (repository *PostgresRepository) SaveCompanionInspection(
@@ -96,7 +96,7 @@ func (repository *PostgresRepository) SaveCompanionInspection(
 	if failure != "" {
 		values["inspectionError"] = failure
 	}
-	return repository.saveStagedFileResult(ctx, expected, values, failure)
+	return repository.saveStagedFileResult(ctx, expected, values, failure, JobInspectCompanion)
 }
 
 func (repository *PostgresRepository) saveStagedFileResult(
@@ -104,6 +104,7 @@ func (repository *PostgresRepository) saveStagedFileResult(
 	expected SourceFile,
 	values map[string]any,
 	failure string,
+	jobKind string,
 ) (CatalogGeneration, bool, error) {
 	if repository == nil || repository.pool == nil || expected.ID == uuid.Nil ||
 		!rootIDPattern.MatchString(expected.RootID) || expected.Size < 0 || expected.ModifiedAt.IsZero() {
@@ -117,18 +118,24 @@ func (repository *PostgresRepository) saveStagedFileResult(
 	var storedSize int64
 	var storedModified time.Time
 	var storedMedia []byte
-	var storedStatus, storedFailure string
+	var storedPath, storedStatus, storedFailure string
 	if err := transaction.QueryRow(ctx, `
-		select size, modified_at, media, probe_status, coalesce(probe_error,'')
+		select relative_path, size, modified_at, media, probe_status, coalesce(probe_error,'')
 		from source_files
 		where id=$1 and root_id=$2 and missing_at is null
 		for update
 	`, expected.ID, expected.RootID).Scan(
-		&storedSize, &storedModified, &storedMedia, &storedStatus, &storedFailure,
+		&storedPath, &storedSize, &storedModified, &storedMedia, &storedStatus, &storedFailure,
 	); err != nil {
 		return CatalogGeneration{}, false, mapNotFound(err, "lock staged source file")
 	}
 	if storedSize != expected.Size || !postgresTime(storedModified).Equal(postgresTime(expected.ModifiedAt)) {
+		return CatalogGeneration{}, false, ErrConflict
+	}
+	// Successful work may have completed through an already-open descriptor while
+	// a reorganization moved the path. A failure must still refer to the current
+	// path; otherwise an old-path open race would consume the refreshed intent.
+	if failure != "" && storedPath != expected.RelativePath {
 		return CatalogGeneration{}, false, ErrConflict
 	}
 	var previous map[string]any
@@ -162,6 +169,9 @@ func (repository *PostgresRepository) saveStagedFileResult(
 	}
 	if result.RowsAffected() != 1 {
 		return CatalogGeneration{}, false, ErrConflict
+	}
+	if err := acknowledgeFingerprintOutboxTx(ctx, transaction, expected, jobKind); err != nil {
+		return CatalogGeneration{}, false, err
 	}
 	generation := CatalogGeneration{RootID: expected.RootID}
 	if err := transaction.QueryRow(ctx, `

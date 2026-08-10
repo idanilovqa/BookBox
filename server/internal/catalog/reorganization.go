@@ -451,6 +451,15 @@ func (repository *PostgresRepository) CommitReorganizationGrouping(ctx context.C
 		if result.RowsAffected() != 1 {
 			return ErrReorganizationStale
 		}
+		if _, err := tx.Exec(ctx, `
+			update fingerprint_job_outbox
+			set relative_path=$3,next_dispatch_at=now(),updated_at=now()
+			where file_id=$1 and root_id=$2 and expected_size=$4
+			  and expected_modified_at=$5
+		`, move.FileID, operation.RootID, move.DestinationPath,
+			move.ExpectedSize, postgresTime(move.ExpectedModifiedAt)); err != nil {
+			return fmt.Errorf("refresh reorganized fingerprint intent: %w", err)
+		}
 	}
 	folderFiles, err := loadGroupingFolderFiles(ctx, tx, operation.RootID, newScope)
 	if err != nil {
