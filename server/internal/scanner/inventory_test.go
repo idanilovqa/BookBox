@@ -200,6 +200,80 @@ func TestInventoryKeepsStableIDsWhileRefreshingChangedFingerprints(t *testing.T)
 	}
 }
 
+func TestInventoryOmitsFileChangedWhileItsFingerprintIsCaptured(t *testing.T) {
+	root := inventoryFixture(t, map[string]string{
+		"Author/Book/01.mp3": "stable",
+		"Author/Book/02.mp3": "before",
+	})
+	changedPath := filepath.Join(root.ContainerPath, "Author", "Book", "02.mp3")
+	changedAt := time.Date(2026, 8, 9, 13, 14, 15, 0, time.UTC)
+	inventory := NewInventory(Options{})
+	inventory.afterFingerprint = func(relative string) {
+		if relative != "Author/Book/02.mp3" {
+			return
+		}
+		if err := os.WriteFile(changedPath, []byte("changed and longer"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(changedPath, changedAt, changedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := inventory.Scan(context.Background(), root, FullScope())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertInventoryPaths(t, result.Files, "Author/Book/01.mp3")
+	if !reflect.DeepEqual(result.Warnings, []Warning{{
+		RelativePath: "Author/Book/02.mp3",
+		Operation:    "changed",
+	}}) {
+		t.Fatalf("inventory warnings = %#v, want one changed-file warning", result.Warnings)
+	}
+}
+
+func TestInventoryOmitsPathAtomicallyReplacedWhileItsFingerprintIsCaptured(t *testing.T) {
+	root := inventoryFixture(t, map[string]string{
+		"Author/Book/01.mp3": "stable",
+		"Author/Book/02.mp3": "before",
+	})
+	changedPath := filepath.Join(root.ContainerPath, "Author", "Book", "02.mp3")
+	replacementPath := changedPath + ".replacement"
+	originalInfo, err := os.Stat(changedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(replacementPath, []byte("after!"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(replacementPath, originalInfo.ModTime(), originalInfo.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	inventory := NewInventory(Options{})
+	inventory.afterFingerprint = func(relative string) {
+		if relative != "Author/Book/02.mp3" {
+			return
+		}
+		if err := os.Rename(replacementPath, changedPath); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := inventory.Scan(context.Background(), root, FullScope())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertInventoryPaths(t, result.Files, "Author/Book/01.mp3")
+	if !reflect.DeepEqual(result.Warnings, []Warning{{
+		RelativePath: "Author/Book/02.mp3",
+		Operation:    "changed",
+	}}) {
+		t.Fatalf("inventory warnings = %#v, want one changed-file warning", result.Warnings)
+	}
+}
+
 func TestInventorySkipsSymlinkEscapes(t *testing.T) {
 	root := inventoryFixture(t, map[string]string{"Keep/book.mp3": "audio"})
 	outside := filepath.Join(t.TempDir(), "outside.mp3")

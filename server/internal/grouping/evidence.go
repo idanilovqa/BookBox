@@ -123,10 +123,22 @@ func InferTree(tree Tree) Result {
 }
 
 func inferAutomaticTreeClusters(tree Tree, audio, allFiles []catalog.SourceFile) []treeCluster {
+	resolved := make([]catalog.SourceFile, 0, len(audio))
+	failed := make([]catalog.SourceFile, 0)
 	for _, file := range audio {
 		if file.ProbeStatus == catalog.ProbeFailed || strings.TrimSpace(file.ProbeError) != "" {
-			return []treeCluster{{audio: audio, reason: "probe_failed", review: catalog.ReviewNeedsReview}}
+			failed = append(failed, file)
+			continue
 		}
+		resolved = append(resolved, file)
+	}
+	if len(failed) > 0 {
+		clusters := make([]treeCluster, 0)
+		if len(resolved) > 0 {
+			clusters = append(clusters, inferAutomaticTreeClusters(tree, resolved, allFiles)...)
+		}
+		clusters = append(clusters, failedProbeTreeClusters(failed)...)
+		return clusters
 	}
 
 	identities := make([]treeIdentity, len(audio))
@@ -186,6 +198,34 @@ func inferAutomaticTreeClusters(tree Tree, audio, allFiles []catalog.SourceFile)
 		reason = "consistent_subtree"
 	}
 	return []treeCluster{{identity: identity, audio: audio, reason: reason, review: review}}
+}
+
+func failedProbeTreeClusters(audio []catalog.SourceFile) []treeCluster {
+	filenameGroups := make(map[string][]catalog.SourceFile)
+	for _, file := range audio {
+		stem := normalizedTreeFilename(file.RelativePath)
+		if stem == "" {
+			return []treeCluster{{
+				audio: audio, reason: "probe_failed", review: catalog.ReviewNeedsReview,
+			}}
+		}
+		filenameGroups[stem] = append(filenameGroups[stem], file)
+	}
+	if len(filenameGroups) <= 1 {
+		return []treeCluster{{
+			audio: audio, reason: "probe_failed", review: catalog.ReviewNeedsReview,
+		}}
+	}
+
+	clusters := make([]treeCluster, 0, len(filenameGroups))
+	for stem, grouped := range filenameGroups {
+		clusters = append(clusters, treeCluster{
+			identity: treeIdentity{title: stem}, audio: grouped,
+			reason: "probe_failed", review: catalog.ReviewNeedsReview,
+		})
+	}
+	sortTreeClusters(clusters)
+	return clusters
 }
 
 func clustersFromIdentityGroups(groups map[string][]catalog.SourceFile, identities map[string]treeIdentity) []treeCluster {

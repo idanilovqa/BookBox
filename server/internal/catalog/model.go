@@ -1,10 +1,15 @@
 package catalog
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+func PublishSearchDedupeKey(rootID string, generation int64) string {
+	return JobPublishSearch + ":" + rootID + ":" + strconv.FormatInt(generation, 10)
+}
 
 const (
 	MetadataInferred    = "inferred"
@@ -14,9 +19,10 @@ const (
 	MetadataConfirmed   = "confirmed"
 	MetadataMixed       = "mixed"
 
-	ReviewUnreviewed  = "unreviewed"
-	ReviewNeedsReview = "needs_review"
-	ReviewConfirmed   = "confirmed"
+	ReviewUnreviewed   = "unreviewed"
+	ReviewNeedsReview  = "needs_review"
+	ReviewConfirmed    = "confirmed"
+	ReviewReasonLegacy = "legacy_review_state"
 
 	FileRoleAudio   = "audio"
 	FileRoleCover   = "cover"

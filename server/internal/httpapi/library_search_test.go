@@ -219,6 +219,36 @@ func TestBooksSearchSerializesProvisionalProbeFailure(t *testing.T) {
 	}
 }
 
+func TestBooksSearchSerializesLegacyReviewFallback(t *testing.T) {
+	t.Parallel()
+	documentID, bookID := uuid.New(), uuid.New()
+	repository := &catalogAPIFake{searchPage: catalog.SearchPage{
+		Snapshots: []catalog.SearchSnapshot{{
+			RootID: "audiobooks", ScanRunID: uuid.New(), CompletedAt: time.Now().UTC(),
+			DocumentCount: 1, CatalogGeneration: 1,
+		}},
+		Groups: []catalog.SearchGroup{{ID: documentID, Documents: []catalog.SearchDocument{{
+			ID: documentID, RootID: "audiobooks", EntityKind: catalog.SearchEntityAudiobook,
+			BookID: bookID, RelativePath: "Legacy/Book", DisplayName: "Book", Title: "Book",
+			ReviewState: catalog.ReviewNeedsReview, ReviewReason: catalog.ReviewReasonLegacy,
+			DuplicateCount: 1,
+		}}}},
+	}}
+	response := performHandler(booksHandler(repository, []config.Root{{ID: "audiobooks"}}),
+		newJSONRequest(t, http.MethodGet, "/v1/books?q=book", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("response = %d %s", response.Code, response.Body)
+	}
+	var page BooksResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Groups) != 1 || len(page.Groups[0].Books) != 1 ||
+		page.Groups[0].Books[0].ReviewReason != catalog.ReviewReasonLegacy {
+		t.Fatalf("page = %#v", page)
+	}
+}
+
 func TestBooksSearchRejectsInvalidReviewStateReasonPairs(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

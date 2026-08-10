@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"bookbox.local/server/internal/testpostgres"
 	"bookbox.local/server/migrations"
@@ -64,8 +65,8 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 	if err := pool.QueryRow(ctx, "select count(*) from schema_migrations").Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 5 {
-		t.Fatalf("schema migration rows = %d, want 5", applied)
+	if applied != 6 {
+		t.Fatalf("schema migration rows = %d, want 6", applied)
 	}
 
 	var rejectsCrossRootScan bool
@@ -104,6 +105,172 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 		values ($1, 'two', 'Book/file.m4b', 1, $2, $3)
 	`, uuid.New(), time.Now().UTC(), scanID); err == nil {
 		t.Fatal("source_files accepted a scan run belonging to another root")
+	}
+}
+
+func TestMigrateEnforcesLibrarySearchDocumentReviewInvariant(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	bookID := seedSearchReviewInvariantCatalog(t, pool, ctx, "fresh-review-invariant")
+	assertLibrarySearchDocumentReviewInvariant(t, pool, ctx, "fresh-review-invariant", bookID)
+}
+
+func TestMigrateUpgradesExistingStagedCatalogWithReviewInvariant(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	for version, name := range []string{
+		"0001_catalog.sql",
+		"0002_worker_job_deduplication.sql",
+		"0003_library_search.sql",
+		"0004_staged_catalog.sql",
+		"0005_reorganization_payload.sql",
+	} {
+		contents, err := migrations.Files.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, string(contents)); err != nil {
+			t.Fatalf("apply %s: %v", name, err)
+		}
+		if _, err := pool.Exec(ctx,
+			`insert into schema_migrations(version) values ($1)`, version+1,
+		); err != nil {
+			t.Fatalf("record %s: %v", name, err)
+		}
+	}
+
+	const rootID = "upgrade-review-invariant"
+	bookID := seedSearchReviewInvariantCatalog(t, pool, ctx, rootID)
+	if _, err := pool.Exec(ctx,
+		`update books set review_state='needs_review' where id=$1`, bookID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		insert into book_grouping_evidence(book_id, root_id, reason_code, evidence)
+		values ($1, $2, 'probe_failed', '{}'::jsonb)
+	`, bookID, rootID); err != nil {
+		t.Fatal(err)
+	}
+	insertSearchReviewDocument(t, pool, ctx, rootID, bookID, "audiobook", nil, nil, true)
+	insertSearchReviewDocument(t, pool, ctx, rootID, nil, "folder", "unreviewed", "legacy-folder-review", true)
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var documents, repairedAudiobooks, normalizedRawDocuments int
+	if err := pool.QueryRow(ctx,
+		`select count(*),
+		        count(*) filter (
+		            where entity_kind='audiobook'
+		              and review_state='needs_review'
+		              and review_reason='probe_failed'
+		        ),
+		        count(*) filter (
+		            where entity_kind in ('folder','file')
+		              and review_state is null
+		              and review_reason is null
+		        )
+		 from library_search_documents
+		 where root_id=$1`, rootID,
+	).Scan(&documents, &repairedAudiobooks, &normalizedRawDocuments); err != nil {
+		t.Fatal(err)
+	}
+	if documents != 2 {
+		t.Fatalf("upgraded search documents=%d, want 2 preserved", documents)
+	}
+	if repairedAudiobooks != 1 || normalizedRawDocuments != 1 {
+		t.Fatalf(
+			"upgraded review semantics repaired audiobooks=%d normalized raw=%d, want 1/1",
+			repairedAudiobooks,
+			normalizedRawDocuments,
+		)
+	}
+	assertLibrarySearchDocumentReviewInvariant(t, pool, ctx, rootID, bookID)
+}
+
+func seedSearchReviewInvariantCatalog(
+	t *testing.T,
+	pool interface {
+		Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	},
+	ctx context.Context,
+	rootID string,
+) uuid.UUID {
+	t.Helper()
+	if _, err := pool.Exec(ctx,
+		`insert into library_roots(id, display_name) values ($1, 'Review invariant')`, rootID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	bookID := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		insert into books(
+			id, root_id, source_folder, grouping_key, title,
+			metadata_source, confidence, review_state
+		) values ($1, $2, 'Book', $3, 'Book', 'inferred', 1, 'unreviewed')
+	`, bookID, rootID, bookID.String()); err != nil {
+		t.Fatal(err)
+	}
+	return bookID
+}
+
+func assertLibrarySearchDocumentReviewInvariant(
+	t *testing.T,
+	pool interface {
+		Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	},
+	ctx context.Context,
+	rootID string,
+	bookID uuid.UUID,
+) {
+	t.Helper()
+	insertSearchReviewDocument(t, pool, ctx, rootID, bookID, "audiobook", "needs_review", "probe_failed", true)
+	insertSearchReviewDocument(t, pool, ctx, rootID, bookID, "audiobook", "confirmed", nil, true)
+	insertSearchReviewDocument(t, pool, ctx, rootID, nil, "folder", nil, nil, true)
+	insertSearchReviewDocument(t, pool, ctx, rootID, nil, "file", nil, nil, true)
+
+	insertSearchReviewDocument(t, pool, ctx, rootID, bookID, "audiobook", nil, nil, false)
+	insertSearchReviewDocument(t, pool, ctx, rootID, bookID, "audiobook", "needs_review", nil, false)
+	insertSearchReviewDocument(t, pool, ctx, rootID, bookID, "audiobook", "unreviewed", "probe_failed", false)
+	insertSearchReviewDocument(t, pool, ctx, rootID, nil, "folder", "unreviewed", nil, false)
+	insertSearchReviewDocument(t, pool, ctx, rootID, nil, "file", nil, "probe_failed", false)
+}
+
+func insertSearchReviewDocument(
+	t *testing.T,
+	pool interface {
+		Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	},
+	ctx context.Context,
+	rootID string,
+	bookID any,
+	entityKind string,
+	reviewState any,
+	reviewReason any,
+	wantAccepted bool,
+) {
+	t.Helper()
+	documentID := uuid.New()
+	_, err := pool.Exec(ctx, `
+		insert into library_search_documents(
+			root_id, document_id, entity_kind, book_id, relative_path, display_name,
+			compact_name, compact_path, compact_metadata, search_compact,
+			search_terms, search_grams, review_state, review_reason
+		) values (
+			$1, $2, $3, $4, 'Book', 'Book',
+			'book', 'book', '', 'book', 'book', array['bo'], $5, $6
+		)
+	`, rootID, documentID, entityKind, bookID, reviewState, reviewReason)
+	if wantAccepted && err != nil {
+		t.Fatalf("valid %s review pair %v/%v rejected: %v", entityKind, reviewState, reviewReason, err)
+	}
+	if !wantAccepted && err == nil {
+		t.Fatalf("invalid %s review pair %v/%v accepted", entityKind, reviewState, reviewReason)
 	}
 }
 

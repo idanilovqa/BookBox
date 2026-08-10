@@ -172,6 +172,16 @@ fun LibraryScreen(
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
+        state.catalogStatusMessage?.let { message ->
+            Text(
+                text = message,
+                modifier = Modifier
+                    .padding(bottom = 8.dp)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
         if (state.isIndexBuilding) {
             Text(
                 text = if (hasResults) {

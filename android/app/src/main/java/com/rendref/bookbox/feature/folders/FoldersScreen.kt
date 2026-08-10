@@ -30,7 +30,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -244,6 +246,13 @@ private fun FolderSearchResults(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+		state.searchCatalogStatusMessage?.let { message ->
+			Text(
+				text = message,
+				modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+				color = MaterialTheme.colorScheme.primary,
+			)
+		}
 		if (state.searchResults.isNotEmpty()) {
 			when {
 				state.isSearchIndexBuilding -> Text("Search index is still building.", color = MaterialTheme.colorScheme.primary)

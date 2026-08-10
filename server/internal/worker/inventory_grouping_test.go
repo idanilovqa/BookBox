@@ -1,12 +1,47 @@
 package worker
 
 import (
+	"fmt"
 	"testing"
 
 	"bookbox.local/server/internal/catalog"
 	"bookbox.local/server/internal/grouping"
 	"github.com/google/uuid"
 )
+
+func TestInferFullInventoryTreeKeepsEveryActiveAudioVisibleAt22824FileScale(t *testing.T) {
+	const activeAudioCount = 22_824
+	const audioPerFolder = 100
+	files := make([]catalog.SourceFile, 0, activeAudioCount)
+	for index := range activeAudioCount {
+		files = append(files, inventoryGroupingAudio(fmt.Sprintf(
+			"Scale/Book-%04d/Chapter-%03d.mp3",
+			index/audioPerFolder,
+			index%audioPerFolder,
+		)))
+	}
+
+	result := inferFullInventoryTree(grouping.Tree{
+		RootID: "audiobooks", Files: files,
+	}, grouping.InferTree)
+
+	assigned := make(map[uuid.UUID]int, activeAudioCount)
+	for _, book := range result.Books {
+		for _, fileID := range book.SourceFileIDs {
+			if book.FileRoles[fileID] == catalog.FileRoleAudio {
+				assigned[fileID]++
+			}
+		}
+	}
+	if len(assigned) != activeAudioCount {
+		t.Fatalf("visible active audio=%d, want %d", len(assigned), activeAudioCount)
+	}
+	for _, file := range files {
+		if assigned[file.ID] != 1 {
+			t.Fatalf("active audio %s assigned %d times, want exactly once", file.RelativePath, assigned[file.ID])
+		}
+	}
+}
 
 func TestInferFullInventoryTreePreservesAudiobookFolderScopes(t *testing.T) {
 	files := []catalog.SourceFile{

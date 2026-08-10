@@ -336,9 +336,26 @@ func (handler *ScanRootHandler) queueIncompleteBooks(
 	ctx context.Context,
 	rootID string,
 ) error {
+	return queueIncompleteBooks(ctx, handler.Repo, rootID)
+}
+
+type incompleteBookRepository interface {
+	ListBooks(context.Context, catalog.BookQuery) (catalog.Page[catalog.Book], error)
+	EnqueueDeduplicated(
+		context.Context,
+		catalog.WorkerJob,
+		string,
+	) (catalog.WorkerJob, error)
+}
+
+func queueIncompleteBooks(
+	ctx context.Context,
+	repository incompleteBookRepository,
+	rootID string,
+) error {
 	cursor := ""
 	for {
-		page, err := handler.Repo.ListBooks(ctx, catalog.BookQuery{
+		page, err := repository.ListBooks(ctx, catalog.BookQuery{
 			RootID: rootID,
 			Sort:   catalog.BookSortTitle,
 			Limit:  bookPageSize,
@@ -358,7 +375,7 @@ func (handler *ScanRootHandler) queueIncompleteBooks(
 				Kind:    catalog.JobEnrichBook,
 				Payload: map[string]any{"bookId": book.ID.String()},
 			}
-			if _, err := handler.Repo.EnqueueDeduplicated(
+			if _, err := repository.EnqueueDeduplicated(
 				ctx,
 				job,
 				"enrich_book:"+book.ID.String(),

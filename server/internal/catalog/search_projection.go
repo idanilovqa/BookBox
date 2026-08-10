@@ -95,6 +95,11 @@ func BuildSearchProjection(input SearchProjectionInput) (SearchProjection, error
 			return assignments[bookID][i].String() < assignments[bookID][j].String()
 		})
 	}
+	for fileID, info := range files {
+		if info.role == FileRoleAudio && len(linkedBooks[fileID]) != 1 {
+			return SearchProjection{}, ErrInvalidData
+		}
+	}
 
 	documents := make([]SearchDocument, 0, len(books)+len(files)*2)
 	bookDocument := make(map[uuid.UUID]int, len(books))
@@ -102,8 +107,11 @@ func BuildSearchProjection(input SearchProjectionInput) (SearchProjection, error
 	for _, bookID := range bookIDs {
 		book := books[bookID]
 		reviewReason := ""
-		if evidence, exists := input.Evidence[bookID]; book.ReviewState == ReviewNeedsReview && exists {
-			reviewReason = evidence.ReasonCode
+		if book.ReviewState == ReviewNeedsReview {
+			reviewReason = ReviewReasonLegacy
+			if evidence, exists := input.Evidence[bookID]; exists && evidence.ReasonCode != "" {
+				reviewReason = evidence.ReasonCode
+			}
 		}
 		duration, known, filenames, _, err := audiobookMedia(assignments[bookID], files)
 		if err != nil {

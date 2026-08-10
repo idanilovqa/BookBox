@@ -1136,12 +1136,26 @@ func markUnseenSourceFilesMissingTx(
 	scanID uuid.UUID,
 	missingAt time.Time,
 ) error {
+	return markUnseenSourceFilesMissingInScopeTx(
+		ctx, transaction, rootID, scanID, "", missingAt,
+	)
+}
+
+func markUnseenSourceFilesMissingInScopeTx(
+	ctx context.Context,
+	transaction pgx.Tx,
+	rootID string,
+	scanID uuid.UUID,
+	scopePath string,
+	missingAt time.Time,
+) error {
 	rows, err := transaction.Query(ctx, `
 		update source_files
 		set missing_at=$3, updated_at=now()
 		where root_id=$1 and scan_run_id is distinct from $2 and missing_at is null
+		  and ($4='' or left(relative_path,length($4)+1)=$4||'/')
 		returning id
-	`, rootID, scanID, missingAt)
+	`, rootID, scanID, missingAt, scopePath)
 	if err != nil {
 		return fmt.Errorf("mark missing source files: %w", err)
 	}

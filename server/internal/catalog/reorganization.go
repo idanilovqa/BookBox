@@ -563,7 +563,7 @@ func (repository *PostgresRepository) CommitReorganizationGrouping(ctx context.C
 			payload: map[string]any{"rootId": operation.RootID, "relativePath": "", "full": true},
 		},
 		{
-			kind: JobPublishSearch, key: JobPublishSearch + ":" + operation.RootID,
+			kind: JobPublishSearch, key: PublishSearchDedupeKey(operation.RootID, generation),
 			payload: map[string]any{"rootId": operation.RootID, "catalogGeneration": generation},
 		},
 	} {

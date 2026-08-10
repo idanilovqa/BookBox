@@ -119,16 +119,17 @@ func TestCommitReorganizationAtomicallyPersistsGroupingAndFollowups(t *testing.T
 		t.Fatalf("evidence reason = %q, want manual", reason)
 	}
 
-	rows, err := pool.Query(ctx, `select kind,payload from worker_jobs where kind in ('scan_root','publish_search') order by kind`)
+	rows, err := pool.Query(ctx, `select kind,dedupe_key,payload from worker_jobs where kind in ('scan_root','publish_search') order by kind`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	jobs := make(map[string]map[string]any)
+	keys := make(map[string]string)
 	for rows.Next() {
-		var kind string
+		var kind, key string
 		var encoded []byte
-		if err := rows.Scan(&kind, &encoded); err != nil {
+		if err := rows.Scan(&kind, &key, &encoded); err != nil {
 			t.Fatal(err)
 		}
 		var payload map[string]any
@@ -136,12 +137,14 @@ func TestCommitReorganizationAtomicallyPersistsGroupingAndFollowups(t *testing.T
 			t.Fatal(err)
 		}
 		jobs[kind] = payload
+		keys[kind] = key
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
 	if len(jobs) != 2 || jobs[JobScanRoot]["full"] != true ||
+		keys[JobPublishSearch] != "publish_search:audiobooks:2" ||
 		jobs[JobPublishSearch]["catalogGeneration"] != float64(2) {
-		t.Fatalf("follow-up jobs = %#v", jobs)
+		t.Fatalf("follow-up jobs = %#v keys = %#v", jobs, keys)
 	}
 }

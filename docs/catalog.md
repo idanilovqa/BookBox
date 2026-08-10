@@ -9,6 +9,11 @@ and regroup jobs refine book boundaries. A publication job replaces the indexed
 search projection after the catalog generation advances. PostgreSQL stores each
 stage, review decision, and cover audit event.
 
+Grouping refinement and publication-job enqueue are separate commits. A worker
+crash between them can leave the prior search snapshot visible until the scope is
+regrouped again or an operator requests a rescan; the publication job itself is
+deduplicated once enqueued.
+
 Worker jobs use these staged kinds: `scan_root`, `probe_file`,
 `inspect_companion`, `regroup_scope`, `publish_search`, `enrich_book`,
 `publish_cover`, and `reorganize_files`. Jobs move through `queued`, `running`,
@@ -108,6 +113,10 @@ companions. A saved correction assigns the complete scope to explicit groups,
 locks the result, advances the catalog generation once, and queues one search
 publication. Later inventories reuse the correction while fingerprints still
 match.
+
+Search projections may expose `legacy_review_state` only as a compatibility
+fallback for a pre-evidence `needs_review` book. It is not a grouping-evidence
+reason code; a later grouping refinement replaces it with persisted evidence.
 
 ## Optional source reorganization
 

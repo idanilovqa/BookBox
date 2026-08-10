@@ -95,6 +95,135 @@ func TestScanRootUnchangedDeltaQueuesNoRefinementJobs(t *testing.T) {
 	}
 }
 
+func TestScanRootQueuesOnlineEnrichmentAfterGrouping(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	audio := stagedSourceFile("Book/01.mp3", catalog.FileKindAudio, now)
+	bookID := uuid.New()
+	repository := &stagedRepositoryFake{
+		run:        catalog.ScanRun{ID: uuid.New(), RootID: "audiobooks"},
+		delta:      catalog.InventoryDelta{ProbeFiles: []catalog.SourceFile{audio}},
+		generation: catalog.CatalogGeneration{RootID: "audiobooks", Value: 2},
+		tree:       grouping.Tree{RootID: "audiobooks", Files: []catalog.SourceFile{audio}},
+		books: []catalog.Book{{
+			ID: bookID, RootID: "audiobooks", Title: "Book",
+			ReviewState: catalog.ReviewUnreviewed, MetadataSource: catalog.MetadataInferred,
+		}},
+	}
+	handler := stagedScanHandler(repository, scanner.InventoryResult{
+		RootID: "audiobooks", Scope: scanner.FullScope(),
+		Files: []scanner.InventoryFile{stagedInventoryFile(audio)},
+	})
+
+	if err := handler.Handle(context.Background(), stagedScanJob("audiobooks", "", true)); err != nil {
+		t.Fatal(err)
+	}
+	wantKinds := []string{catalog.JobProbeFile, catalog.JobEnrichBook}
+	gotKinds := make([]string, len(repository.jobs))
+	for index, job := range repository.jobs {
+		gotKinds[index] = job.Kind
+	}
+	if !reflect.DeepEqual(gotKinds, wantKinds) {
+		t.Fatalf("queued kinds=%v, want %v", gotKinds, wantKinds)
+	}
+	if got := repository.dedupeKeys[1]; got != "enrich_book:"+bookID.String() {
+		t.Fatalf("enrichment dedupe key=%q", got)
+	}
+}
+
+func TestScanRootEnrichmentFailureCannotSuppressFingerprintJobs(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		listBooksErr   error
+		enqueueErrKind string
+		books          []catalog.Book
+	}{
+		{name: "book listing fails", listBooksErr: errors.New("list failed")},
+		{
+			name: "enrichment enqueue fails", enqueueErrKind: catalog.JobEnrichBook,
+			books: []catalog.Book{{
+				ID: uuid.New(), RootID: "audiobooks", Title: "Book",
+				ReviewState: catalog.ReviewUnreviewed, MetadataSource: catalog.MetadataInferred,
+			}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+			audio := stagedSourceFile("Book/01.mp3", catalog.FileKindAudio, now)
+			companion := stagedSourceFile("Book/book.nfo", catalog.FileKindCompanion, now)
+			companion.CompanionKind = catalog.CompanionNFO
+			repository := &stagedRepositoryFake{
+				run: catalog.ScanRun{ID: uuid.New(), RootID: "audiobooks"},
+				delta: catalog.InventoryDelta{
+					ProbeFiles:        []catalog.SourceFile{audio},
+					InspectCompanions: []catalog.SourceFile{companion},
+				},
+				generation:     catalog.CatalogGeneration{RootID: "audiobooks", Value: 2},
+				tree:           grouping.Tree{RootID: "audiobooks", Files: []catalog.SourceFile{audio, companion}},
+				books:          test.books,
+				listBooksErr:   test.listBooksErr,
+				enqueueErrKind: test.enqueueErrKind,
+			}
+			handler := stagedScanHandler(repository, scanner.InventoryResult{
+				RootID: "audiobooks", Scope: scanner.FullScope(),
+				Files: []scanner.InventoryFile{stagedInventoryFile(audio), stagedInventoryFile(companion)},
+			})
+
+			if err := handler.Handle(context.Background(), stagedScanJob("audiobooks", "", true)); err == nil {
+				t.Fatal("enrichment failure unexpectedly succeeded")
+			}
+			gotKinds := make([]string, len(repository.jobs))
+			for index, job := range repository.jobs {
+				gotKinds[index] = job.Kind
+			}
+			wantKinds := []string{catalog.JobProbeFile, catalog.JobInspectCompanion}
+			if !reflect.DeepEqual(gotKinds, wantKinds) {
+				t.Fatalf("queued kinds=%v, want fingerprint jobs %v", gotKinds, wantKinds)
+			}
+		})
+	}
+}
+
+func TestScanRootExcludesDeferredMissingFilesFromGrouping(t *testing.T) {
+	for _, test := range []struct {
+		name, scope string
+		full        bool
+	}{
+		{name: "full", full: true},
+		{name: "scoped", scope: "Book"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+			seen := stagedSourceFile("Book/seen.mp3", catalog.FileKindAudio, now)
+			unseen := stagedSourceFile("Book/unseen.mp3", catalog.FileKindAudio, now)
+			repository := &stagedRepositoryFake{
+				run:        catalog.ScanRun{ID: uuid.New(), RootID: "audiobooks"},
+				delta:      catalog.InventoryDelta{MissingFileIDs: []uuid.UUID{unseen.ID}},
+				generation: catalog.CatalogGeneration{RootID: "audiobooks", Value: 2},
+				tree: grouping.Tree{
+					RootID: "audiobooks", ScopePath: test.scope,
+					Files: []catalog.SourceFile{seen, unseen},
+				},
+			}
+			handler := stagedScanHandler(repository, scanner.InventoryResult{
+				RootID: "audiobooks", Files: []scanner.InventoryFile{stagedInventoryFile(seen)},
+			})
+
+			if err := handler.Handle(context.Background(), stagedScanJob("audiobooks", test.scope, test.full)); err != nil {
+				t.Fatal(err)
+			}
+			var books []catalog.InferredBook
+			if test.full {
+				books = repository.lastFinalization.Books
+			} else {
+				books = repository.lastRefinement.Books
+			}
+			if len(books) != 1 || !reflect.DeepEqual(books[0].SourceFileIDs, []uuid.UUID{seen.ID}) {
+				t.Fatalf("grouped books=%#v, want only seen file %s", books, seen.ID)
+			}
+		})
+	}
+}
+
 func TestScanRootUsesDeterministicFingerprintDedupeKeys(t *testing.T) {
 	now := time.Date(2026, 8, 8, 12, 0, 0, 456, time.UTC)
 	audio := stagedSourceFile("Book/01.mp3", catalog.FileKindAudio, now)
@@ -234,6 +363,12 @@ func TestPublishSearchCoalescesStaleGeneration(t *testing.T) {
 	repository := &stagedRepositoryFake{
 		publishErr: catalog.ErrConflict,
 		generation: catalog.CatalogGeneration{RootID: "audiobooks", Value: 9},
+		activeDedupeKeys: map[string]catalog.WorkerJob{
+			"publish_search:audiobooks:8": {
+				Kind:    catalog.JobPublishSearch,
+				Payload: map[string]any{"rootId": "audiobooks", "catalogGeneration": int64(8)},
+			},
+		},
 	}
 	handler := PublishSearchHandler{Repo: repository}
 	job := catalog.WorkerJob{
@@ -246,12 +381,13 @@ func TestPublishSearchCoalescesStaleGeneration(t *testing.T) {
 	if err := handler.Handle(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(repository.dedupeKeys, []string{"publish_search:audiobooks"}) || len(repository.jobs) != 1 {
+	if !reflect.DeepEqual(repository.dedupeKeys, []string{"publish_search:audiobooks:9"}) || len(repository.jobs) != 1 ||
+		repository.jobs[0].Payload["catalogGeneration"] != int64(9) {
 		t.Fatalf("replacement publication jobs=%#v keys=%v", repository.jobs, repository.dedupeKeys)
 	}
 }
 
-func TestRegroupScopeAppliesRefinementThenCoalescesPublication(t *testing.T) {
+func TestRegroupScopeAppliesRefinementThenQueuesOneDeduplicatedPublication(t *testing.T) {
 	repository := &stagedRepositoryFake{
 		generation: catalog.CatalogGeneration{RootID: "audiobooks", Value: 6},
 		tree:       grouping.Tree{RootID: "audiobooks", ScopePath: "Book"},
@@ -269,8 +405,39 @@ func TestRegroupScopeAppliesRefinementThenCoalescesPublication(t *testing.T) {
 	if err := handler.Handle(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
-	if repository.refinements != 1 || !reflect.DeepEqual(repository.dedupeKeys, []string{"publish_search:audiobooks"}) {
-		t.Fatalf("refinements=%d keys=%v", repository.refinements, repository.dedupeKeys)
+	if repository.refinements != 1 ||
+		!reflect.DeepEqual(repository.events, []string{"load_tree", "refine", "enqueue:" + catalog.JobPublishSearch}) ||
+		!reflect.DeepEqual(repository.dedupeKeys, []string{"publish_search:audiobooks:6"}) ||
+		len(repository.jobs) != 1 || repository.jobs[0].Kind != catalog.JobPublishSearch {
+		t.Fatalf("refinements=%d events=%v jobs=%#v keys=%v",
+			repository.refinements, repository.events, repository.jobs, repository.dedupeKeys)
+	}
+}
+
+func TestRegroupScopeQueuesOnlineEnrichmentAfterGrouping(t *testing.T) {
+	bookID := uuid.New()
+	repository := &stagedRepositoryFake{
+		generation: catalog.CatalogGeneration{RootID: "audiobooks", Value: 6},
+		tree:       grouping.Tree{RootID: "audiobooks", ScopePath: "Book"},
+		books: []catalog.Book{{
+			ID: bookID, RootID: "audiobooks", Title: "Book",
+			ReviewState: catalog.ReviewUnreviewed, MetadataSource: catalog.MetadataInferred,
+		}},
+	}
+	handler := RegroupScopeHandler{Repo: repository}
+	job := catalog.WorkerJob{
+		Kind: catalog.JobRegroupScope,
+		Payload: map[string]any{
+			"rootId": "audiobooks", "scopePath": "Book", "catalogGeneration": float64(5),
+		},
+	}
+
+	if err := handler.Handle(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"publish_search:audiobooks:6", "enrich_book:" + bookID.String()}
+	if !reflect.DeepEqual(repository.dedupeKeys, want) {
+		t.Fatalf("dedupe keys=%v, want %v", repository.dedupeKeys, want)
 	}
 }
 
@@ -386,11 +553,15 @@ type stagedRepositoryFake struct {
 	probeStoreErr     error
 	companionChanged  bool
 	refinementErr     error
+	lastFinalization  catalog.InventoryFinalization
 	lastRefinement    catalog.GroupingRefinement
 	publishErr        error
 	savedProbeFailure string
 	savedCompanion    map[string]any
 	activeDedupeKeys  map[string]catalog.WorkerJob
+	books             []catalog.Book
+	listBooksErr      error
+	enqueueErrKind    string
 }
 
 func (fake *stagedRepositoryFake) BeginScan(context.Context, string) (catalog.ScanRun, error) {
@@ -417,7 +588,7 @@ func (fake *stagedRepositoryFake) ListBooks(
 	context.Context,
 	catalog.BookQuery,
 ) (catalog.Page[catalog.Book], error) {
-	return catalog.Page[catalog.Book]{}, nil
+	return catalog.Page[catalog.Book]{Items: fake.books}, fake.listBooksErr
 }
 
 func (fake *stagedRepositoryFake) ApplyInventory(
@@ -440,10 +611,11 @@ func (fake *stagedRepositoryFake) LoadGroupingTree(
 
 func (fake *stagedRepositoryFake) FinalizeInventoryAndPublish(
 	_ context.Context,
-	_ catalog.InventoryFinalization,
+	finalization catalog.InventoryFinalization,
 ) (catalog.CatalogGeneration, error) {
 	fake.events = append(fake.events, "finalize")
 	fake.finalizations++
+	fake.lastFinalization = finalization
 	return fake.generation, nil
 }
 
@@ -462,10 +634,21 @@ func (fake *stagedRepositoryFake) FinishScopedInventory(
 	return nil
 }
 
+func (fake *stagedRepositoryFake) FinalizeScopedInventoryAndPublish(
+	_ context.Context,
+	_ uuid.UUID,
+	refinement catalog.GroupingRefinement,
+) (catalog.CatalogGeneration, error) {
+	fake.refinements++
+	fake.lastRefinement = refinement
+	return fake.generation, fake.refinementErr
+}
+
 func (fake *stagedRepositoryFake) ApplyGroupingRefinement(
 	_ context.Context,
 	refinement catalog.GroupingRefinement,
 ) (catalog.CatalogGeneration, error) {
+	fake.events = append(fake.events, "refine")
 	fake.refinements++
 	fake.lastRefinement = refinement
 	return fake.generation, fake.refinementErr
@@ -485,6 +668,9 @@ func (fake *stagedRepositoryFake) EnqueueDeduplicated(
 	job catalog.WorkerJob,
 	key string,
 ) (catalog.WorkerJob, error) {
+	if job.Kind == fake.enqueueErrKind {
+		return catalog.WorkerJob{}, errors.New("enqueue failed")
+	}
 	if fake.activeDedupeKeys == nil {
 		fake.activeDedupeKeys = make(map[string]catalog.WorkerJob)
 	}

@@ -167,6 +167,7 @@ foreach ($stagedRequirement in ([ordered]@{
     'physical move manifest' = 'Assert-MovedFileManifest'
     'physical rollback manifest' = 'Assert-FileManifestUnchanged'
     'second move failure' = 'new\.move_order=2'
+    'real-media duration tolerance' = "\(media->>'durationMs'\)::bigint between 11500 and 12500"
 }).GetEnumerator()) {
     if ($stagedCatalogText -notmatch $stagedRequirement.Value) {
         throw "Missing staged-catalog safety requirement: $($stagedRequirement.Key)"

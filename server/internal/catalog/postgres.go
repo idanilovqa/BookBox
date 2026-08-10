@@ -1328,7 +1328,7 @@ func (repository *PostgresRepository) SaveGrouping(
 		on conflict (kind,dedupe_key)
 			where dedupe_key is not null and status in ('queued','running')
 		do nothing
-	`, jobID, JobPublishSearch, "publish_search:"+correction.RootID,
+	`, jobID, JobPublishSearch, PublishSearchDedupeKey(correction.RootID, generation.Value),
 		payload, repository.now()); err != nil {
 		return zero, classifyConstraint(err, "queue grouping search publication")
 	}

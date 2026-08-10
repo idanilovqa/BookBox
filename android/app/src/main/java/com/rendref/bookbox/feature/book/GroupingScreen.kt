@@ -52,19 +52,21 @@ fun GroupingScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item {
-            Text(
-                "Review grouping",
-                modifier = Modifier.padding(top = 16.dp),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text("Each audio file must belong to exactly one logical book.")
-            state.groupingReviewReason?.let { reason ->
-                Text("Review reason: ${reason.displayLabel()}")
-            }
-            state.groupingEvidence.toSortedMap().forEach { (role, paths) ->
-                paths.forEach { path ->
-                    Text("${role.displayLabel()} evidence: $path")
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "Review grouping",
+                    modifier = Modifier.padding(top = 16.dp),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text("Each audio file must belong to exactly one logical book.")
+                state.groupingReviewReason?.let { reason ->
+                    Text("Review reason: ${reason.displayLabel()}")
+                }
+                state.groupingEvidence.toSortedMap().forEach { (role, paths) ->
+                    paths.forEach { path ->
+                        Text("${role.displayLabel()} evidence: $path")
+                    }
                 }
             }
         }

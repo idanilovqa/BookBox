@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -595,13 +596,14 @@ func TestPostgresRepositorySaveGroupingPersistsCompanionOwnershipEvidenceAndOneG
 	if manualEvidence != 2 || lockedBooks != 2 {
 		t.Fatalf("manual evidence=%d locked confirmed books=%d", manualEvidence, lockedBooks)
 	}
-	var jobKind string
+	var jobKind, jobDedupeKey string
 	var jobPayload map[string]any
-	if err := pool.QueryRow(ctx, `select kind,payload from worker_jobs where kind='publish_search'`).Scan(&jobKind, &jobPayload); err != nil {
+	if err := pool.QueryRow(ctx, `select kind,dedupe_key,payload from worker_jobs where kind='publish_search'`).Scan(&jobKind, &jobDedupeKey, &jobPayload); err != nil {
 		t.Fatal(err)
 	}
-	if jobKind != JobPublishSearch || jobPayload["rootId"] != "audiobooks" {
-		t.Fatalf("publish job kind=%q payload=%#v", jobKind, jobPayload)
+	wantPublishKey := "publish_search:audiobooks:" + strconv.FormatInt(generation.Value, 10)
+	if jobKind != JobPublishSearch || jobDedupeKey != wantPublishKey || jobPayload["rootId"] != "audiobooks" {
+		t.Fatalf("publish job kind=%q key=%q payload=%#v", jobKind, jobDedupeKey, jobPayload)
 	}
 	if _, err := pool.Exec(ctx, `
 		create function fail_grouping_publish() returns trigger language plpgsql as $$

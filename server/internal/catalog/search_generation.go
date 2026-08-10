@@ -128,16 +128,10 @@ func (repository *PostgresRepository) ApplyGroupingRefinement(
 	ctx context.Context,
 	refinement GroupingRefinement,
 ) (CatalogGeneration, error) {
-	if repository == nil || repository.pool == nil ||
-		!rootIDPattern.MatchString(refinement.RootID) ||
-		ValidateSourceFolder(refinement.ScopePath) != nil ||
-		refinement.ExpectedGeneration <= 0 {
+	if repository == nil || repository.pool == nil {
 		return CatalogGeneration{}, ErrInvalidData
 	}
-	if err := validateGroupingEvidenceMap(refinement.Evidence); err != nil {
-		return CatalogGeneration{}, err
-	}
-	if err := validateEvidenceForBooks(refinement.Books, refinement.Evidence); err != nil {
+	if err := validateGroupingRefinement(refinement); err != nil {
 		return CatalogGeneration{}, err
 	}
 	transaction, err := repository.pool.Begin(ctx)
@@ -145,6 +139,86 @@ func (repository *PostgresRepository) ApplyGroupingRefinement(
 		return CatalogGeneration{}, fmt.Errorf("begin grouping refinement: %w", err)
 	}
 	defer transaction.Rollback(ctx)
+	completedAt := repository.now().UTC().Truncate(time.Microsecond)
+	generation, err := applyGroupingRefinementTx(
+		ctx, transaction, refinement, nil, completedAt,
+	)
+	if err != nil {
+		return CatalogGeneration{}, err
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return CatalogGeneration{}, fmt.Errorf("commit grouping refinement: %w", err)
+	}
+	return generation, nil
+}
+
+func (repository *PostgresRepository) FinalizeScopedInventoryAndPublish(
+	ctx context.Context,
+	scanID uuid.UUID,
+	refinement GroupingRefinement,
+) (CatalogGeneration, error) {
+	if repository == nil || repository.pool == nil || scanID == uuid.Nil ||
+		refinement.ScopePath == "" {
+		return CatalogGeneration{}, ErrInvalidData
+	}
+	if err := validateGroupingRefinement(refinement); err != nil {
+		return CatalogGeneration{}, err
+	}
+	transaction, err := repository.pool.Begin(ctx)
+	if err != nil {
+		return CatalogGeneration{}, fmt.Errorf("begin scoped inventory finalization: %w", err)
+	}
+	defer transaction.Rollback(ctx)
+	if err := lockRunningScanTx(ctx, transaction, scanID, refinement.RootID); err != nil {
+		return CatalogGeneration{}, err
+	}
+	completedAt := repository.now().UTC().Truncate(time.Microsecond)
+	if err := markUnseenSourceFilesMissingInScopeTx(
+		ctx, transaction, refinement.RootID, scanID, refinement.ScopePath, completedAt,
+	); err != nil {
+		return CatalogGeneration{}, err
+	}
+	generation, err := applyGroupingRefinementTx(
+		ctx, transaction, refinement, &scanID, completedAt,
+	)
+	if err != nil {
+		return CatalogGeneration{}, err
+	}
+	if err := buildAndPublishRefinedProjectionTx(
+		ctx, transaction, refinement.RootID, scanID, completedAt,
+	); err != nil {
+		return CatalogGeneration{}, err
+	}
+	if _, err := transaction.Exec(ctx, `
+		update scan_runs set finished_at=$2, status='succeeded', error=null where id=$1
+	`, scanID, completedAt); err != nil {
+		return CatalogGeneration{}, fmt.Errorf("finish scoped inventory scan: %w", err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return CatalogGeneration{}, fmt.Errorf("commit scoped inventory finalization: %w", err)
+	}
+	return generation, nil
+}
+
+func validateGroupingRefinement(refinement GroupingRefinement) error {
+	if !rootIDPattern.MatchString(refinement.RootID) ||
+		ValidateSourceFolder(refinement.ScopePath) != nil ||
+		refinement.ExpectedGeneration <= 0 {
+		return ErrInvalidData
+	}
+	if err := validateGroupingEvidenceMap(refinement.Evidence); err != nil {
+		return err
+	}
+	return validateEvidenceForBooks(refinement.Books, refinement.Evidence)
+}
+
+func applyGroupingRefinementTx(
+	ctx context.Context,
+	transaction pgx.Tx,
+	refinement GroupingRefinement,
+	scanID *uuid.UUID,
+	completedAt time.Time,
+) (CatalogGeneration, error) {
 	if err := requireCatalogGenerationTx(
 		ctx, transaction, refinement.RootID, refinement.ExpectedGeneration,
 	); err != nil {
@@ -165,39 +239,36 @@ func (repository *PostgresRepository) ApplyGroupingRefinement(
 	); err != nil {
 		return CatalogGeneration{}, err
 	}
-	completedAt := repository.now().UTC().Truncate(time.Microsecond)
 	generation, err := incrementCatalogGenerationTx(
-		ctx, transaction, refinement.RootID, nil, completedAt,
-	)
-	if err != nil {
-		return CatalogGeneration{}, err
-	}
-	var scanID uuid.UUID
-	if err := transaction.QueryRow(ctx, `
-		select coalesce(g.inventory_scan_run_id, s.scan_run_id)
-		from catalog_generations g
-		left join library_search_snapshots s on s.root_id=g.root_id
-		where g.root_id=$1
-	`, refinement.RootID).Scan(&scanID); err != nil {
-		return CatalogGeneration{}, mapNotFound(err, "load refinement scan")
-	}
-	projectionInput, err := loadSearchProjectionInputTx(
 		ctx, transaction, refinement.RootID, scanID, completedAt,
 	)
 	if err != nil {
 		return CatalogGeneration{}, err
 	}
+	return generation, nil
+}
+
+func buildAndPublishRefinedProjectionTx(
+	ctx context.Context,
+	transaction pgx.Tx,
+	rootID string,
+	projectionScanID uuid.UUID,
+	completedAt time.Time,
+) error {
+	projectionInput, err := loadSearchProjectionInputTx(
+		ctx, transaction, rootID, projectionScanID, completedAt,
+	)
+	if err != nil {
+		return err
+	}
 	projection, err := BuildSearchProjection(projectionInput)
 	if err != nil {
-		return CatalogGeneration{}, fmt.Errorf("build refined search projection: %w", err)
+		return fmt.Errorf("build refined search projection: %w", err)
 	}
 	if err := publishSearchProjectionTx(ctx, transaction, projection); err != nil {
-		return CatalogGeneration{}, err
+		return err
 	}
-	if err := transaction.Commit(ctx); err != nil {
-		return CatalogGeneration{}, fmt.Errorf("commit grouping refinement: %w", err)
-	}
-	return generation, nil
+	return nil
 }
 
 func loadInferredBooksOutsideScopeTx(

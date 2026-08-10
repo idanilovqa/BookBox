@@ -152,7 +152,7 @@ func TestBuildSearchProjectionPropagatesDistinctDuplicateGroupsToRawAncestors(t 
 	}
 	unassignedID := uuid.New()
 	input.Files = append(input.Files,
-		projectionFile(unassignedID, "Shared/Loose/loose.m4b", FileRoleAudio, 1_000),
+		projectionFile(unassignedID, "Shared/Loose/cover.jpg", FileRoleCover, 0),
 		SourceFile{ID: uuid.New(), RootID: "audiobooks", RelativePath: "Shared/notes.txt", Size: 1, ModifiedAt: time.Now().UTC(), Media: map[string]any{}},
 		SourceFile{ID: uuid.New(), RootID: "audiobooks", RelativePath: "Shared/book.nfo", Size: 1, ModifiedAt: time.Now().UTC(), Media: map[string]any{"role": FileRoleSidecar}},
 	)
@@ -168,7 +168,7 @@ func TestBuildSearchProjectionPropagatesDistinctDuplicateGroupsToRawAncestors(t 
 	if shared.DuplicateGroupID != uuid.Nil || shared.DuplicateCount != 4 {
 		t.Fatalf("shared folder duplicate state=%#v", shared)
 	}
-	loose := findSearchDocument(t, projection, SearchEntityFile, "Shared/Loose/loose.m4b")
+	loose := findSearchDocument(t, projection, SearchEntityFile, "Shared/Loose/cover.jpg")
 	if loose.BookID != uuid.Nil {
 		t.Fatalf("unassigned raw file book=%s", loose.BookID)
 	}
@@ -183,8 +183,8 @@ func TestBuildSearchProjectionRejectsCanonicallyEquivalentFolderPaths(t *testing
 	input := SearchProjectionInput{
 		RootID: "audiobooks", ScanRunID: uuid.New(), CompletedAt: time.Now().UTC(),
 		Files: []SourceFile{
-			projectionFile(uuid.New(), "Caf\u00e9/one.m4b", FileRoleAudio, 1_000),
-			projectionFile(uuid.New(), "Cafe\u0301/two.m4b", FileRoleAudio, 1_000),
+			projectionFile(uuid.New(), "Caf\u00e9/cover.jpg", FileRoleCover, 0),
+			projectionFile(uuid.New(), "Cafe\u0301/cover.jpg", FileRoleCover, 0),
 		},
 	}
 	if _, err := BuildSearchProjection(input); !errors.Is(err, ErrInvalidData) {

@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import com.rendref.bookbox.core.model.BookCardDto
 import com.rendref.bookbox.core.model.BookSearchGroupDto
 import com.rendref.bookbox.core.model.SearchSnapshotDto
+import com.rendref.bookbox.core.search.STALE_CATALOG_STATUS
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -115,6 +116,34 @@ class LibraryScreenTest {
 
         assertEquals("dune", searches.last())
         assertEquals(LibraryAction.OpenBook(dune.id), actions.last())
+    }
+
+    @Test
+    fun libraryRendersStaleCatalogStatusWithRetainedCards() {
+        composeRule.setContent {
+            MaterialTheme {
+                LibraryScreen(
+                    state = LibraryState(
+                        groups = listOf(BookSearchGroupDto(dune.id, false, listOf(dune))),
+                        isCatalogStale = true,
+                        catalogStatusMessage = STALE_CATALOG_STATUS,
+                    ),
+                    onSearchTextChange = {},
+                    onAction = {},
+                    onAuthorChange = {},
+                    onGenreChange = {},
+                    onYearChange = {},
+                    onRootChange = {},
+                    onReviewStateChange = {},
+                    onSortChange = {},
+                    onLoadNextPage = {},
+                    onGridPositionChange = { _, _ -> },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText(STALE_CATALOG_STATUS).assertIsDisplayed()
+        composeRule.onNodeWithText("Dune").assertIsDisplayed()
     }
 
     @Test

@@ -384,16 +384,23 @@ func TestSearchLibraryFindsRawSingletonsWithGramAndTrigramText(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := searchTestFile("audiobooks", "Frank Herbert/Dune/book.m4b", FileRoleAudio)
-	loose := searchTestFile("audiobooks", "Dune Loose/copy.m4b", FileRoleAudio)
+	loose := searchTestFile("audiobooks", "Dune Loose/copy.jpg", FileRoleCover)
 	fuzzyBeginning := searchTestFile(
-		"audiobooks", "Fuzzy/XYQToken-"+strings.Repeat("LongMetadata", 10)+".m4b", FileRoleAudio,
+		"audiobooks", "Fuzzy/XYQToken-"+strings.Repeat("LongMetadata", 10)+".jpg", FileRoleCover,
 	)
 	fuzzyEnd := searchTestFile(
-		"audiobooks", "Fuzzy/"+strings.Repeat("LongMetadata", 10)+"-EndingToken.m4b", FileRoleAudio,
+		"audiobooks", "Fuzzy/"+strings.Repeat("LongMetadata", 10)+"-EndingToken.jpg", FileRoleCover,
 	)
 	if err := repository.UpsertSourceFiles(
 		ctx, scan.ID, []SourceFile{file, loose, fuzzyBeginning, fuzzyEnd},
 	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		update source_files
+		set file_kind='cover', probe_status='not_applicable'
+		where id = any($1)
+	`, []uuid.UUID{loose.ID, fuzzyBeginning.ID, fuzzyEnd.ID}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.FinalizeSuccessfulScan(ctx, scan.ID, []InferredBook{
@@ -416,7 +423,7 @@ func TestSearchLibraryFindsRawSingletonsWithGramAndTrigramText(t *testing.T) {
 	}
 	want := map[string]SearchEntityKind{
 		"Dune Loose":                  SearchEntityFolder,
-		"Dune Loose/copy.m4b":         SearchEntityFile,
+		"Dune Loose/copy.jpg":         SearchEntityFile,
 		"Frank Herbert":               SearchEntityFolder,
 		"Frank Herbert/Dune":          SearchEntityFolder,
 		"Frank Herbert/Dune/book.m4b": SearchEntityFile,

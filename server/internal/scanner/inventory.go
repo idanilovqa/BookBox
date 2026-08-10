@@ -55,7 +55,8 @@ type InventoryResult struct {
 }
 
 type Inventory struct {
-	exclusions []string
+	exclusions       []string
+	afterFingerprint func(string)
 }
 
 func NewInventory(options Options) *Inventory {
@@ -164,6 +165,73 @@ func (inventory *Inventory) Scan(
 				Operation:    "stat",
 			})
 			return nil
+		}
+		if inventory.afterFingerprint != nil {
+			inventory.afterFingerprint(relative)
+		}
+		confirmedInfo, confirmErr := handle.Stat()
+		if confirmErr != nil {
+			_ = handle.Close()
+			if isRaceError(confirmErr) {
+				return nil
+			}
+			result.Warnings = append(result.Warnings, Warning{
+				RelativePath: relative,
+				Operation:    "stat",
+			})
+			return nil
+		}
+		if confirmedInfo.Size() != info.Size() || !confirmedInfo.ModTime().Equal(info.ModTime()) {
+			_ = handle.Close()
+			result.Warnings = append(result.Warnings, Warning{
+				RelativePath: relative,
+				Operation:    "changed",
+			})
+			return nil
+		}
+		currentHandle, _, currentOpenErr := resolver.OpenRegular(root.ID, relative)
+		if currentOpenErr != nil {
+			_ = handle.Close()
+			operation := "open"
+			if isRaceError(currentOpenErr) || errors.Is(currentOpenErr, library.ErrNotRegular) ||
+				errors.Is(currentOpenErr, library.ErrPathEscape) {
+				operation = "changed"
+			}
+			result.Warnings = append(result.Warnings, Warning{
+				RelativePath: relative,
+				Operation:    operation,
+			})
+			return nil
+		}
+		currentInfo, currentStatErr := currentHandle.Stat()
+		if currentStatErr != nil {
+			_ = currentHandle.Close()
+			_ = handle.Close()
+			operation := "stat"
+			if isRaceError(currentStatErr) {
+				operation = "changed"
+			}
+			result.Warnings = append(result.Warnings, Warning{
+				RelativePath: relative,
+				Operation:    operation,
+			})
+			return nil
+		}
+		if !os.SameFile(confirmedInfo, currentInfo) || currentInfo.Size() != confirmedInfo.Size() ||
+			!currentInfo.ModTime().Equal(confirmedInfo.ModTime()) {
+			_ = currentHandle.Close()
+			_ = handle.Close()
+			result.Warnings = append(result.Warnings, Warning{
+				RelativePath: relative,
+				Operation:    "changed",
+			})
+			return nil
+		}
+		if currentCloseErr := currentHandle.Close(); currentCloseErr != nil {
+			result.Warnings = append(result.Warnings, Warning{
+				RelativePath: relative,
+				Operation:    "close",
+			})
 		}
 		file := InventoryFile{
 			ID:            stableFileID(root.ID, relative),

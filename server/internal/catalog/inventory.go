@@ -166,18 +166,6 @@ func (repository *PostgresRepository) ApplyInventory(
 			if _, seen := seenPaths[stored.RelativePath]; seen {
 				continue
 			}
-			if _, err := transaction.Exec(ctx, `
-				update source_files
-				set missing_at=$3, updated_at=$3
-				where id=$1 and root_id=$2 and missing_at is null
-			`, stored.ID, update.RootID, now); err != nil {
-				return InventoryDelta{}, fmt.Errorf("mark inventory source missing: %w", err)
-			}
-			if err := insertAvailabilityEvent(
-				ctx, transaction, update.RootID, "source_file", stored.ID, "missing", &scanID,
-			); err != nil {
-				return InventoryDelta{}, err
-			}
 			delta.MissingFileIDs = append(delta.MissingFileIDs, stored.ID)
 			regroupScopes[inventoryScope(stored.RelativePath)] = struct{}{}
 		}

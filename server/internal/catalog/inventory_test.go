@@ -23,6 +23,8 @@ func TestApplyInventoryQueuesOnlyNewOrChangedFilesAndPreservesProbeState(t *test
 	failedID := uuid.New()
 	changedID := uuid.New()
 	companionID := uuid.New()
+	pendingAudioID := uuid.New()
+	pendingCompanionID := uuid.New()
 	repository, pool, scan := inventoryRepositoryFixture(t,
 		storedInventoryFile{
 			ID: sameID, Path: "same.mp3", Size: 10, ModifiedAt: first,
@@ -46,6 +48,14 @@ func TestApplyInventoryQueuesOnlyNewOrChangedFilesAndPreservesProbeState(t *test
 			ProbeStatus: "succeeded", ProbeVersion: 2,
 			ProbedAt: &probedAt, Media: map[string]any{"title": "Old companion"},
 		},
+		storedInventoryFile{
+			ID: pendingAudioID, Path: "pending.mp3", Size: 8, ModifiedAt: first,
+			FileKind: "audio", ProbeStatus: "pending",
+		},
+		storedInventoryFile{
+			ID: pendingCompanionID, Path: "pending.nfo", Size: 6, ModifiedAt: first,
+			FileKind: "companion", CompanionKind: "nfo", ProbeStatus: "pending",
+		},
 	)
 
 	newAudioID := uuid.New()
@@ -61,6 +71,8 @@ func TestApplyInventoryQueuesOnlyNewOrChangedFilesAndPreservesProbeState(t *test
 			inventoryFile(changedID, "changed.mp3", "audio", "", 11, second),
 			inventoryFile(newAudioID, "new.mp3", "audio", "", 12, second),
 			inventoryFile(companionID, "book.nfo", "companion", "nfo", 5, second),
+			inventoryFile(pendingAudioID, "pending.mp3", "audio", "", 8, first),
+			inventoryFile(pendingCompanionID, "pending.nfo", "companion", "nfo", 6, first),
 			inventoryFile(coverID, "cover.jpg", "cover", "", 20, second),
 			inventoryFile(ebookID, "book.epub", "companion", "ebook", 30, second),
 		},
@@ -70,7 +82,8 @@ func TestApplyInventoryQueuesOnlyNewOrChangedFilesAndPreservesProbeState(t *test
 	}
 	assertInventoryDeltaPaths(t, delta.ProbeFiles, "changed.mp3", "new.mp3")
 	assertInventoryDeltaPaths(t, delta.InspectCompanions, "book.nfo")
-	assertInventoryDeltaPaths(t, delta.UnchangedFiles, "same.mp3", "unchanged-failed.mp3")
+	assertInventoryDeltaPaths(t, delta.UnchangedFiles,
+		"pending.mp3", "pending.nfo", "same.mp3", "unchanged-failed.mp3")
 	if len(delta.MissingFileIDs) != 0 {
 		t.Fatalf("missing IDs=%v, want none", delta.MissingFileIDs)
 	}
@@ -150,10 +163,11 @@ func TestApplyInventoryMissingBehavior(t *testing.T) {
 		}
 	})
 
-	t.Run("complete full inventory marks every unseen file missing", func(t *testing.T) {
+	t.Run("complete full inventory defers every unseen file until finalization", func(t *testing.T) {
 		unseen := storedAudioInventoryFile("unseen.mp3")
+		seen := storedAudioInventoryFile("seen.mp3")
 		repository, pool, scan := inventoryRepositoryFixture(t,
-			storedAudioInventoryFile("seen.mp3"), unseen,
+			seen, unseen,
 		)
 		delta, err := repository.ApplyInventory(context.Background(), InventoryUpdate{
 			ScanRunID: scan.ID, RootID: "audiobooks", Complete: true,
@@ -162,16 +176,45 @@ func TestApplyInventoryMissingBehavior(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(delta.MissingFileIDs, []uuid.UUID{unseen.ID}) || inventoryMissingCount(t, pool) != 1 {
-			t.Fatalf("full delta=%v missing rows=%d", delta.MissingFileIDs, inventoryMissingCount(t, pool))
+		if !slices.Equal(delta.MissingFileIDs, []uuid.UUID{unseen.ID}) || inventoryMissingCount(t, pool) != 0 {
+			t.Fatalf("deferred full delta=%v missing rows=%d", delta.MissingFileIDs, inventoryMissingCount(t, pool))
+		}
+		if _, err := repository.FinalizeInventoryAndPublish(context.Background(), InventoryFinalization{
+			ScanRunID: scan.ID, RootID: "audiobooks",
+			Books: []InferredBook{searchTestBook("audiobooks", "", "seen", seen.ID)},
+			Evidence: map[string]GroupingEvidence{
+				"seen": {ReasonCode: "invalid", Confidence: 1, ReviewState: ReviewUnreviewed},
+			},
+		}); !errors.Is(err, ErrInvalidData) {
+			t.Fatalf("failed finalization error=%v, want ErrInvalidData", err)
+		}
+		if inventoryMissingCount(t, pool) != 0 {
+			t.Fatal("failed finalization committed deferred missing files")
+		}
+		if _, err := repository.FinalizeInventoryAndPublish(context.Background(), InventoryFinalization{
+			ScanRunID: scan.ID, RootID: "audiobooks",
+			Books: []InferredBook{searchTestBook("audiobooks", "", "seen", seen.ID)},
+			Evidence: map[string]GroupingEvidence{
+				"seen": {ReasonCode: "folder_default", Confidence: 1, ReviewState: ReviewUnreviewed},
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if inventoryMissingCount(t, pool) != 1 {
+			t.Fatalf("successful finalization missing rows=%d, want 1", inventoryMissingCount(t, pool))
 		}
 	})
 
-	t.Run("complete scoped inventory marks only its unseen subtree missing", func(t *testing.T) {
+	t.Run("complete scoped inventory marks only its unseen subtree during atomic finalization", func(t *testing.T) {
 		inside := storedAudioInventoryFile("Author/Book/unseen.mp3")
-		outside := storedAudioInventoryFile("Author/Other/unseen.mp3")
+		outside := storedInventoryFile{
+			ID: uuid.New(), Path: "Author/Other/cover.jpg", Size: 1,
+			ModifiedAt: inventoryInstant(1), FileKind: FileKindCover,
+			ProbeStatus: ProbeNotApplicable,
+		}
+		seen := storedAudioInventoryFile("Author/Book/seen.mp3")
 		repository, pool, scan := inventoryRepositoryFixture(t,
-			storedAudioInventoryFile("Author/Book/seen.mp3"), inside, outside,
+			seen, inside, outside,
 		)
 		delta, err := repository.ApplyInventory(context.Background(), InventoryUpdate{
 			ScanRunID: scan.ID, RootID: "audiobooks", ScopePath: "Author/Book", Complete: true,
@@ -183,14 +226,62 @@ func TestApplyInventoryMissingBehavior(t *testing.T) {
 		if !slices.Equal(delta.MissingFileIDs, []uuid.UUID{inside.ID}) {
 			t.Fatalf("scoped missing IDs=%v, want %v", delta.MissingFileIDs, inside.ID)
 		}
-		var outsideMissing bool
+		if inventoryMissingCount(t, pool) != 0 {
+			t.Fatal("scoped inventory committed missing files before finalization")
+		}
+		finalizer, ok := any(repository).(interface {
+			FinalizeScopedInventoryAndPublish(context.Context, uuid.UUID, GroupingRefinement) (CatalogGeneration, error)
+		})
+		if !ok {
+			t.Fatal("repository does not expose atomic scoped inventory finalization")
+		}
+		current, err := repository.CurrentCatalogGeneration(context.Background(), "audiobooks")
+		if err != nil {
+			t.Fatal(err)
+		}
+		book := searchTestBook("audiobooks", "Author/Book", "seen", seen.ID)
+		if _, err := finalizer.FinalizeScopedInventoryAndPublish(context.Background(), scan.ID, GroupingRefinement{
+			RootID: "audiobooks", ScopePath: "Author/Book", ExpectedGeneration: current.Value,
+			Books: []InferredBook{book}, Evidence: map[string]GroupingEvidence{
+				"seen": {ReasonCode: "invalid", Confidence: 1, ReviewState: ReviewUnreviewed},
+			},
+		}); !errors.Is(err, ErrInvalidData) {
+			t.Fatalf("failed scoped finalization error=%v, want ErrInvalidData", err)
+		}
+		if inventoryMissingCount(t, pool) != 0 {
+			t.Fatal("failed scoped finalization committed deferred missing files")
+		}
+		finalized, err := finalizer.FinalizeScopedInventoryAndPublish(context.Background(), scan.ID, GroupingRefinement{
+			RootID: "audiobooks", ScopePath: "Author/Book", ExpectedGeneration: current.Value,
+			Books: []InferredBook{book}, Evidence: map[string]GroupingEvidence{
+				"seen": {ReasonCode: "folder_default", Confidence: 1, ReviewState: ReviewUnreviewed},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var insideMissing, outsideMissing bool
+		if err := pool.QueryRow(context.Background(), `
+			select missing_at is not null from source_files where id=$1
+		`, inside.ID).Scan(&insideMissing); err != nil {
+			t.Fatal(err)
+		}
 		if err := pool.QueryRow(context.Background(), `
 			select missing_at is not null from source_files where id=$1
 		`, outside.ID).Scan(&outsideMissing); err != nil {
 			t.Fatal(err)
 		}
-		if outsideMissing {
-			t.Fatal("scoped inventory marked a sibling subtree missing")
+		if !insideMissing || outsideMissing {
+			t.Fatalf("scoped missing inside/outside=%v/%v, want true/false", insideMissing, outsideMissing)
+		}
+		var snapshotGeneration int64
+		if err := pool.QueryRow(context.Background(), `
+			select catalog_generation from library_search_snapshots where root_id='audiobooks'
+		`).Scan(&snapshotGeneration); err != nil {
+			t.Fatal(err)
+		}
+		if snapshotGeneration != finalized.Value {
+			t.Fatalf("scoped snapshot generation=%d, want %d", snapshotGeneration, finalized.Value)
 		}
 	})
 }

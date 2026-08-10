@@ -162,7 +162,11 @@ type StagedScanRepository interface {
 		context.Context,
 		catalog.GroupingRefinement,
 	) (catalog.CatalogGeneration, error)
-	FinishScopedInventory(context.Context, uuid.UUID, string) error
+	FinalizeScopedInventoryAndPublish(
+		context.Context,
+		uuid.UUID,
+		catalog.GroupingRefinement,
+	) (catalog.CatalogGeneration, error)
 }
 
 func (handler *ScanRootHandler) handleInventory(
@@ -232,6 +236,7 @@ func (handler *ScanRootHandler) handleInventory(
 	if err != nil {
 		return handler.failScan(ctx, run.ID, "load grouping evidence failed", err)
 	}
+	tree = excludeDeferredMissingFiles(tree, delta.MissingFileIDs)
 	infer := handler.InferTree
 	if infer == nil {
 		infer = grouping.InferTree
@@ -253,14 +258,11 @@ func (handler *ScanRootHandler) handleInventory(
 		if err != nil {
 			return handler.failScan(ctx, run.ID, "load catalog generation failed", err)
 		}
-		if _, err := repository.ApplyGroupingRefinement(ctx, catalog.GroupingRefinement{
+		if _, err := repository.FinalizeScopedInventoryAndPublish(ctx, run.ID, catalog.GroupingRefinement{
 			RootID: root.ID, ScopePath: scopePath, ExpectedGeneration: current.Value,
 			Books: grouped.Books, Evidence: grouped.Evidence,
 		}); err != nil {
 			return handler.failScan(ctx, run.ID, "scoped catalog publication failed", err)
-		}
-		if err := repository.FinishScopedInventory(ctx, run.ID, root.ID); err != nil {
-			return err
 		}
 	}
 	for _, file := range delta.ProbeFiles {
@@ -273,7 +275,31 @@ func (handler *ScanRootHandler) handleInventory(
 			return err
 		}
 	}
+	if err := queueIncompleteBooks(ctx, handler.Repo, root.ID); err != nil {
+		return fmt.Errorf("queue metadata enrichment: %w", err)
+	}
 	return nil
+}
+
+func excludeDeferredMissingFiles(
+	tree grouping.Tree,
+	missingFileIDs []uuid.UUID,
+) grouping.Tree {
+	if len(missingFileIDs) == 0 {
+		return tree
+	}
+	missing := make(map[uuid.UUID]struct{}, len(missingFileIDs))
+	for _, id := range missingFileIDs {
+		missing[id] = struct{}{}
+	}
+	files := make([]catalog.SourceFile, 0, len(tree.Files))
+	for _, file := range tree.Files {
+		if _, excluded := missing[file.ID]; !excluded {
+			files = append(files, file)
+		}
+	}
+	tree.Files = files
+	return tree
 }
 
 func enqueueFingerprintJob(
@@ -496,6 +522,7 @@ type RegroupRepository interface {
 		context.Context,
 		catalog.GroupingRefinement,
 	) (catalog.CatalogGeneration, error)
+	ListBooks(context.Context, catalog.BookQuery) (catalog.Page[catalog.Book], error)
 	EnqueueDeduplicated(context.Context, catalog.WorkerJob, string) (catalog.WorkerJob, error)
 }
 
@@ -539,12 +566,19 @@ func (handler RegroupScopeHandler) Handle(ctx context.Context, job catalog.Worke
 	} else if err != nil {
 		return err
 	}
-	return enqueuePublish(ctx, handler.Repo, rootID, generation.Value)
+	if err := enqueuePublish(ctx, handler.Repo, rootID, generation.Value); err != nil {
+		return err
+	}
+	if err := queueIncompleteBooks(ctx, handler.Repo, rootID); err != nil {
+		return fmt.Errorf("queue metadata enrichment: %w", err)
+	}
+	return nil
 }
 
 type SearchPublicationRepository interface {
 	LoadSearchProjection(context.Context, string, int64) (catalog.SearchProjection, error)
 	PublishSearchProjection(context.Context, catalog.SearchProjection) error
+	CurrentCatalogGeneration(context.Context, string) (catalog.CatalogGeneration, error)
 	EnqueueDeduplicated(context.Context, catalog.WorkerJob, string) (catalog.WorkerJob, error)
 }
 
@@ -563,16 +597,28 @@ func (handler PublishSearchHandler) Handle(ctx context.Context, job catalog.Work
 	}
 	projection, err := handler.Repo.LoadSearchProjection(ctx, rootID, generation)
 	if errors.Is(err, catalog.ErrConflict) {
-		return enqueuePublish(ctx, handler.Repo, rootID, 0)
+		return enqueueCurrentPublication(ctx, handler.Repo, rootID)
 	}
 	if err != nil {
 		return err
 	}
 	if err := handler.Repo.PublishSearchProjection(ctx, projection); errors.Is(err, catalog.ErrConflict) {
-		return enqueuePublish(ctx, handler.Repo, rootID, 0)
+		return enqueueCurrentPublication(ctx, handler.Repo, rootID)
 	} else {
 		return err
 	}
+}
+
+func enqueueCurrentPublication(
+	ctx context.Context,
+	repository SearchPublicationRepository,
+	rootID string,
+) error {
+	current, err := repository.CurrentCatalogGeneration(ctx, rootID)
+	if err != nil {
+		return err
+	}
+	return enqueuePublish(ctx, repository, rootID, current.Value)
 }
 
 func enqueueRegroup(
@@ -606,10 +652,13 @@ func enqueuePublish(
 	rootID string,
 	generation int64,
 ) error {
+	if generation <= 0 {
+		return errors.New("invalid catalog generation")
+	}
 	_, err := repository.EnqueueDeduplicated(ctx, catalog.WorkerJob{
 		ID: uuid.New(), Kind: catalog.JobPublishSearch,
 		Payload: map[string]any{"rootId": rootID, "catalogGeneration": generation},
-	}, "publish_search:"+rootID)
+	}, catalog.PublishSearchDedupeKey(rootID, generation))
 	return err
 }
 

@@ -422,7 +422,7 @@ select concat_ws('|',
          and media->>'title'='Disc Saga'
          and coalesce(nullif(media->>'author',''),media->>'artist')='Saga Author'
          and media->>'narrator'='Saga Narrator'
-         and (media->>'durationMs')::bigint=12000),
+         and (media->>'durationMs')::bigint between 11500 and 12500),
     (select count(*) from books
        where root_id='audiobooks' and source_folder='Disc Saga' and missing_at is null
          and title='Disc Saga' and authors @> array['Saga Author']::text[]

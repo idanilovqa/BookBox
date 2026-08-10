@@ -15,6 +15,7 @@ import androidx.compose.ui.test.performTextReplacement
 import com.rendref.bookbox.core.model.BrowseEntryDto
 import com.rendref.bookbox.core.model.RawSearchEntryDto
 import com.rendref.bookbox.core.model.RootDto
+import com.rendref.bookbox.core.search.STALE_CATALOG_STATUS
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -215,6 +216,33 @@ class FoldersScreenTest {
         }
         composeRule.onNodeWithText("Unable to search library folders")
             .assertIsDisplayed()
+    }
+
+    @Test
+    fun folderSearchRendersStaleCatalogStatusWithRetainedResults() {
+        composeRule.setContent {
+            MaterialTheme {
+                FoldersScreen(
+                    state = folderState.copy(
+                        searchQuery = "dune",
+                        searchResults = listOf(
+                            RawSearchEntryDto(
+                                id = "00000000-0000-4000-8000-000000000011",
+                                name = "Dune.m4b",
+                                relativePath = "Loose Files/Dune.m4b",
+                                kind = "file",
+                            ),
+                        ),
+                        isSearchCatalogStale = true,
+                        searchCatalogStatusMessage = STALE_CATALOG_STATUS,
+                    ),
+                    onAction = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText(STALE_CATALOG_STATUS).assertIsDisplayed()
+        composeRule.onNodeWithText("Dune.m4b").assertIsDisplayed()
     }
 }
 

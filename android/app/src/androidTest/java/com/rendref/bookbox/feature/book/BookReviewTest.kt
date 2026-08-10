@@ -245,7 +245,8 @@ class BookReviewTest {
             }
         }
 
-        composeRule.onNodeWithText("Probe failed", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("grouping-list").performScrollToIndex(0)
+        composeRule.onNodeWithText("Review reason: Probe Failed").assertExists()
         composeRule.onAllNodesWithText("Omnibus/book.cue", substring = true)[0]
             .assertIsDisplayed()
         composeRule.onAllNodesWithText("Omnibus/Disc 1/First.m4b")
@@ -268,7 +269,7 @@ class BookReviewTest {
         ).assertIsDisplayed()
         composeRule.onNodeWithText("Add logical book").performClick()
         assertEquals(BookReviewAction.AddGroup, actions.last())
-        composeRule.onNodeWithText("Confirm grouping").performClick()
+        composeRule.onNodeWithText("Confirm grouping").performScrollTo().performClick()
         assertEquals(BookReviewAction.SaveGrouping, actions.last())
         assertNoMutationActions()
     }
