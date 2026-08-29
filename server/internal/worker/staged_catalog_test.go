@@ -119,7 +119,7 @@ func TestScanRootQueuesOnlineEnrichmentAfterGrouping(t *testing.T) {
 	if err := handler.Handle(context.Background(), stagedScanJob("audiobooks", "", true)); err != nil {
 		t.Fatal(err)
 	}
-	wantKinds := []string{catalog.JobProbeFile, catalog.JobEnrichBook}
+	wantKinds := []string{catalog.JobEnrichBook}
 	gotKinds := make([]string, len(repository.jobs))
 	for index, job := range repository.jobs {
 		gotKinds[index] = job.Kind
@@ -127,12 +127,18 @@ func TestScanRootQueuesOnlineEnrichmentAfterGrouping(t *testing.T) {
 	if !reflect.DeepEqual(gotKinds, wantKinds) {
 		t.Fatalf("queued kinds=%v, want %v", gotKinds, wantKinds)
 	}
-	if got := repository.dedupeKeys[1]; got != "enrich_book:"+bookID.String() {
+	if got := repository.dedupeKeys[0]; got != "enrich_book:"+bookID.String() {
 		t.Fatalf("enrichment dedupe key=%q", got)
+	}
+	wantEvents := []string{
+		"apply", "load_tree", "finalize", "drain_fingerprint_outbox", "enqueue:" + catalog.JobEnrichBook,
+	}
+	if !reflect.DeepEqual(repository.events, wantEvents) {
+		t.Fatalf("events=%v, want fingerprint dispatch before enrichment %v", repository.events, wantEvents)
 	}
 }
 
-func TestScanRootEnrichmentFailureCannotSuppressFingerprintJobs(t *testing.T) {
+func TestScanRootEnrichmentFailureCannotSuppressFingerprintDispatch(t *testing.T) {
 	for _, test := range []struct {
 		name           string
 		listBooksErr   error
@@ -173,13 +179,10 @@ func TestScanRootEnrichmentFailureCannotSuppressFingerprintJobs(t *testing.T) {
 			if err := handler.Handle(context.Background(), stagedScanJob("audiobooks", "", true)); err == nil {
 				t.Fatal("enrichment failure unexpectedly succeeded")
 			}
-			gotKinds := make([]string, len(repository.jobs))
-			for index, job := range repository.jobs {
-				gotKinds[index] = job.Kind
-			}
-			wantKinds := []string{catalog.JobProbeFile, catalog.JobInspectCompanion}
-			if !reflect.DeepEqual(gotKinds, wantKinds) {
-				t.Fatalf("queued kinds=%v, want fingerprint jobs %v", gotKinds, wantKinds)
+			wantEvents := []string{"apply", "load_tree", "finalize", "drain_fingerprint_outbox"}
+			if !reflect.DeepEqual(repository.events, wantEvents) {
+				t.Fatalf("events=%v, want fingerprint dispatch before enrichment failure %v",
+					repository.events, wantEvents)
 			}
 		})
 	}
@@ -317,6 +320,29 @@ func TestProbeFileSuccessFailureAndFingerprintConflict(t *testing.T) {
 				t.Errorf("regroup key = %q", repository.dedupeKeys[0])
 			}
 		})
+	}
+}
+
+func TestProbeFileRegroupsDiscSetAtAudiobookScope(t *testing.T) {
+	file := stagedSourceFile(
+		"Disc Saga/Disc 1/chapter01.mp3",
+		catalog.FileKindAudio,
+		time.Unix(10, 20).UTC(),
+	)
+	repository := &stagedRepositoryFake{
+		file: file, probeChanged: true,
+		generation: catalog.CatalogGeneration{RootID: "audiobooks", Value: 8},
+	}
+	handler := ProbeFileHandler{
+		Repo:   repository,
+		Prober: stagedProberFake{metadata: media.Metadata{Title: "Disc Saga"}},
+	}
+
+	if err := handler.Handle(context.Background(), stagedFileJob(catalog.JobProbeFile, file)); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(repository.dedupeKeys, []string{"regroup_scope:audiobooks:Disc Saga:8"}) {
+		t.Fatalf("regroup keys=%v, want disc parent audiobook scope", repository.dedupeKeys)
 	}
 }
 

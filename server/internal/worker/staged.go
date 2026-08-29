@@ -367,7 +367,7 @@ func (handler ProbeFileHandler) Handle(ctx context.Context, job catalog.WorkerJo
 		return err
 	}
 	if changed {
-		return enqueueRegroup(ctx, handler.Repo, file.RootID, path.Dir(file.RelativePath), generation.Value)
+		return enqueueRegroup(ctx, handler.Repo, file.RootID, fullInventoryAudioScope(file.RelativePath), generation.Value)
 	}
 	return nil
 }
