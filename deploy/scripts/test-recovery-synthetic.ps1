@@ -8,6 +8,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'windows-powershell-process.ps1')
 
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $baseCompose = Join-Path $repo 'deploy\compose.yml'
@@ -130,6 +131,7 @@ function Invoke-LiveProcess {
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
+    Set-BookBoxWindowsPowerShellModulePath -StartInfo $startInfo
 
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
@@ -248,7 +250,22 @@ if ($ProcessRunnerSelfTest) {
         throw 'Live process runner did not return typed exit code 7.'
     }
 
-    Write-Output 'PASS: live process runner returns typed exit codes 0 and 7.'
+    $windowsPowerShell = Invoke-LiveProcess `
+        -File 'powershell.exe' `
+        -Arguments @(
+            '-NoProfile', '-Command',
+            '(Get-Command Get-FileHash -ErrorAction Stop).Name'
+        ) `
+        -WorkingDirectory $repo `
+        -MaximumSeconds 10
+    if (
+        $windowsPowerShell.ExitCode -ne 0 -or
+        $windowsPowerShell.StandardOutput.Trim() -cne 'Get-FileHash'
+    ) {
+        throw "Recovery runner cannot resolve Windows PowerShell built-in modules: $($windowsPowerShell.StandardError)"
+    }
+
+    Write-Output 'PASS: recovery process runner preserves exit codes and Windows PowerShell modules.'
     return
 }
 

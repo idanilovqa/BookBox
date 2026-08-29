@@ -1241,11 +1241,10 @@ for each row execute function e2e_pause_catalog_refinement();
     try {
         $ErrorActionPreference = 'Continue'
         $avdOutput = @(
-            'no' |
-                & $avdManager `
-                    'create', 'avd', '--force', `
-                    '--name', $avdName, `
-                    '--package', $systemImagePackage 2>&1
+            & $env:ComSpec /d /s /c (
+                'echo no|call "{0}" create avd --force --name {1} --package {2}' -f
+                    $avdManager, $avdName, $systemImagePackage
+            ) 2>&1
         )
         $avdExitCode = $LASTEXITCODE
     } finally {

@@ -29,4 +29,19 @@ foreach ($expectedExitCode in @(0, 7)) {
     }
 }
 
-Write-Output 'PASS: captured process runner preserves typed exit codes 0 and 7.'
+$windowsPowerShell = Invoke-BookBoxCapturedProcess `
+    -FilePath 'powershell.exe' `
+    -Arguments @(
+        '-NoProfile', '-Command',
+        '(Get-Command Get-FileHash -ErrorAction Stop).Name'
+    ) `
+    -WorkingDirectory $e2eRoot `
+    -TimeoutMilliseconds 10000
+if (
+    $windowsPowerShell.ExitCode -ne 0 -or
+    $windowsPowerShell.StandardOutput.Trim() -cne 'Get-FileHash'
+) {
+    throw "Captured Windows PowerShell cannot resolve built-in modules: $($windowsPowerShell.StandardError)"
+}
+
+Write-Output 'PASS: captured process runner preserves exit codes and Windows PowerShell modules.'

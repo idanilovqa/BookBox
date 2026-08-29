@@ -54,7 +54,7 @@ $requirements = [ordered]@{
     'task-scoped AVD home' = 'ANDROID_AVD_HOME\s*=\s*Join-Path\s+\$taskRoot\s+''avd'''
     'unique AVD name' = 'bookbox_api36_\$runID'
     'installed API 36 image' = 'system-images;android-36;google_apis;x86_64'
-    'create AVD without download' = '(?s)avdmanager\.bat.*?''create'', ''avd''.*?''--package'', \$systemImagePackage'
+    'create AVD without download' = '(?s)avdmanager\.bat.*?echo no\|call.*?create avd --force.*?--package \{2\}.*?\$systemImagePackage'
     'headless owned emulator' = '(?s)Start-Process.*?-FilePath \$emulator.*?''-no-window'''
     'task emulator port' = '''-port'', "\$emulatorPort"'
     'task emulator serial' = 'emulator-\$emulatorPort'
@@ -217,6 +217,12 @@ if (-not $nativeStop.Success -or
 }
 if ($runText -match '&\s+\$(?:adb|AdbPath)\b') {
     throw 'Every adb invocation must use the bounded monitored helper.'
+}
+if (
+    $runText -match '&\s+\$avdManager\b' -or
+    $runText -notmatch '(?s)\$env:ComSpec.*?/d.*?/s.*?/c.*?call.*?\$avdManager'
+) {
+    throw 'AVD creation must invoke avdmanager.bat through the Windows batch interpreter.'
 }
 if (
     $runnerText -notmatch 'System\.Diagnostics\.ProcessStartInfo' -or

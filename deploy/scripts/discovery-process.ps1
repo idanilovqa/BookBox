@@ -198,7 +198,7 @@ function Start-BookBoxDiscovery {
 
     @($Arguments) | ConvertTo-Json | Set-Content -LiteralPath $paths.Arguments -Encoding UTF8
     $supervisorScript = Join-Path $PSScriptRoot 'discovery-supervisor.ps1'
-    $supervisorExecutable = Join-Path $PSHOME 'powershell.exe'
+    $supervisorExecutable = (Get-Process -Id $PID -ErrorAction Stop).Path
     $supervisorArguments = @(
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',

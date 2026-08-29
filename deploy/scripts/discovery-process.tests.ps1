@@ -91,7 +91,11 @@ function Assert-ThrowsLike {
 
 $taskState = Join-Path ([System.IO.Path]::GetTempPath()) "bookbox-discovery-$([Guid]::NewGuid().ToString('N'))"
 $fakeExecutable = Join-Path $taskState 'bookbox-discovery-test.exe'
-$sourcePowerShell = (Get-Process -Id $PID).Path
+$sourcePowerShell = Join-Path $env:SystemRoot `
+    'System32\WindowsPowerShell\v1.0\powershell.exe'
+if (-not (Test-Path -LiteralPath $sourcePowerShell -PathType Leaf)) {
+    throw "Windows PowerShell fixture executable is missing: $sourcePowerShell"
+}
 $stopSignal = Join-Path $taskState 'discovery.stop'
 $escapedStopSignal = $stopSignal.Replace("'", "''")
 $arguments = @(

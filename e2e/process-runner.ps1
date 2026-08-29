@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot '..\deploy\scripts\windows-powershell-process.ps1')
+
 function ConvertTo-BookBoxProcessArgument {
     param([Parameter(Mandatory)][AllowEmptyString()][string] $Value)
 
@@ -33,6 +35,7 @@ function Invoke-BookBoxCapturedProcess {
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
+    Set-BookBoxWindowsPowerShellModulePath -StartInfo $startInfo
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
