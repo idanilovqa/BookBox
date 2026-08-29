@@ -134,7 +134,7 @@ foreach ($preflightEvidence in @(
 }
 
 foreach ($required in @(
-    "Invoke-SC @\((?s:.*?)'create',\s*\`$serviceName(?s:.*?)'binPath=',\s*\`$binPath(?s:.*?)'start=',\s*'delayed-auto'(?s:.*?)'obj=',\s*\`$serviceAccount(?s:.*?)'password=',\s*'`"`"'",
+    "Invoke-SC @\((?s:.*?)'create',\s*\`$serviceName(?s:.*?)'binPath=',\s*\`$binPath(?s:.*?)'start=',\s*'delayed-auto'(?s:.*?)'obj=',\s*\`$serviceAccount",
     "Invoke-SC @\('sidtype',\s*\`$serviceName,\s*'unrestricted'\)",
     "Invoke-SC @\((?s:.*?)'failure',\s*\`$serviceName(?s:.*?)'reset=',\s*'86400'(?s:.*?)'actions=',\s*'restart/5000/restart/30000/restart/60000'",
     "Invoke-SC @\('failureflag',\s*\`$serviceName,\s*'1'\)",
@@ -150,6 +150,9 @@ foreach ($required in @(
     if ($install -notmatch $required) {
         throw "Installer service/ACL contract is missing: $required"
     }
+}
+if ($install -match "'password='") {
+    throw 'Virtual service account creation must not pass an empty password token to sc.exe.'
 }
 if ($install -match 'Path\s*=\s*\$dataRoot\s*;\s*Rights\s*=\s*\[Security\.AccessControl\.FileSystemRights\]::Modify') {
     throw 'Installer grants broad ProgramData Modify instead of scoped mutable directories.'

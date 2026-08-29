@@ -280,7 +280,6 @@ Invoke-BookBoxInstallTransaction -InstallDirectory $installRoot -StageDirectory 
             'binPath=', $binPath,
             'start=', 'delayed-auto',
             'obj=', $serviceAccount,
-            'password=', '""',
             'DisplayName=', 'BookBox Catalog Worker'
         )
         $rollbackActions.Add({ Remove-OwnedService -Name $serviceName })
