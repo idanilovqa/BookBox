@@ -124,6 +124,23 @@ function Get-ServiceSecurityIdentifier {
     )
 }
 
+function Test-IdentityReferenceMatchesSid {
+    param(
+        [Parameter(Mandatory)][Security.Principal.IdentityReference] $IdentityReference,
+        [Parameter(Mandatory)][Security.Principal.SecurityIdentifier] $Sid
+    )
+    if ($IdentityReference -is [Security.Principal.SecurityIdentifier]) {
+        return $IdentityReference.Value -ceq $Sid.Value
+    }
+    try {
+        return $IdentityReference.Translate(
+            [Security.Principal.SecurityIdentifier]
+        ).Value -ceq $Sid.Value
+    } catch [Security.Principal.IdentityNotMappedException] {
+        return $false
+    }
+}
+
 function Get-NearestExistingPath {
     param([Parameter(Mandatory)][string] $Path)
     $current = [IO.Path]::GetFullPath($Path)
@@ -221,7 +238,7 @@ foreach ($target in $preflightAclTargets) {
     $targetExists = Test-Path -LiteralPath $target
     $aclTarget = Get-NearestExistingPath $target
     $existingRules = @((Get-Acl -LiteralPath $aclTarget).Access | Where-Object {
-        $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -ceq $sid.Value -and
+        (Test-IdentityReferenceMatchesSid -IdentityReference $_.IdentityReference -Sid $sid) -and
         ($targetExists -or [int]$_.InheritanceFlags -ne
             [int][Security.AccessControl.InheritanceFlags]::None)
     })

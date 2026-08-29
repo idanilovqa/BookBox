@@ -103,6 +103,15 @@ foreach ($required in @('Get-NearestExistingPath', 'InheritanceFlags', '\$instal
 if ($aclPreflightText -match '-not\s+\$_\.IsInherited') {
     throw 'Installer ACL preflight ignores effective inherited service-SID rules.'
 }
+foreach ($unmappedIdentitySafety in @(
+    'function\s+Test-IdentityReferenceMatchesSid',
+    'catch\s+\[Security\.Principal\.IdentityNotMappedException\]',
+    'Test-IdentityReferenceMatchesSid\s+-IdentityReference\s+\$_\.IdentityReference\s+-Sid\s+\$sid'
+)) {
+    if ($install -notmatch $unmappedIdentitySafety) {
+        throw "Installer ACL preflight does not safely ignore an unrelated unmappable identity: $unmappedIdentitySafety"
+    }
+}
 foreach ($preflightEvidence in @(
     'LibraryRoot\)\.Count -lt 1',
     'Assert-SafeNativeArgument \$SourceExecutable',
