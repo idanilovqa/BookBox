@@ -155,6 +155,20 @@ do {
     $duplicateGroups = @($books.groups | Where-Object {
         $_.duplicate -eq $true -and @($_.books).Count -eq 2
     })
+    $otherNarratorReady = @($books.groups | Where-Object {
+        $_.duplicate -eq $false -and
+        @($_.books | Where-Object {
+            $_.title -eq 'Needlebox' -and $_.narrators -contains 'Other Narrator'
+        }).Count -eq 1
+    })
+    $outsideToleranceReady = @($books.groups | Where-Object {
+        $_.duplicate -eq $false -and
+        @($_.books | Where-Object {
+            $_.title -eq 'Needlebox' -and
+            $_.narrators -contains 'Shared Narrator' -and
+            $_.sourceFolder -eq 'Frank Herbert/Needlebox Long Recording'
+        }).Count -eq 1
+    })
     $duneFile = @($raw.entries | Where-Object {
         $_.kind -eq 'file' -and $_.name -eq 'Needlebox.m4b' -and
         $_.duplicateBook -eq $true
@@ -169,6 +183,8 @@ do {
         $snapshotRoots.Count -eq $RootIds.Count -and
         @($RootIds | Where-Object { $snapshotRoots -notcontains $_ }).Count -eq 0 -and
         $duplicateGroups.Count -eq 1 -and
+        $otherNarratorReady.Count -eq 1 -and
+        $outsideToleranceReady.Count -eq 1 -and
         $duneFile.Count -ge 1 -and
         $expectedRaw -and
         $changed

@@ -1130,6 +1130,20 @@ for each row execute function e2e_pause_catalog_refinement();
     } else {
         Invoke-DockerChecked ($composeArgs + @('stop', 'bookbox-catalog-worker')) | Out-Null
     }
+    $stoppedWorkerSearch = @(& $catalogSearchTest `
+        -HarnessInvocation `
+        -BaseUrl 'http://127.0.0.1:18787' `
+        -Username $username `
+        -Password $password `
+        -RootIds @('audiobooks', 'archive') `
+        -RawRootId 'audiobooks' `
+        -ExpectedRawRelativePath 'Monitor Trigger/Needlebox Watched.mp3' `
+        -TimeoutSeconds 30) |
+        Where-Object { $_.PSObject.Properties.Name -contains 'RawCompletedAt' } |
+        Select-Object -Last 1
+    if ($null -eq $stoppedWorkerSearch) {
+        throw 'Worker-stop search did not return its sanitized result summary.'
+    }
     $withdrawn = Join-Path $taskRoot 'withdrawn-library'
     $null = New-Item -ItemType Directory -Path $withdrawn -Force
     try {
@@ -1147,8 +1161,8 @@ for each row execute function e2e_pause_catalog_refinement();
             Where-Object { $_.PSObject.Properties.Name -contains 'RawCompletedAt' } |
             Select-Object -Last 1
         if ($null -eq $databaseOnlySearch -or
-            $databaseOnlySearch.BookOrder -cne $monitoredSearch.BookOrder -or
-            $databaseOnlySearch.RawOrder -cne $monitoredSearch.RawOrder) {
+            $databaseOnlySearch.BookOrder -cne $stoppedWorkerSearch.BookOrder -or
+            $databaseOnlySearch.RawOrder -cne $stoppedWorkerSearch.RawOrder) {
             throw 'PostgreSQL-only search changed stable book or raw-result ordering.'
         }
     } finally {

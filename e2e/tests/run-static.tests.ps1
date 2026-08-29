@@ -107,7 +107,7 @@ $requirements = [ordered]@{
     'exact task root audit' = '(?s)taskRoot.*?OwnedLongLivedProcessIds.*?TaskPorts'
     'hybrid dummy fixtures' = "(?s)DeploymentMode\s+-eq\s+'Container'.*?ffmpegBase.*?else\s*\{.*?task-scoped ffprobe fixture input"
     'fixture PID marker directory' = 'BOOKBOX_FFPROBE_FIXTURE_PID_DIRECTORY'
-    'stable database-only order' = '(?s)databaseOnlySearch\.BookOrder.*?monitoredSearch\.BookOrder.*?databaseOnlySearch\.RawOrder.*?monitoredSearch\.RawOrder'
+    'stable database-only order' = '(?s)databaseOnlySearch\.BookOrder.*?stoppedWorkerSearch\.BookOrder.*?databaseOnlySearch\.RawOrder.*?stoppedWorkerSearch\.RawOrder'
     'runtime PostgreSQL binding gate' = "Assert-TaskPortBound\s+-Service\s+'postgres'\s+-ContainerPort\s+5432\s+-HostPort\s+55432\s+-Name\s+'PostgreSQL'"
     'runtime PostgreSQL TCP gate' = '(?s)function Assert-TaskPortBound.*?TcpClient.*?ConnectAsync.*?127\.0\.0\.1'
     'array-safe binding capture' = '(?s)\$actual\s*=\s*@\(\s*@\(Invoke-DockerChecked.*?Where-Object.*?\)'
