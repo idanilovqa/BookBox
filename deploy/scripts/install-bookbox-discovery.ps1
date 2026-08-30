@@ -136,8 +136,8 @@ if ($existingTask) {
 }
 
 $firewallDefinitions = @(
-    [pscustomobject]@{ DisplayName = "BookBox HTTP $Port"; Protocol = 'TCP'; Port = $Port },
-    [pscustomobject]@{ DisplayName = 'BookBox mDNS'; Protocol = 'UDP'; Port = 5353 }
+    [pscustomobject]@{ Name = "BookBox-HTTP-$Port"; DisplayName = "BookBox HTTP $Port"; Protocol = 'TCP'; Port = $Port },
+    [pscustomobject]@{ Name = 'BookBox-mDNS-5353'; DisplayName = 'BookBox mDNS'; Protocol = 'UDP'; Port = 5353 }
 )
 $existingRules = @{}
 foreach ($definition in $firewallDefinitions) {
@@ -253,7 +253,9 @@ Invoke-BookBoxInstallTransaction `
         param($rollbackActions)
         foreach ($definition in $firewallDefinitions) {
             if (-not $existingRules[$definition.DisplayName]) {
-                $createdRule = New-NetFirewallRule `
+                $createdRuleName = $definition.Name
+                New-NetFirewallRule `
+                    -Name $definition.Name `
                     -DisplayName $definition.DisplayName `
                     -Group 'BookBox' `
                     -Direction Inbound `
@@ -263,9 +265,7 @@ Invoke-BookBoxInstallTransaction `
                     -Protocol $definition.Protocol `
                     -LocalAddress $Address `
                     -LocalPort $definition.Port `
-                    -RemoteAddress LocalSubnet `
-                    -PassThru
-                $createdRuleName = $createdRule.Name
+                    -RemoteAddress LocalSubnet | Out-Null
                 $rollbackActions.Add({
                     Remove-NetFirewallRule -Name $createdRuleName
                 }.GetNewClosure())

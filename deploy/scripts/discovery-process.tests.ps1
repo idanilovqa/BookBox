@@ -42,6 +42,17 @@ foreach ($required in @(
 if ($startText -match 'New-NetFirewallRule|Remove-NetFirewallRule') {
     throw 'Limited startup must validate pre-provisioned firewall rules without mutating them.'
 }
+if ($installText -match 'New-NetFirewallRule(?s:.*?)-PassThru') {
+    throw 'Firewall installation must support hosts where New-NetFirewallRule has no PassThru parameter.'
+}
+foreach ($required in @(
+    'New-NetFirewallRule(?s:.*?)-Name\s+\$definition\.Name',
+    '\$createdRuleName\s*=\s*\$definition\.Name'
+)) {
+    if ($installText -notmatch $required) {
+        throw "Firewall rollback must use the deterministic created rule name: $required"
+    }
+}
 $preflightIndex = $installText.IndexOf('# Complete ownership preflight')
 $copyIndex = $installText.IndexOf('Copy-Item -LiteralPath')
 $firewallMutationIndex = $installText.IndexOf('New-NetFirewallRule')
