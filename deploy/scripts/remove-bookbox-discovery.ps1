@@ -85,7 +85,7 @@ if ($existingTask) {
         $existingTask.Description -cne 'BookBox managed discovery version 2' -or
         $actions.Count -ne 1 -or
         [string]$actions[0].Execute -notmatch '(?i)(^|\\)powershell\.exe$' -or
-        [string]$actions[0].WorkingDirectory -cne (Join-Path $installRoot 'scripts') -or
+        -not ([string]::IsNullOrWhiteSpace([string]$actions[0].WorkingDirectory)) -or
         [string]$actions[0].Arguments -cne [string]$manifest.ExpectedActionArguments -or
         -not (Test-TaskUserIdentity -Account ([string]$existingTask.Principal.UserId) -Identity $identity) -or
         [string]$existingTask.Principal.RunLevel -cne 'Limited' -or

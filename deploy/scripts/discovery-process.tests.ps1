@@ -69,6 +69,15 @@ foreach ($required in @(
         throw "Scheduled task must use the exact Windows PowerShell host path: $required"
     }
 }
+if ($installText -match 'New-ScheduledTaskAction(?s:.*?)-WorkingDirectory') {
+    throw 'Scheduled task must not depend on an optional working directory.'
+}
+if ($removeText -notmatch 'IsNullOrWhiteSpace\(\[string\]\$actions\[0\]\.WorkingDirectory\)') {
+    throw 'Task removal must require the managed action working directory to be empty.'
+}
+if ($installText -notmatch 'IsNullOrWhiteSpace\(\[string\]\$existingActions\[0\]\.WorkingDirectory\)') {
+    throw 'Task installation must reject an existing action with an unmanaged working directory.'
+}
 $preflightIndex = $installText.IndexOf('# Complete ownership preflight')
 $copyIndex = $installText.IndexOf('Copy-Item -LiteralPath')
 $firewallMutationIndex = $installText.IndexOf('New-NetFirewallRule')

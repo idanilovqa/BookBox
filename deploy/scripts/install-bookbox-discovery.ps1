@@ -141,6 +141,7 @@ if ($existingTask) {
         $existingActions.Count -ne 1 -or
         [string]$existingActions[0].Execute -notmatch '(?i)(^|\\)powershell\.exe$' -or
         [string]$existingActions[0].Arguments -cne $actionArguments -or
+        -not ([string]::IsNullOrWhiteSpace([string]$existingActions[0].WorkingDirectory)) -or
         -not (Test-TaskUserIdentity -Account ([string]$existingTask.Principal.UserId) -Identity $identity) -or
         [string]$existingTask.Principal.RunLevel -cne 'Limited' -or
         [string]$existingTask.Principal.LogonType -notmatch '^Interactive' -or
@@ -293,8 +294,7 @@ Invoke-BookBoxInstallTransaction `
         if (-not $existingTask) {
             $action = New-ScheduledTaskAction `
                 -Execute $powerShellExecutable `
-                -Argument $actionArguments `
-                -WorkingDirectory $scriptsDirectory
+                -Argument $actionArguments
             $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity.Name
             $taskPrincipal = New-ScheduledTaskPrincipal `
                 -UserId $identity.Name `
