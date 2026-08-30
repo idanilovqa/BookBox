@@ -75,6 +75,18 @@ foreach ($required in @(
 if ($installText -match 'New-ScheduledTaskAction(?s:.*?)-WorkingDirectory') {
     throw 'Scheduled task must not depend on an optional working directory.'
 }
+foreach ($required in @(
+    'FileSystemAccessRule\]::new\(',
+    '\$identity\.User',
+    '\[Security\.AccessControl\.FileSystemRights\]::Modify',
+    '\[Security\.AccessControl\.InheritanceFlags\]::ContainerInherit\s+-bor',
+    '\[Security\.AccessControl\.InheritanceFlags\]::ObjectInherit',
+    'Set-Acl\s+-LiteralPath\s+\$stageRoot'
+)) {
+    if ($installText -notmatch $required) {
+        throw "Discovery install tree must grant inherited Modify access to its owning user: $required"
+    }
+}
 if ($removeText -notmatch '\$managedWorkingDirectory\s*=\s*Join-Path\s+\$installRoot\s+''scripts''' -or
     $removeText -notmatch '\$workingDirectoryOwned\s*=(?s:.{0,500}?)\[string\]::IsNullOrWhiteSpace(?s:.{0,400}?)\$managedWorkingDirectory') {
     throw 'Task removal must accept only an empty or exact legacy managed working directory.'

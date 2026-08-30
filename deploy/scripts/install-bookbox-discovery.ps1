@@ -231,6 +231,17 @@ Invoke-BookBoxInstallTransaction `
         $stageScripts = Join-Path $stageRoot 'scripts'
         $stageState = Join-Path $stageRoot 'state'
         $null = New-Item -ItemType Directory -Path $stageBin, $stageScripts, $stageState -Force
+        $stageAcl = Get-Acl -LiteralPath $stageRoot
+        $ownerAccess = [Security.AccessControl.FileSystemAccessRule]::new(
+            $identity.User,
+            [Security.AccessControl.FileSystemRights]::Modify,
+            [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+                [Security.AccessControl.InheritanceFlags]::ObjectInherit,
+            [Security.AccessControl.PropagationFlags]::None,
+            [Security.AccessControl.AccessControlType]::Allow
+        )
+        $stageAcl.SetAccessRule($ownerAccess)
+        Set-Acl -LiteralPath $stageRoot -AclObject $stageAcl
         Copy-Item -LiteralPath $source `
             -Destination (Join-Path $stageBin 'bookbox-discovery.exe')
         foreach ($leaf in $managedScripts) {
