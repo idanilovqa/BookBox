@@ -65,12 +65,14 @@ if (Test-BookBoxDiscovery -StateDirectory $StateDirectory) {
     throw 'BookBox discovery is still running.'
 }
 
-& docker @composeDownArguments
-if ($LASTEXITCODE -ne 0) {
-    throw "Docker Compose stop failed with exit code $LASTEXITCODE."
+$composeDown = Invoke-BookBoxComposeCommand -Arguments $composeDownArguments
+$composeDown.Output | Write-Output
+if ($composeDown.ExitCode -ne 0) {
+    throw "Docker Compose stop failed with exit code $($composeDown.ExitCode)."
 }
-$remaining = @(& docker @composePSArguments 2>&1 | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
-if ($LASTEXITCODE -ne 0 -or $remaining.Count -ne 0) {
+$composePS = Invoke-BookBoxComposeCommand -Arguments $composePSArguments
+$remaining = @($composePS.Output | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+if ($composePS.ExitCode -ne 0 -or $remaining.Count -ne 0) {
     throw 'Owned Compose project still has containers after shutdown.'
 }
 Remove-BookBoxComposeState -StateDirectory $StateDirectory

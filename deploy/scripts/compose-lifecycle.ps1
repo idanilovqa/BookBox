@@ -72,6 +72,39 @@ function Get-BookBoxComposeArguments {
     $arguments
 }
 
+function Invoke-BookBoxComposeCommand {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string[]] $Arguments)
+
+    if ($Arguments.Count -lt 2 -or $Arguments[0] -cne 'compose') {
+        throw 'Managed Compose arguments must begin with the compose command.'
+    }
+
+    $directCompose = if ($env:ProgramFiles) {
+        Join-Path $env:ProgramFiles 'Docker\cli-plugins\docker-compose.exe'
+    } else {
+        $null
+    }
+    if ($directCompose -and (Test-Path -LiteralPath $directCompose -PathType Leaf)) {
+        $invocation = [pscustomobject]@{
+            Executable = $directCompose
+            Arguments = @($Arguments[1..($Arguments.Count - 1)])
+        }
+    } else {
+        $invocation = [pscustomobject]@{
+            Executable = 'docker'
+            Arguments = @($Arguments)
+        }
+    }
+
+    $output = @(& $invocation.Executable @($invocation.Arguments) 2>&1)
+    $exitCode = $LASTEXITCODE
+    [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = $output
+    }
+}
+
 function Get-BookBoxComposeStatePath {
     param([Parameter(Mandatory)][string] $StateDirectory)
     Join-Path ([IO.Path]::GetFullPath($StateDirectory)) 'compose-startup.json'

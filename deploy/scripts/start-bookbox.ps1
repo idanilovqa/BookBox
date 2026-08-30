@@ -161,9 +161,10 @@ try {
         -Port $Port `
         -EnvironmentFile $composeEnvironment
     $composeStateCreated = [bool]$composeState.Created
-    & docker @composeUpArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Docker Compose start failed with exit code $LASTEXITCODE."
+    $composeUp = Invoke-BookBoxComposeCommand -Arguments $composeUpArguments
+    $composeUp.Output | Write-Output
+    if ($composeUp.ExitCode -ne 0) {
+        throw "Docker Compose start failed with exit code $($composeUp.ExitCode)."
     }
     $composeStarted = $true
 
@@ -199,8 +200,9 @@ try {
         Stop-BookBoxDiscovery -StateDirectory $StateDirectory
     }
     if ($composeStateCreated) {
-        & docker @composeDownArguments
-        if ($LASTEXITCODE -eq 0) {
+        $composeDown = Invoke-BookBoxComposeCommand -Arguments $composeDownArguments
+        $composeDown.Output | Write-Output
+        if ($composeDown.ExitCode -eq 0) {
             Remove-BookBoxComposeState -StateDirectory $StateDirectory
         }
     }

@@ -286,6 +286,7 @@ try {
 $startText = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'start-bookbox.ps1')
 $stopText = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'stop-bookbox.ps1')
 $auditText = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'audit-compose.ps1')
+$lifecycleText = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'compose-lifecycle.ps1')
 foreach ($text in @($startText, $stopText, $auditText)) {
     if ($text -notmatch 'DeploymentMode') {
         throw 'A deployment lifecycle script is not mode-aware.'
@@ -305,6 +306,24 @@ if ($startText -notmatch "-Command\s+@\('up',\s*'-d',\s*'--remove-orphans'\)" -o
 }
 if ($stopText -notmatch 'composeState\.EnvironmentFile') {
     throw 'Stop must use the env-file choice recorded at startup.'
+}
+foreach ($required in @(
+    'function\s+Invoke-BookBoxComposeCommand',
+    'Docker\\cli-plugins\\docker-compose\.exe',
+    '\$Arguments\[0\]\s+-cne\s+''compose''',
+    '\$Arguments\[1\.\.\(\$Arguments\.Count\s+-\s+1\)\]',
+    "Executable\s*=\s*'docker'",
+    'ExitCode\s*=\s*\$exitCode'
+)) {
+    if ($lifecycleText -notmatch $required) {
+        throw "Managed Compose invocation must bypass unrelated Windows CLI plugin probes: $required"
+    }
+}
+foreach ($text in @($startText, $stopText)) {
+    if ($text -notmatch 'Invoke-BookBoxComposeCommand' -or
+        $text -match '&\s+docker\s+@compose(?:Up|Down|PS)Arguments') {
+        throw 'Managed startup and stop must use the deterministic Compose command runner.'
+    }
 }
 if ($auditText -notmatch '\$apiPorts\.Count -ne 1' -or
     $auditText -notmatch '\$startupEnvironment\.Address' -or
