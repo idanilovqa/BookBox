@@ -197,6 +197,9 @@ if ($roots.Count -ne $LibraryRoot.Count) { throw 'LibraryRoot entries must be un
 $manifestPath = Join-Path $installRoot 'bookbox-catalog-worker-install.json'
 $installedExe = Join-Path $installRoot 'bookbox-catalog-worker.exe'
 $binPath = ('"{0}" service --config "{1}"' -f $installedExe, $config)
+# Windows PowerShell 5 strips embedded quotes while marshaling native arguments.
+# Escape them for sc.exe while retaining the canonical command line in the manifest.
+$scBinPath = $binPath.Replace('"', '\"')
 $existingManifest = $null
 if (Test-Path -LiteralPath $installRoot) {
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
@@ -277,7 +280,7 @@ Invoke-BookBoxInstallTransaction -InstallDirectory $installRoot -StageDirectory 
         }
         Invoke-SC @(
             'create', $serviceName,
-            'binPath=', $binPath,
+            'binPath=', $scBinPath,
             'start=', 'delayed-auto',
             'obj=', $serviceAccount,
             'DisplayName=', 'BookBox Catalog Worker'
