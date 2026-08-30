@@ -153,9 +153,10 @@ foreach ($file in @($manifest.ManagedFiles)) {
     }
     Assert-SafeExistingPathChain $path
 }
-$ownedFilePaths = @(@($manifest.ManagedFiles) | ForEach-Object {
+$managedFilePaths = @(@($manifest.ManagedFiles) | ForEach-Object {
     [IO.Path]::GetFullPath((Join-Path $installRoot ([string]$_.Path)))
-}) + @($manifestPath)
+})
+$ownedFilePaths = @($managedFilePaths) + @($manifestPath)
 if (@($ownedFilePaths | Sort-Object -Unique).Count -ne $ownedFilePaths.Count) {
     throw 'Refusing removal with duplicate managed-file paths.'
 }
@@ -214,6 +215,7 @@ if (-not [Diagnostics.EventLog]::SourceExists($serviceName) -or
 }
 
 $verifiedRules = [Collections.Generic.List[object]]::new()
+$rulesToRepair = [Collections.Generic.List[object]]::new()
 foreach ($record in @($manifest.ACLRules)) {
     $path = [IO.Path]::GetFullPath([string]$record.Path)
     if (-not (Test-Path -LiteralPath $path)) {
@@ -222,6 +224,10 @@ foreach ($record in @($manifest.ACLRules)) {
     Assert-SafeExistingPathChain $path
     $acl = Get-Acl -LiteralPath $path
     $expectedRule = New-ManifestAccessRule -Record $record
+    $sidRules = @($acl.Access | Where-Object {
+        -not $_.IsInherited -and
+        $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -ceq [string]$record.Sid
+    })
     $matches = @($acl.Access | Where-Object {
         -not $_.IsInherited -and
         $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -ceq [string]$record.Sid -and
@@ -231,7 +237,24 @@ foreach ($record in @($manifest.ACLRules)) {
         [int]$_.AccessControlType -eq [int]$expectedRule.AccessControlType
     })
     if ($matches.Count -ne 1) {
-        throw "Refusing removal because the exact owned ACL rule is absent or ambiguous: $path"
+        $repairableManagedRule = $pendingDelete -and $matches.Count -eq 0 -and
+            $sidRules.Count -eq 0 -and @($managedFilePaths | Where-Object {
+                [string]::Equals($_, $path, [StringComparison]::OrdinalIgnoreCase)
+            }).Count -eq 1
+        if (-not $repairableManagedRule) {
+            throw "Refusing removal because the exact owned ACL rule is absent or ambiguous: $path"
+        }
+        $snapshot = @($fileSnapshots | Where-Object {
+            [string]::Equals([string]$_.Path, $path, [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($snapshot.Count -ne 1) {
+            throw "Refusing ambiguous managed-file ACL recovery: $path"
+        }
+        $repairSecurity = [Security.AccessControl.FileSecurity]::new()
+        $repairSecurity.SetSecurityDescriptorBinaryForm([byte[]]$snapshot[0].SecurityDescriptor)
+        $repairSecurity.AddAccessRule($expectedRule)
+        $snapshot[0].SecurityDescriptor = $repairSecurity.GetSecurityDescriptorBinaryForm()
+        $rulesToRepair.Add([pscustomobject]@{ Path = $path; Rule = $expectedRule })
     }
     $verifiedRules.Add([pscustomobject]@{ Path = $path; Rule = $expectedRule })
 }
@@ -268,6 +291,11 @@ $deleteRequested = $pendingDelete
 $recoveryPolicyDisabled = $false
 $serviceObjectDisposed = $false
 try {
+    foreach ($repair in $rulesToRepair) {
+        $acl = Get-Acl -LiteralPath $repair.Path
+        $acl.AddAccessRule($repair.Rule)
+        Set-Acl -LiteralPath $repair.Path -AclObject $acl
+    }
     if ($pendingDelete) {
         Set-ItemProperty -LiteralPath $serviceRegistryPath -Name FailureActionsOnNonCrashFailures -Value 0
     } else {

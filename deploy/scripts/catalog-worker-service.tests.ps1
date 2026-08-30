@@ -283,6 +283,17 @@ foreach ($pendingDeleteEvidence in @(
         throw "Removal cannot safely resume an exact owned service already pending deletion: $pendingDeleteEvidence"
     }
 }
+foreach ($pendingAclEvidence in @(
+    '\$managedFilePaths',
+    '\$rulesToRepair',
+    '\$pendingDelete\s+-and\s+\$matches\.Count\s+-eq\s+0',
+    'SetSecurityDescriptorBinaryForm',
+    '(?s)try\s*\{.*?foreach\s*\(\$repair\s+in\s+\$rulesToRepair\).*?AddAccessRule\(\$repair\.Rule\).*?Set-Acl'
+)) {
+    if ($remove -notmatch $pendingAclEvidence) {
+        throw "Removal cannot safely repair the one missing managed-file ACL from a pending-delete rollback: $pendingAclEvidence"
+    }
+}
 if ($remove -notmatch '(?s)Stop-Service\s+-Name\s+\$serviceName.*?WaitForStatus.*?if\s*\(\$pendingDelete\)\s*\{[^{}]*\$serviceObject\.Dispose\(\)[^{}]*Wait-ForServiceAbsent') {
     throw 'Pending-delete recovery must release its service handle before waiting for SCM deletion.'
 }
