@@ -100,6 +100,7 @@ foreach ($required in @(
     'Unregister-ScheduledTask',
     'Remove-NetFirewallRule -Name',
     'bookbox-install\.json',
+    'startup-error\.log',
     'Refusing to remove',
     'Stop-BookBoxDiscovery'
 )) {

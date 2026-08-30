@@ -191,7 +191,8 @@ foreach ($leaf in @(
     'discovery.arguments.json',
     'discovery.bootstrap.json',
     'discovery.stop',
-    'discovery.accepted'
+    'discovery.accepted',
+    'startup-error.log'
 )) {
     Remove-Item -LiteralPath (Join-Path $stateDirectory $leaf) `
         -Force -ErrorAction SilentlyContinue
