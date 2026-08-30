@@ -13,6 +13,20 @@ $principalContext = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principalContext.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Run this removal script from an elevated PowerShell window.'
 }
+function Test-TaskUserIdentity {
+    param(
+        [Parameter(Mandatory)][string] $Account,
+        [Parameter(Mandatory)][Security.Principal.WindowsIdentity] $Identity
+    )
+    try {
+        $sid = ([Security.Principal.NTAccount]::new($Account)).Translate(
+            [Security.Principal.SecurityIdentifier]
+        )
+        return [string]$sid.Value -ceq [string]$Identity.User.Value
+    } catch {
+        return $false
+    }
+}
 $installRoot = [IO.Path]::GetFullPath($InstallDirectory)
 $manifestPath = Join-Path $installRoot 'bookbox-install.json'
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
@@ -73,13 +87,13 @@ if ($existingTask) {
         [string]$actions[0].Execute -notmatch '(?i)(^|\\)powershell\.exe$' -or
         [string]$actions[0].WorkingDirectory -cne (Join-Path $installRoot 'scripts') -or
         [string]$actions[0].Arguments -cne [string]$manifest.ExpectedActionArguments -or
-        [string]$existingTask.Principal.UserId -cne $identity.Name -or
+        -not (Test-TaskUserIdentity -Account ([string]$existingTask.Principal.UserId) -Identity $identity) -or
         [string]$existingTask.Principal.RunLevel -cne 'Limited' -or
         [string]$existingTask.Principal.LogonType -notmatch '^Interactive' -or
         [string]$existingTask.Settings.MultipleInstances -cne 'IgnoreNew' -or
         $triggers.Count -ne 1 -or
         $triggers[0].CimClass.CimClassName -cne 'MSFT_TaskLogonTrigger' -or
-        [string]$triggers[0].UserId -cne $identity.Name
+        -not (Test-TaskUserIdentity -Account ([string]$triggers[0].UserId) -Identity $identity)
     ) {
         throw "Refusing to remove an unrelated scheduled task: $TaskPath$TaskName"
     }

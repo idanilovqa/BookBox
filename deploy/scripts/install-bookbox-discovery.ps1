@@ -22,6 +22,20 @@ $principalContext = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principalContext.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Run this installer from an elevated PowerShell window.'
 }
+function Test-TaskUserIdentity {
+    param(
+        [Parameter(Mandatory)][string] $Account,
+        [Parameter(Mandatory)][Security.Principal.WindowsIdentity] $Identity
+    )
+    try {
+        $sid = ([Security.Principal.NTAccount]::new($Account)).Translate(
+            [Security.Principal.SecurityIdentifier]
+        )
+        return [string]$sid.Value -ceq [string]$Identity.User.Value
+    } catch {
+        return $false
+    }
+}
 $parsedAddress = $null
 if (-not [Net.IPAddress]::TryParse($Address, [ref]$parsedAddress)) {
     throw 'BOOKBOX_BIND_ADDRESS must be a valid private IPv4 address.'
@@ -127,13 +141,13 @@ if ($existingTask) {
         $existingActions.Count -ne 1 -or
         [string]$existingActions[0].Execute -notmatch '(?i)(^|\\)powershell\.exe$' -or
         [string]$existingActions[0].Arguments -cne $actionArguments -or
-        [string]$existingTask.Principal.UserId -cne $identity.Name -or
+        -not (Test-TaskUserIdentity -Account ([string]$existingTask.Principal.UserId) -Identity $identity) -or
         [string]$existingTask.Principal.RunLevel -cne 'Limited' -or
         [string]$existingTask.Principal.LogonType -notmatch '^Interactive' -or
         [string]$existingTask.Settings.MultipleInstances -cne 'IgnoreNew' -or
         $existingTriggers.Count -ne 1 -or
         $existingTriggers[0].CimClass.CimClassName -cne 'MSFT_TaskLogonTrigger' -or
-        [string]$existingTriggers[0].UserId -cne $identity.Name
+        -not (Test-TaskUserIdentity -Account ([string]$existingTriggers[0].UserId) -Identity $identity)
     ) {
         throw "Refusing to overwrite an unrelated scheduled task: $TaskPath$TaskName"
     }

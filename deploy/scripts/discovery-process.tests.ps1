@@ -17,6 +17,14 @@ if (-not (Test-Path -LiteralPath $removePath -PathType Leaf)) {
     throw 'Safe BookBox discovery removal script is missing.'
 }
 $removeText = Get-Content -Raw -LiteralPath $removePath
+foreach ($source in @($installText, $removeText)) {
+    if ($source -notmatch 'function\s+Test-TaskUserIdentity(?s:.*?)\.Translate\((?s:.*?)SecurityIdentifier(?s:.*?)Identity\.User\.Value') {
+        throw 'Task ownership must compare normalized security identifiers.'
+    }
+    if ($source -match '\[string\]\$(?:existingTask\.)?Principal\.UserId\s+-cne\s+\$identity\.Name') {
+        throw 'Task ownership must not compare normalized account-name strings literally.'
+    }
+}
 foreach ($required in @(
     'BookBox HTTP \$Port',
     'BookBox mDNS',
