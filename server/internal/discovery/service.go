@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -87,12 +88,17 @@ func (r *ZeroconfRegistrar) Register(cfg Config) (Registration, error) {
 		return nil, err
 	}
 
+	proxyHostname := strings.TrimSuffix(cfg.Hostname, cfg.Domain)
+	proxyHostname = strings.TrimSuffix(proxyHostname, ".")
+	if proxyHostname == "" {
+		return nil, errors.New("zeroconf proxy hostname label is empty")
+	}
 	request := proxyRegistration{
 		Instance:   "BookBox",
 		Service:    cfg.Service,
 		Domain:     cfg.Domain,
 		Port:       cfg.Port,
-		Hostname:   cfg.Hostname,
+		Hostname:   proxyHostname,
 		Addresses:  []string{cfg.Address.String()},
 		Text:       []string{"version=1", "scheme=http"},
 		Interfaces: []net.Interface{owningInterface},

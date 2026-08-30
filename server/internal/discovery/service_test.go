@@ -192,7 +192,7 @@ func TestZeroconfRegistrarPublishesOnOwningInterface(t *testing.T) {
 	}
 	defer registration.Shutdown()
 
-	if got.Instance != "BookBox" || got.Hostname != Hostname ||
+	if got.Instance != "BookBox" || got.Hostname != "bookbox" ||
 		got.Service != Service || got.Domain != Domain || got.Port != 8787 {
 		t.Fatalf("registration = %#v", got)
 	}
