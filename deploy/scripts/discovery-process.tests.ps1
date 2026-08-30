@@ -42,6 +42,9 @@ foreach ($required in @(
     '\$existingTask\.Principal'
     '\$existingTask\.Triggers'
     'TaskPath'
+    '\$dnsDeadline\s*=\s*\[DateTime\]::UtcNow\.AddSeconds'
+    'while\s*\(\[DateTime\]::UtcNow\s+-lt\s+\$dnsDeadline'
+    'Start-Sleep\s+-Milliseconds\s+500'
 )) {
     if (($startText + [Environment]::NewLine + $installText) -notmatch $required) {
         throw "Missing private-LAN lifecycle guard: $required"
