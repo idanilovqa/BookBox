@@ -313,7 +313,10 @@ foreach ($required in @(
     '\$Arguments\[0\]\s+-cne\s+''compose''',
     '\$Arguments\[1\.\.\(\$Arguments\.Count\s+-\s+1\)\]',
     "Executable\s*=\s*'docker'",
-    'ExitCode\s*=\s*\$exitCode'
+    'ExitCode\s*=\s*\$exitCode',
+    '\$nativeErrorActionPreference\s*=\s*\$ErrorActionPreference',
+    '\$ErrorActionPreference\s*=\s*''Continue''',
+    '\$ErrorActionPreference\s*=\s*\$nativeErrorActionPreference'
 )) {
     if ($lifecycleText -notmatch $required) {
         throw "Managed Compose invocation must bypass unrelated Windows CLI plugin probes: $required"

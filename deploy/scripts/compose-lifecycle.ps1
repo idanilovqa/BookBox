@@ -97,8 +97,14 @@ function Invoke-BookBoxComposeCommand {
         }
     }
 
-    $output = @(& $invocation.Executable @($invocation.Arguments) 2>&1)
-    $exitCode = $LASTEXITCODE
+    $nativeErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $invocation.Executable @($invocation.Arguments) 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $nativeErrorActionPreference
+    }
     [pscustomobject]@{
         ExitCode = $exitCode
         Output = $output
