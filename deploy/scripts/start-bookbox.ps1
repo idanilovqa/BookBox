@@ -52,6 +52,21 @@ if (-not $DiscoveryExecutable) {
 if (-not $StateDirectory) {
     $StateDirectory = Join-Path $deployRoot '.state'
 }
+$startupErrorLog = Join-Path ([IO.Path]::GetFullPath($StateDirectory)) 'startup-error.log'
+trap {
+    $failure = $_ | Out-String
+    try {
+        $null = New-Item -ItemType Directory -Path (Split-Path $startupErrorLog) -Force
+        [IO.File]::WriteAllText(
+            $startupErrorLog,
+            $failure,
+            [Text.UTF8Encoding]::new($false)
+        )
+    } catch {
+        # The original startup error remains authoritative if diagnostic persistence fails.
+    }
+    exit 1
+}
 . (Join-Path $PSScriptRoot 'discovery-process.ps1')
 . (Join-Path $PSScriptRoot 'compose-lifecycle.ps1')
 
@@ -221,6 +236,7 @@ try {
         throw "_bookbox._tcp.local did not advertise bookbox.local on port $Port."
     }
 
+    Remove-Item -LiteralPath $startupErrorLog -Force -ErrorAction SilentlyContinue
     Write-Output "BookBox is ready at http://bookbox.local:$Port"
 } catch {
     if ($discoveryStarted) {
