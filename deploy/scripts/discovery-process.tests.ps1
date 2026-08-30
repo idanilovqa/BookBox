@@ -72,8 +72,9 @@ foreach ($required in @(
 if ($installText -match 'New-ScheduledTaskAction(?s:.*?)-WorkingDirectory') {
     throw 'Scheduled task must not depend on an optional working directory.'
 }
-if ($removeText -notmatch 'IsNullOrWhiteSpace\(\[string\]\$actions\[0\]\.WorkingDirectory\)') {
-    throw 'Task removal must require the managed action working directory to be empty.'
+if ($removeText -notmatch '\$managedWorkingDirectory\s*=\s*Join-Path\s+\$installRoot\s+''scripts''' -or
+    $removeText -notmatch '\$workingDirectoryOwned\s*=(?s:.{0,500}?)\[string\]::IsNullOrWhiteSpace(?s:.{0,400}?)\$managedWorkingDirectory') {
+    throw 'Task removal must accept only an empty or exact legacy managed working directory.'
 }
 if ($installText -notmatch 'IsNullOrWhiteSpace\(\[string\]\$existingActions\[0\]\.WorkingDirectory\)') {
     throw 'Task installation must reject an existing action with an unmanaged working directory.'

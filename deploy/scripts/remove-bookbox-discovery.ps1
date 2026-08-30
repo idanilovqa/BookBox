@@ -81,11 +81,20 @@ $existingTask = Get-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath -Error
 if ($existingTask) {
     $actions = @($existingTask.Actions)
     $triggers = @($existingTask.Triggers)
+    $managedWorkingDirectory = Join-Path $installRoot 'scripts'
+    $workingDirectoryOwned = $actions.Count -eq 1 -and (
+        [string]::IsNullOrWhiteSpace([string]$actions[0].WorkingDirectory) -or
+            [string]::Equals(
+                [string]$actions[0].WorkingDirectory,
+                $managedWorkingDirectory,
+                [StringComparison]::OrdinalIgnoreCase
+            )
+    )
     if (
         $existingTask.Description -cne 'BookBox managed discovery version 2' -or
         $actions.Count -ne 1 -or
         [string]$actions[0].Execute -notmatch '(?i)(^|\\)powershell\.exe$' -or
-        -not ([string]::IsNullOrWhiteSpace([string]$actions[0].WorkingDirectory)) -or
+        -not $workingDirectoryOwned -or
         [string]$actions[0].Arguments -cne [string]$manifest.ExpectedActionArguments -or
         -not (Test-TaskUserIdentity -Account ([string]$existingTask.Principal.UserId) -Identity $identity) -or
         [string]$existingTask.Principal.RunLevel -cne 'Limited' -or
