@@ -192,50 +192,6 @@ try {
         throw 'BookBox discovery process failed its ownership check.'
     }
 
-    $dnsDeadline = [DateTime]::UtcNow.AddSeconds(30)
-    $resolved = $null
-    $serviceRecord = $null
-    while ([DateTime]::UtcNow -lt $dnsDeadline -and (-not $resolved -or -not $serviceRecord)) {
-        if (-not $resolved) {
-            try {
-                $resolved = Resolve-DnsName `
-                    -Name 'bookbox.local' `
-                    -Type A `
-                    -QuickTimeout `
-                    -ErrorAction Stop |
-                    Where-Object { $_.IPAddress -eq $Address } |
-                    Select-Object -First 1
-            } catch {
-                $resolved = $null
-            }
-        }
-        if (-not $serviceRecord) {
-            try {
-                $serviceRecord = Resolve-DnsName `
-                    -Name '_bookbox._tcp.local' `
-                    -Type SRV `
-                    -QuickTimeout `
-                    -ErrorAction Stop |
-                    Where-Object {
-                        [int]$_.Port -eq $Port -and
-                        [string]$_.NameTarget -match '^(?i:bookbox\.local)\.?$'
-                    } |
-                    Select-Object -First 1
-            } catch {
-                $serviceRecord = $null
-            }
-        }
-        if (-not $resolved -or -not $serviceRecord) {
-            Start-Sleep -Milliseconds 500
-        }
-    }
-    if (-not $resolved) {
-        throw "bookbox.local did not resolve to $Address."
-    }
-    if (-not $serviceRecord) {
-        throw "_bookbox._tcp.local did not advertise bookbox.local on port $Port."
-    }
-
     Remove-Item -LiteralPath $startupErrorLog -Force -ErrorAction SilentlyContinue
     Write-Output "BookBox is ready at http://bookbox.local:$Port"
 } catch {

@@ -34,17 +34,12 @@ foreach ($required in @(
     "Profile Private",
     'RunLevel Limited',
     '-Address "\{2\}" -Port \{3\}',
-    '_bookbox\._tcp\.local',
-    '-Type SRV',
     'Refusing to overwrite an unrelated scheduled task'
     'bookbox-install\.json'
     '\$installedStartScript'
     '\$existingTask\.Principal'
     '\$existingTask\.Triggers'
     'TaskPath'
-    '\$dnsDeadline\s*=\s*\[DateTime\]::UtcNow\.AddSeconds'
-    'while\s*\(\[DateTime\]::UtcNow\s+-lt\s+\$dnsDeadline'
-    'Start-Sleep\s+-Milliseconds\s+500'
     'startup-error\.log'
     'trap\s*\{(?s:.*?)WriteAllText(?s:.*?)exit\s+1'
 )) {
@@ -54,6 +49,9 @@ foreach ($required in @(
 }
 if ($startText -match 'New-NetFirewallRule|Remove-NetFirewallRule') {
     throw 'Limited startup must validate pre-provisioned firewall rules without mutating them.'
+}
+if ($startText -match 'Resolve-DnsName') {
+    throw 'Startup must not use the unicast DNS client to verify multicast DNS registration.'
 }
 if ($installText -match 'New-NetFirewallRule(?s:.*?)-PassThru') {
     throw 'Firewall installation must support hosts where New-NetFirewallRule has no PassThru parameter.'
