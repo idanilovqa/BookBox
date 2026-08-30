@@ -58,6 +58,10 @@ $stateDirectory = Join-Path $installRoot 'state'
 $destination = Join-Path $binDirectory 'bookbox-discovery.exe'
 $installedStartScript = Join-Path $scriptsDirectory 'start-bookbox.ps1'
 $manifestPath = Join-Path $installRoot 'bookbox-install.json'
+$powerShellExecutable = Join-Path $PSHOME 'powershell.exe'
+if (-not (Test-Path -LiteralPath $powerShellExecutable -PathType Leaf)) {
+    throw "Windows PowerShell executable was not found: $powerShellExecutable"
+}
 $managedScripts = @(
     'start-bookbox.ps1',
     'startup-environment.ps1',
@@ -274,7 +278,7 @@ Invoke-BookBoxInstallTransaction `
 
         if (-not $existingTask) {
             $action = New-ScheduledTaskAction `
-                -Execute 'powershell.exe' `
+                -Execute $powerShellExecutable `
                 -Argument $actionArguments `
                 -WorkingDirectory $scriptsDirectory
             $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity.Name

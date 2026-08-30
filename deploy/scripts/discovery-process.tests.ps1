@@ -53,6 +53,14 @@ foreach ($required in @(
         throw "Firewall rollback must use the deterministic created rule name: $required"
     }
 }
+foreach ($required in @(
+    '\$powerShellExecutable\s*=\s*Join-Path\s+\$PSHOME\s+''powershell\.exe''',
+    'New-ScheduledTaskAction(?s:.*?)-Execute\s+\$powerShellExecutable'
+)) {
+    if ($installText -notmatch $required) {
+        throw "Scheduled task must use the exact Windows PowerShell host path: $required"
+    }
+}
 $preflightIndex = $installText.IndexOf('# Complete ownership preflight')
 $copyIndex = $installText.IndexOf('Copy-Item -LiteralPath')
 $firewallMutationIndex = $installText.IndexOf('New-NetFirewallRule')
