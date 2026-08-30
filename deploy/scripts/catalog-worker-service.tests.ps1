@@ -277,11 +277,28 @@ foreach ($pendingDeleteEvidence in @(
     'StartMode\s+-ceq\s+''Disabled''',
     'DeleteFlag',
     'Set-ItemProperty[^\r\n]*FailureActionsOnNonCrashFailures[^\r\n]*0',
-    'if\s*\(-not\s+\$pendingDelete\)\s*\{(?s:.*?)Invoke-SC\s+@\(''delete'',\s*\$serviceName\)'
+    'if\s*\(\$normalService\)\s*\{(?s:.*?)Invoke-SC\s+@\(''delete'',\s*\$serviceName\)'
 )) {
     if ($remove -notmatch $pendingDeleteEvidence) {
         throw "Removal cannot safely resume an exact owned service already pending deletion: $pendingDeleteEvidence"
     }
+}
+foreach ($completedDeleteEvidence in @(
+    '\$serviceInitiallyPresent',
+    '\$deletionCompleted',
+    '(?s)-not\s+\$serviceInitiallyPresent.*?-not\s+\(Test-Path\s+-LiteralPath\s+\$serviceRegistryPath\)',
+    'if\s*\(\$serviceInitiallyPresent\)\s*\{(?s:.*?)Get-Service\s+-Name\s+\$serviceName',
+    'if\s*\(\$serviceInitiallyPresent\s+-and\s+-not\s+\$currentService\)'
+)) {
+    if ($remove -notmatch $completedDeleteEvidence) {
+        throw "Removal cannot safely finish an exact owned installation after SCM deletion completed: $completedDeleteEvidence"
+    }
+}
+if ($remove -notmatch '(?s)if\s*\(\$pendingDelete\)\s*\{.*?Stop-Service.*?\$serviceObject\.Dispose\(\).*?Wait-ForServiceAbsent.*?\}\s*elseif\s*\(\$wasRunning\)\s*\{.*?WaitForStatus') {
+    throw 'Pending-delete removal must tolerate SCM disappearance instead of waiting on a deleted service handle.'
+}
+if ($remove -match "'password=',\s*'`"`"'") {
+    throw 'Service rollback must not pass an empty password token to sc.exe.'
 }
 foreach ($pendingAclEvidence in @(
     '\$managedFilePaths',
@@ -294,7 +311,7 @@ foreach ($pendingAclEvidence in @(
         throw "Removal cannot safely repair the one missing managed-file ACL from a pending-delete rollback: $pendingAclEvidence"
     }
 }
-if ($remove -notmatch '(?s)Stop-Service\s+-Name\s+\$serviceName.*?WaitForStatus.*?if\s*\(\$pendingDelete\)\s*\{[^{}]*\$serviceObject\.Dispose\(\)[^{}]*Wait-ForServiceAbsent') {
+if ($remove -notmatch '(?s)if\s*\(\$pendingDelete\)\s*\{.*?\$serviceObject\.Dispose\(\).*?Wait-ForServiceAbsent') {
     throw 'Pending-delete recovery must release its service handle before waiting for SCM deletion.'
 }
 if ($remove -notmatch '(?s)try\s*\{.*?Stop-Service\s+-Name\s+\$serviceName.*?WaitForStatus.*?Invoke-SC\s+@\(''delete'',\s*\$serviceName\).*?Remove-Item\s+-LiteralPath.*?\}\s*catch\s*\{') {
