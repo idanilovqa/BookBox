@@ -183,13 +183,19 @@ foreach ($input in @($manifest.ExternalInputs)) {
 $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
 if (-not $service -or
     -not [string]::Equals([string]$service.StartName, $serviceAccount, [StringComparison]::OrdinalIgnoreCase) -or
-    [string]$service.StartMode -cne 'Auto' -or
     [string]$service.PathName -cne [string]$manifest.Service.BinPath) {
     throw 'Refusing to remove a missing or differently configured service.'
 }
 $serviceRegistryPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName"
 $serviceRegistry = Get-ItemProperty -LiteralPath $serviceRegistryPath -ErrorAction Stop
-if ([int]$serviceRegistry.Start -ne [int]$manifest.Service.Registry.Start -or
+$deleteFlagProperty = $serviceRegistry.PSObject.Properties['DeleteFlag']
+$deleteFlag = if ($deleteFlagProperty) { [int]$deleteFlagProperty.Value } else { 0 }
+$normalService = [string]$service.StartMode -ceq 'Auto' -and
+    [int]$serviceRegistry.Start -eq [int]$manifest.Service.Registry.Start -and $deleteFlag -eq 0
+$pendingDelete = [string]$service.StartMode -ceq 'Disabled' -and
+    [int]$manifest.Service.Registry.Start -eq 2 -and [int]$serviceRegistry.Start -eq 4 -and
+    $deleteFlag -eq 1
+if ((-not $normalService -and -not $pendingDelete) -or
     [int]$serviceRegistry.DelayedAutoStart -ne [int]$manifest.Service.Registry.DelayedAutoStart -or
     [int]$serviceRegistry.ServiceSidType -ne [int]$manifest.Service.Registry.ServiceSidType -or
     [int]$serviceRegistry.FailureActionsOnNonCrashFailures -ne
@@ -258,14 +264,27 @@ $serviceObject = Get-Service -Name $serviceName -ErrorAction Stop
 $wasRunning = $serviceObject.Status -ne [ServiceProcess.ServiceControllerStatus]::Stopped
 $removedRules = [Collections.Generic.List[object]]::new()
 $eventRemoved = $false
-$deleteRequested = $false
+$deleteRequested = $pendingDelete
+$recoveryPolicyDisabled = $false
+$serviceObjectDisposed = $false
 try {
+    if ($pendingDelete) {
+        Set-ItemProperty -LiteralPath $serviceRegistryPath -Name FailureActionsOnNonCrashFailures -Value 0
+    } else {
+        Invoke-SC @('failureflag', $serviceName, '0')
+    }
+    $recoveryPolicyDisabled = $true
     if ($wasRunning) {
         Stop-Service -Name $serviceName -ErrorAction Stop
         $serviceObject.WaitForStatus(
             [ServiceProcess.ServiceControllerStatus]::Stopped,
             [TimeSpan]::FromSeconds(30)
         )
+    }
+    if ($pendingDelete) {
+        $serviceObject.Dispose()
+        $serviceObjectDisposed = $true
+        Wait-ForServiceAbsent -Name $serviceName -TimeoutSeconds 30
     }
     foreach ($record in $verifiedRules) {
         $path = [IO.Path]::GetFullPath([string]$record.Path)
@@ -276,9 +295,14 @@ try {
     }
     Remove-EventLog -Source $serviceName
     $eventRemoved = $true
-    $serviceObject.Dispose()
-    Invoke-SC @('delete', $serviceName)
-    $deleteRequested = $true
+    if (-not $serviceObjectDisposed) {
+        $serviceObject.Dispose()
+        $serviceObjectDisposed = $true
+    }
+    if (-not $pendingDelete) {
+        Invoke-SC @('delete', $serviceName)
+        $deleteRequested = $true
+    }
     Wait-ForServiceAbsent -Name $serviceName -TimeoutSeconds 30
     foreach ($path in $ownedFilePaths) {
         Remove-Item -LiteralPath $path -Force
@@ -320,6 +344,13 @@ try {
             Set-Acl -LiteralPath $removed.Path -AclObject $acl
         } catch {
             $rollbackErrors.Add("ACL restore for $($removed.Path): $($_.Exception.Message)")
+        }
+    }
+    if ($recoveryPolicyDisabled) {
+        try {
+            Invoke-SC @('failureflag', $serviceName, '1')
+        } catch {
+            $rollbackErrors.Add("recovery-policy restore: $($_.Exception.Message)")
         }
     }
     if ($wasRunning) {

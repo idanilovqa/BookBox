@@ -266,6 +266,26 @@ foreach ($evidence in @(
 if ($remove -notmatch 'catch\s*\{(?s:.*?)Start-Service\s+-Name\s+\$serviceName') {
     throw 'Failed service deletion must restore the exact previously-running service.'
 }
+if ($remove -notmatch '(?s)try\s*\{.*?Invoke-SC\s+@\(''failureflag'',\s*\$serviceName,\s*''0''\).*?Stop-Service\s+-Name\s+\$serviceName') {
+    throw 'Removal must disable non-crash recovery before intentionally stopping the worker.'
+}
+if ($remove -notmatch '(?s)catch\s*\{.*?Invoke-SC\s+@\(''failureflag'',\s*\$serviceName,\s*''1''\).*?Start-Service\s+-Name\s+\$serviceName') {
+    throw 'Failed removal must restore non-crash recovery before restarting the worker.'
+}
+foreach ($pendingDeleteEvidence in @(
+    '\$pendingDelete',
+    'StartMode\s+-ceq\s+''Disabled''',
+    'DeleteFlag',
+    'Set-ItemProperty[^\r\n]*FailureActionsOnNonCrashFailures[^\r\n]*0',
+    'if\s*\(-not\s+\$pendingDelete\)\s*\{(?s:.*?)Invoke-SC\s+@\(''delete'',\s*\$serviceName\)'
+)) {
+    if ($remove -notmatch $pendingDeleteEvidence) {
+        throw "Removal cannot safely resume an exact owned service already pending deletion: $pendingDeleteEvidence"
+    }
+}
+if ($remove -notmatch '(?s)Stop-Service\s+-Name\s+\$serviceName.*?WaitForStatus.*?if\s*\(\$pendingDelete\)\s*\{[^{}]*\$serviceObject\.Dispose\(\)[^{}]*Wait-ForServiceAbsent') {
+    throw 'Pending-delete recovery must release its service handle before waiting for SCM deletion.'
+}
 if ($remove -notmatch '(?s)try\s*\{.*?Stop-Service\s+-Name\s+\$serviceName.*?WaitForStatus.*?Invoke-SC\s+@\(''delete'',\s*\$serviceName\).*?Remove-Item\s+-LiteralPath.*?\}\s*catch\s*\{') {
     throw 'Service stop/wait, SCM deletion, and managed-file removal must share one rollback boundary.'
 }
