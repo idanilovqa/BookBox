@@ -117,6 +117,17 @@ function Restore-FileSnapshots {
     }
 }
 
+function New-ManifestAccessRule {
+    param([Parameter(Mandatory)][object] $Record)
+    [Security.AccessControl.FileSystemAccessRule]::new(
+        [Security.Principal.SecurityIdentifier]::new([string]$Record.Sid),
+        [Security.AccessControl.FileSystemRights][int]$Record.Rights,
+        [Security.AccessControl.InheritanceFlags][int]$Record.InheritanceFlags,
+        [Security.AccessControl.PropagationFlags][int]$Record.PropagationFlags,
+        [Security.AccessControl.AccessControlType][int]$Record.AccessControlType
+    )
+}
+
 $installRoot = [IO.Path]::GetFullPath($InstallDirectory).TrimEnd('\')
 $manifestPath = Join-Path $installRoot 'bookbox-catalog-worker-install.json'
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
@@ -204,18 +215,19 @@ foreach ($record in @($manifest.ACLRules)) {
     }
     Assert-SafeExistingPathChain $path
     $acl = Get-Acl -LiteralPath $path
+    $expectedRule = New-ManifestAccessRule -Record $record
     $matches = @($acl.Access | Where-Object {
         -not $_.IsInherited -and
         $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -ceq [string]$record.Sid -and
-        [int]$_.FileSystemRights -eq [int]$record.Rights -and
-        [int]$_.InheritanceFlags -eq [int]$record.InheritanceFlags -and
-        [int]$_.PropagationFlags -eq [int]$record.PropagationFlags -and
-        [int]$_.AccessControlType -eq [int]$record.AccessControlType
+        [int]$_.FileSystemRights -eq [int]$expectedRule.FileSystemRights -and
+        [int]$_.InheritanceFlags -eq [int]$expectedRule.InheritanceFlags -and
+        [int]$_.PropagationFlags -eq [int]$expectedRule.PropagationFlags -and
+        [int]$_.AccessControlType -eq [int]$expectedRule.AccessControlType
     })
     if ($matches.Count -ne 1) {
         throw "Refusing removal because the exact owned ACL rule is absent or ambiguous: $path"
     }
-    $verifiedRules.Add($record)
+    $verifiedRules.Add([pscustomobject]@{ Path = $path; Rule = $expectedRule })
 }
 
 $dataRemovalTargets = @()
@@ -258,16 +270,9 @@ try {
     foreach ($record in $verifiedRules) {
         $path = [IO.Path]::GetFullPath([string]$record.Path)
         $acl = Get-Acl -LiteralPath $path
-        $rule = [Security.AccessControl.FileSystemAccessRule]::new(
-            [Security.Principal.SecurityIdentifier]::new([string]$record.Sid),
-            [Security.AccessControl.FileSystemRights][int]$record.Rights,
-            [Security.AccessControl.InheritanceFlags][int]$record.InheritanceFlags,
-            [Security.AccessControl.PropagationFlags][int]$record.PropagationFlags,
-            [Security.AccessControl.AccessControlType][int]$record.AccessControlType
-        )
-        $acl.RemoveAccessRuleSpecific($rule)
+        $acl.RemoveAccessRuleSpecific($record.Rule)
         Set-Acl -LiteralPath $path -AclObject $acl
-        $removedRules.Add([pscustomobject]@{ Path = $path; Rule = $rule })
+        $removedRules.Add([pscustomobject]@{ Path = $path; Rule = $record.Rule })
     }
     Remove-EventLog -Source $serviceName
     $eventRemoved = $true

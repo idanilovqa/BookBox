@@ -172,7 +172,7 @@ function New-RecordedAccessRule {
     [pscustomobject]@{
         Path = [IO.Path]::GetFullPath($Path)
         Sid = $Sid.Value
-        Rights = [int]$Rights
+        Rights = [int]$rule.FileSystemRights
         InheritanceFlags = [int]$Inheritance
         PropagationFlags = [int]$propagation
         AccessControlType = [int][Security.AccessControl.AccessControlType]::Allow

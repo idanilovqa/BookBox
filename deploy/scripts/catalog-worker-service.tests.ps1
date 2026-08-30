@@ -216,6 +216,19 @@ foreach ($required in @(
         throw "Removal ownership contract is missing: $required"
     }
 }
+if ($install -notmatch 'Rights\s*=\s*\[int\]\$rule\.FileSystemRights') {
+    throw 'Installer must record the Windows-normalized ACL rights actually applied.'
+}
+foreach ($required in @(
+    'function\s+New-ManifestAccessRule',
+    '\$expectedRule\s*=\s*New-ManifestAccessRule\s+-Record\s+\$record',
+    '\[int\]\$_\.FileSystemRights\s+-eq\s+\[int\]\$expectedRule\.FileSystemRights',
+    'RemoveAccessRuleSpecific\(\$record\.Rule\)'
+)) {
+    if ($remove -notmatch $required) {
+        throw "Removal must compare and remove Windows-normalized manifest ACL rules: $required"
+    }
+}
 
 foreach ($forbidden in @(
     '\btaskkill\b',
