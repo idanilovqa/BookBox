@@ -30,6 +30,19 @@ func TestInferTreeApprovedCases(t *testing.T) {
 			}},
 		},
 		{
+			name: "common album keeps distinct chapter titles together",
+			tree: testTree("Brandon Sanderson/Words of Radiance",
+				treeChapterAudio("Brandon Sanderson/Words of Radiance/Chapter 1 - Stormblessed.mp3", "Words of Radiance", "Chapter 1", "Brandon Sanderson"),
+				treeChapterAudio("Brandon Sanderson/Words of Radiance/Chapter 2 - Bridge Four.mp3", "Words of Radiance", "Chapter 2", "Brandon Sanderson"),
+			),
+			want: []expectedTreeBook{{
+				title: "Words of Radiance", authors: []string{"Brandon Sanderson"}, review: catalog.ReviewUnreviewed,
+				reason: "folder_default", audioPaths: []string{
+					"Brandon Sanderson/Words of Radiance/Chapter 1 - Stormblessed.mp3", "Brandon Sanderson/Words of Radiance/Chapter 2 - Bridge Four.mp3",
+				},
+			}},
+		},
+		{
 			name: "disc subfolders combine",
 			tree: testTree("Author/Book",
 				treeAudio("Author/Book/Disc 1/01.mp3", "Book", "Author"),
@@ -280,6 +293,12 @@ func testTree(scope string, files ...catalog.SourceFile) Tree {
 func treeAudio(relativePath, title, author string) catalog.SourceFile {
 	return treeFile(relativePath, catalog.FileKindAudio, "", map[string]any{
 		"title": title, "album": title, "author": author,
+	})
+}
+
+func treeChapterAudio(relativePath, album, title, author string) catalog.SourceFile {
+	return treeFile(relativePath, catalog.FileKindAudio, "", map[string]any{
+		"title": title, "album": album, "author": author,
 	})
 }
 

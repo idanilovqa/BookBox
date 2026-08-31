@@ -166,8 +166,20 @@ func inferAutomaticTreeClusters(tree Tree, audio, allFiles []catalog.SourceFile)
 		groups[key] = append(groups[key], file)
 		identityByKey[key] = identity
 	}
-	if len(groups) > 1 && groupedFileCount(groups) == len(audio) {
-		return clustersFromIdentityGroups(groups, identityByKey)
+	if groupedFileCount(groups) == len(audio) {
+		if len(groups) > 1 {
+			return clustersFromIdentityGroups(groups, identityByKey)
+		}
+		for key, grouped := range groups {
+			reason := "folder_default"
+			review := catalog.ReviewUnreviewed
+			if tree.ScopePath == "" {
+				reason, review = "weak_loose_files", catalog.ReviewNeedsReview
+			} else if hasDiscSubtree(tree.ScopePath, grouped) {
+				reason = "consistent_subtree"
+			}
+			return []treeCluster{{identity: identityByKey[key], audio: grouped, reason: reason, review: review}}
+		}
 	}
 
 	filenameGroups := make(map[string][]catalog.SourceFile)
@@ -245,7 +257,10 @@ func inferredTreeBook(tree Tree, cluster treeCluster, covers, companions []catal
 	if identity.title == "" {
 		identity = consistentTreeIdentity(cluster.audio)
 	}
-	title := treeDisplayValue(cluster.audio, "title")
+	title := treeDisplayValue(cluster.audio, "album")
+	if title == "" {
+		title = treeDisplayValue(cluster.audio, "title")
+	}
 	if title == "" {
 		title = companionDisplayValue(companions, "title", "album")
 	}
