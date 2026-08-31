@@ -1818,7 +1818,17 @@ func (repository *PostgresRepository) ClaimJob(
 			select id
 			from worker_jobs
 			where status='queued' and run_after <= $1
-			order by run_after, created_at, id
+			order by case kind
+				when 'reorganize_files' then 10
+				when 'scan_root' then 20
+				when 'probe_file' then 30
+				when 'inspect_companion' then 30
+				when 'regroup_scope' then 40
+				when 'publish_search' then 50
+				when 'publish_cover' then 60
+				when 'enrich_book' then 70
+				else 100
+			end, run_after, created_at, id
 			for update skip locked
 			limit 1
 		)

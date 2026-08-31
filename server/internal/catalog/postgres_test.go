@@ -971,6 +971,38 @@ func TestPostgresRepositoryDeduplicatesOnlyActiveJobs(t *testing.T) {
 	}
 }
 
+func TestClaimJobPrioritizesStructuralWorkOverOlderEnrichment(t *testing.T) {
+	repository, _ := workerJobFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	enrichment := WorkerJob{
+		ID: uuid.New(), Kind: JobEnrichBook,
+		Payload:  map[string]any{"bookId": uuid.NewString()},
+		RunAfter: now.Add(-time.Hour),
+	}
+	regroup := WorkerJob{
+		ID: uuid.New(), Kind: JobRegroupScope,
+		Payload: map[string]any{
+			"rootId": "audiobooks", "scopePath": "Book",
+			"catalogGeneration": int64(1),
+		},
+		RunAfter: now.Add(-time.Minute),
+	}
+	if err := repository.Enqueue(ctx, enrichment); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Enqueue(ctx, regroup); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repository.ClaimJob(ctx, "worker-a", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.ID != regroup.ID {
+		t.Fatalf("claimed %s (%s), want structural %s", claimed.ID, claimed.Kind, regroup.ID)
+	}
+}
+
 func TestRecoverExpiredJobsRunsBeforeStartupDeduplication(t *testing.T) {
 	repository, pool := workerJobFixture(t)
 	job := expiredRunningJob(t, pool, JobScanRoot, 4, 5, "scan_root:audiobooks")
