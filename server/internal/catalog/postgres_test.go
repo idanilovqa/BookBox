@@ -1003,6 +1003,41 @@ func TestClaimJobPrioritizesStructuralWorkOverOlderEnrichment(t *testing.T) {
 	}
 }
 
+func TestClaimJobPrioritizesFullRootRegroupOverScopedRegroup(t *testing.T) {
+	repository, _ := workerJobFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	scoped := WorkerJob{
+		ID: uuid.New(), Kind: JobRegroupScope,
+		Payload: map[string]any{
+			"rootId": "audiobooks", "scopePath": "Author/Book",
+			"catalogGeneration": int64(1),
+		},
+		RunAfter: now.Add(-time.Hour),
+	}
+	fullRoot := WorkerJob{
+		ID: uuid.New(), Kind: JobRegroupScope,
+		Payload: map[string]any{
+			"rootId": "audiobooks", "scopePath": "",
+			"catalogGeneration": int64(1),
+		},
+		RunAfter: now.Add(-time.Minute),
+	}
+	if err := repository.Enqueue(ctx, scoped); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Enqueue(ctx, fullRoot); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repository.ClaimJob(ctx, "worker-a", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.ID != fullRoot.ID {
+		t.Fatalf("claimed %s, want full-root regroup %s", claimed.ID, fullRoot.ID)
+	}
+}
+
 func TestRecoverExpiredJobsRunsBeforeStartupDeduplication(t *testing.T) {
 	repository, pool := workerJobFixture(t)
 	job := expiredRunningJob(t, pool, JobScanRoot, 4, 5, "scan_root:audiobooks")

@@ -1823,7 +1823,10 @@ func (repository *PostgresRepository) ClaimJob(
 				when 'scan_root' then 20
 				when 'probe_file' then 30
 				when 'inspect_companion' then 30
-				when 'regroup_scope' then 40
+				when 'regroup_scope' then case
+					when coalesce(payload->>'scopePath','')='' then 35
+					else 40
+				end
 				when 'publish_search' then 50
 				when 'publish_cover' then 60
 				when 'enrich_book' then 70
