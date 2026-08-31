@@ -550,7 +550,7 @@ func (handler RegroupScopeHandler) Handle(ctx context.Context, job catalog.Worke
 		if err := enqueuePublish(ctx, handler.Repo, rootID, generation.Value); err != nil {
 			return err
 		}
-		if err := queueIncompleteBooks(ctx, handler.Repo, rootID); err != nil {
+		if err := queueIncompleteBooksInScope(ctx, handler.Repo, rootID, scope); err != nil {
 			return fmt.Errorf("queue metadata enrichment: %w", err)
 		}
 		return nil

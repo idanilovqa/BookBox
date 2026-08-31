@@ -445,7 +445,7 @@ func TestRegroupScopeQueuesOnlineEnrichmentAfterGrouping(t *testing.T) {
 		generation: catalog.CatalogGeneration{RootID: "audiobooks", Value: 6},
 		tree:       grouping.Tree{RootID: "audiobooks", ScopePath: "Book"},
 		books: []catalog.Book{{
-			ID: bookID, RootID: "audiobooks", Title: "Book",
+			ID: bookID, RootID: "audiobooks", SourceFolder: "Book", Title: "Book",
 			ReviewState: catalog.ReviewUnreviewed, MetadataSource: catalog.MetadataInferred,
 		}},
 	}
@@ -463,6 +463,34 @@ func TestRegroupScopeQueuesOnlineEnrichmentAfterGrouping(t *testing.T) {
 	want := []string{"publish_search:audiobooks:6", "enrich_book:" + bookID.String()}
 	if !reflect.DeepEqual(repository.dedupeKeys, want) {
 		t.Fatalf("dedupe keys=%v, want %v", repository.dedupeKeys, want)
+	}
+}
+
+func TestRegroupScopeQueuesEnrichmentOnlyInsideScope(t *testing.T) {
+	inside, outside := uuid.New(), uuid.New()
+	repository := &stagedRepositoryFake{
+		generation: catalog.CatalogGeneration{RootID: "audiobooks", Value: 6},
+		tree:       grouping.Tree{RootID: "audiobooks", ScopePath: "Author/Book"},
+		books: []catalog.Book{
+			{
+				ID: inside, RootID: "audiobooks", SourceFolder: "Author/Book", Title: "Book",
+				ReviewState: catalog.ReviewUnreviewed, MetadataSource: catalog.MetadataInferred,
+			},
+			{
+				ID: outside, RootID: "audiobooks", SourceFolder: "Other/Title", Title: "Title",
+				ReviewState: catalog.ReviewUnreviewed, MetadataSource: catalog.MetadataInferred,
+			},
+		},
+	}
+	job := catalog.WorkerJob{Kind: catalog.JobRegroupScope, Payload: map[string]any{
+		"rootId": "audiobooks", "scopePath": "Author/Book", "catalogGeneration": float64(5),
+	}}
+	if err := (RegroupScopeHandler{Repo: repository}).Handle(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"publish_search:audiobooks:6", "enrich_book:" + inside.String()}
+	if !reflect.DeepEqual(repository.dedupeKeys, want) {
+		t.Fatalf("keys=%v, want %v", repository.dedupeKeys, want)
 	}
 }
 

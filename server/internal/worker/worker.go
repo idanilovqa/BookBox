@@ -360,6 +360,18 @@ func queueIncompleteBooks(
 	repository incompleteBookRepository,
 	rootID string,
 ) error {
+	return queueIncompleteBooksInScope(ctx, repository, rootID, "")
+}
+
+func queueIncompleteBooksInScope(
+	ctx context.Context,
+	repository incompleteBookRepository,
+	rootID string,
+	scope string,
+) error {
+	if scope == "." {
+		scope = ""
+	}
 	cursor := ""
 	for {
 		page, err := repository.ListBooks(ctx, catalog.BookQuery{
@@ -372,6 +384,11 @@ func queueIncompleteBooks(
 			return err
 		}
 		for _, book := range page.Items {
+			inScope := scope == "" || book.SourceFolder == scope ||
+				strings.HasPrefix(book.SourceFolder, scope+"/")
+			if !inScope {
+				continue
+			}
 			if book.ReviewState == catalog.ReviewConfirmed ||
 				book.MetadataSource == catalog.MetadataConfirmed ||
 				book.MissingAt != nil {
