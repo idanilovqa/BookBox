@@ -316,7 +316,7 @@ func TestProbeFileSuccessFailureAndFingerprintConflict(t *testing.T) {
 			if len(repository.jobs) != test.wantJobs {
 				t.Errorf("jobs = %#v, want %d", repository.jobs, test.wantJobs)
 			}
-			if test.wantJobs == 1 && repository.dedupeKeys[0] != "regroup_scope:audiobooks:Book:8" {
+			if test.wantJobs == 1 && repository.dedupeKeys[0] != "regroup_scope:audiobooks:Book" {
 				t.Errorf("regroup key = %q", repository.dedupeKeys[0])
 			}
 		})
@@ -341,7 +341,7 @@ func TestProbeFileRegroupsDiscSetAtAudiobookScope(t *testing.T) {
 	if err := handler.Handle(context.Background(), stagedFileJob(catalog.JobProbeFile, file)); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(repository.dedupeKeys, []string{"regroup_scope:audiobooks:Disc Saga:8"}) {
+	if !reflect.DeepEqual(repository.dedupeKeys, []string{"regroup_scope:audiobooks:Disc Saga"}) {
 		t.Fatalf("regroup keys=%v, want disc parent audiobook scope", repository.dedupeKeys)
 	}
 }
@@ -379,7 +379,7 @@ func TestInspectCompanionStoresEvidenceAndQueuesRegroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	if repository.savedCompanion["title"] != "Book" ||
-		!reflect.DeepEqual(repository.dedupeKeys, []string{"regroup_scope:audiobooks:Book:4"}) {
+		!reflect.DeepEqual(repository.dedupeKeys, []string{"regroup_scope:audiobooks:Book"}) {
 		t.Fatalf("evidence=%#v keys=%v", repository.savedCompanion, repository.dedupeKeys)
 	}
 }
@@ -466,25 +466,45 @@ func TestRegroupScopeQueuesOnlineEnrichmentAfterGrouping(t *testing.T) {
 	}
 }
 
-func TestRegroupScopeRequeuesStaleScopeAtCurrentGeneration(t *testing.T) {
+func TestEnqueueRegroupDeduplicatesGenerationsByScope(t *testing.T) {
+	repository := &stagedRepositoryFake{}
+	if err := enqueueRegroup(context.Background(), repository, "audiobooks", "Book", 6); err != nil {
+		t.Fatal(err)
+	}
+	if err := enqueueRegroup(context.Background(), repository, "audiobooks", "Book", 7); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(repository.dedupeKeys, []string{"regroup_scope:audiobooks:Book"}) ||
+		len(repository.jobs) != 1 {
+		t.Fatalf("regroup jobs=%#v keys=%v", repository.jobs, repository.dedupeKeys)
+	}
+}
+
+func TestRegroupScopeRetriesGenerationConflictWithoutReplacementJob(t *testing.T) {
 	repository := &stagedRepositoryFake{
-		generation:    catalog.CatalogGeneration{RootID: "audiobooks", Value: 7},
-		refinementErr: catalog.ErrConflict,
-		tree:          grouping.Tree{RootID: "audiobooks", ScopePath: "Broken"},
+		generation:       catalog.CatalogGeneration{RootID: "audiobooks", Value: 7},
+		refinementErrors: []error{catalog.ErrConflict, nil},
+		tree:             grouping.Tree{RootID: "audiobooks", ScopePath: "Book"},
 	}
 	handler := RegroupScopeHandler{Repo: repository}
 	job := catalog.WorkerJob{
 		Kind: catalog.JobRegroupScope,
 		Payload: map[string]any{
-			"rootId": "audiobooks", "scopePath": "Broken", "catalogGeneration": float64(6),
+			"rootId": "audiobooks", "scopePath": "Book", "catalogGeneration": float64(6),
 		},
 	}
 
 	if err := handler.Handle(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(repository.dedupeKeys, []string{"regroup_scope:audiobooks:Broken:7"}) || len(repository.jobs) != 1 {
-		t.Fatalf("replacement regroup jobs=%#v keys=%v", repository.jobs, repository.dedupeKeys)
+	if repository.refinements != 2 {
+		t.Fatalf("refinements=%d, want 2", repository.refinements)
+	}
+	if repository.lastRefinement.ExpectedGeneration != 7 {
+		t.Fatalf("expected generation=%d, want 7", repository.lastRefinement.ExpectedGeneration)
+	}
+	if !reflect.DeepEqual(repository.dedupeKeys, []string{"publish_search:audiobooks:7"}) {
+		t.Fatalf("unexpected replacement jobs: %v", repository.dedupeKeys)
 	}
 }
 
@@ -579,6 +599,7 @@ type stagedRepositoryFake struct {
 	probeStoreErr     error
 	companionChanged  bool
 	refinementErr     error
+	refinementErrors  []error
 	lastFinalization  catalog.InventoryFinalization
 	lastRefinement    catalog.GroupingRefinement
 	publishErr        error
@@ -687,6 +708,11 @@ func (fake *stagedRepositoryFake) ApplyGroupingRefinement(
 	fake.events = append(fake.events, "refine")
 	fake.refinements++
 	fake.lastRefinement = refinement
+	if len(fake.refinementErrors) > 0 {
+		err := fake.refinementErrors[0]
+		fake.refinementErrors = fake.refinementErrors[1:]
+		return fake.generation, err
+	}
 	return fake.generation, fake.refinementErr
 }
 

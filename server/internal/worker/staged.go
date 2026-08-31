@@ -504,6 +504,8 @@ type RegroupScopeHandler struct {
 	InferTree func(grouping.Tree) grouping.Result
 }
 
+const regroupConflictAttempts = 3
+
 func (handler RegroupScopeHandler) Handle(ctx context.Context, job catalog.WorkerJob) error {
 	rootID, err := requiredPayloadString(job.Payload, "rootId")
 	if err != nil || handler.Repo == nil || job.Kind != catalog.JobRegroupScope {
@@ -514,38 +516,46 @@ func (handler RegroupScopeHandler) Handle(ctx context.Context, job catalog.Worke
 	if err != nil {
 		return err
 	}
-	tree, err := handler.Repo.LoadGroupingTree(ctx, rootID, scope)
-	if err != nil {
-		return err
-	}
 	infer := handler.InferTree
 	if infer == nil {
 		infer = grouping.InferTree
 	}
-	result := infer(tree)
-	if scope == "" {
-		result = inferFullInventoryTree(tree, infer)
-	}
-	generation, err := handler.Repo.ApplyGroupingRefinement(ctx, catalog.GroupingRefinement{
-		RootID: rootID, ScopePath: scope, ExpectedGeneration: expected,
-		Books: result.Books, Evidence: result.Evidence,
-	})
-	if errors.Is(err, catalog.ErrConflict) {
-		current, currentErr := handler.Repo.CurrentCatalogGeneration(ctx, rootID)
-		if currentErr != nil {
-			return currentErr
+	for attempt := 0; attempt < regroupConflictAttempts; attempt++ {
+		tree, loadErr := handler.Repo.LoadGroupingTree(ctx, rootID, scope)
+		if loadErr != nil {
+			return loadErr
 		}
-		return enqueueRegroup(ctx, handler.Repo, rootID, scope, current.Value)
-	} else if err != nil {
-		return err
+		result := infer(tree)
+		if scope == "" {
+			result = inferFullInventoryTree(tree, infer)
+		}
+		generation, refineErr := handler.Repo.ApplyGroupingRefinement(ctx, catalog.GroupingRefinement{
+			RootID: rootID, ScopePath: scope, ExpectedGeneration: expected,
+			Books: result.Books, Evidence: result.Evidence,
+		})
+		if errors.Is(refineErr, catalog.ErrConflict) {
+			if attempt == regroupConflictAttempts-1 {
+				return refineErr
+			}
+			current, currentErr := handler.Repo.CurrentCatalogGeneration(ctx, rootID)
+			if currentErr != nil {
+				return currentErr
+			}
+			expected = current.Value
+			continue
+		}
+		if refineErr != nil {
+			return refineErr
+		}
+		if err := enqueuePublish(ctx, handler.Repo, rootID, generation.Value); err != nil {
+			return err
+		}
+		if err := queueIncompleteBooks(ctx, handler.Repo, rootID); err != nil {
+			return fmt.Errorf("queue metadata enrichment: %w", err)
+		}
+		return nil
 	}
-	if err := enqueuePublish(ctx, handler.Repo, rootID, generation.Value); err != nil {
-		return err
-	}
-	if err := queueIncompleteBooks(ctx, handler.Repo, rootID); err != nil {
-		return fmt.Errorf("queue metadata enrichment: %w", err)
-	}
-	return nil
+	return catalog.ErrConflict
 }
 
 type SearchPublicationRepository interface {
@@ -606,7 +616,7 @@ func enqueueRegroup(
 	if scope == "." {
 		scope = ""
 	}
-	key := "regroup_scope:" + rootID + ":" + scope + ":" + strconv.FormatInt(generation, 10)
+	key := "regroup_scope:" + rootID + ":" + scope
 	_, err := repository.EnqueueDeduplicated(ctx, catalog.WorkerJob{
 		ID: uuid.New(), Kind: catalog.JobRegroupScope,
 		Payload: map[string]any{
