@@ -19,3 +19,14 @@ _Avoid_: Duplicate title
 
 **Duplicate group**:
 The set of audiobook copies classified as one duplicate recording. Each member remains an independent audiobook that a user can open or transfer.
+
+**Inference evidence**:
+Normalized facts from source-relative folder names, filenames, file order, and embedded media tags that support or contradict an audiobook identity.
+
+**Audiobook hypothesis**:
+A proposed assignment of audio files to one audiobook together with inferred title, author, series, and confidence derived from inference evidence.
+_Avoid_: LLM result
+
+**Inference benchmark**:
+A development-only set of expected audiobook hypotheses reviewed with LLM assistance and human correction. BookBox does not consult the benchmark or an LLM at runtime.
+_Avoid_: Runtime AI
