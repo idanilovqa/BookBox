@@ -380,6 +380,8 @@ internal fun ConnectedApp(
                 onSortChange = library::setSort,
                 onLoadNextPage = library::loadNextPage,
                 onGridPositionChange = library::saveGridPosition,
+                onCompactPositionChange = library::saveCompactPosition,
+                onLayoutChange = library::setLayout,
                 modifier = modifier,
             )
             AppRoute.Folders -> FoldersScreen(

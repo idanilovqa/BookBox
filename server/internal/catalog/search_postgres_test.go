@@ -422,11 +422,9 @@ func TestSearchLibraryFindsRawSingletonsWithGramAndTrigramText(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]SearchEntityKind{
-		"Dune Loose":                  SearchEntityFolder,
-		"Dune Loose/copy.jpg":         SearchEntityFile,
-		"Frank Herbert":               SearchEntityFolder,
-		"Frank Herbert/Dune":          SearchEntityFolder,
-		"Frank Herbert/Dune/book.m4b": SearchEntityFile,
+		"Dune Loose":         SearchEntityFolder,
+		"Frank Herbert":      SearchEntityFolder,
+		"Frank Herbert/Dune": SearchEntityFolder,
 	}
 	for _, text := range []string{"du", "dune"} {
 		t.Run(text, func(t *testing.T) {
@@ -458,10 +456,6 @@ func TestSearchLibraryFindsRawSingletonsWithGramAndTrigramText(t *testing.T) {
 					(document.Size != nil || document.ModifiedAt != nil) {
 					t.Fatalf("unassigned folder file fields=%#v", document)
 				}
-				if document.RelativePath == loose.RelativePath &&
-					(document.Size == nil || document.ModifiedAt == nil) {
-					t.Fatalf("unassigned file fields=%#v", document)
-				}
 			}
 			if !mapsEqual(seen, want) {
 				t.Fatalf("paths=%#v, want %#v", seen, want)
@@ -472,8 +466,8 @@ func TestSearchLibraryFindsRawSingletonsWithGramAndTrigramText(t *testing.T) {
 		text string
 		path string
 	}{
-		"typo near beginning": {text: "zyqtoken", path: fuzzyBeginning.RelativePath},
-		"typo near end":       {text: "endingtokem", path: fuzzyEnd.RelativePath},
+		"typo near beginning": {text: "zyqtoken", path: "Fuzzy"},
+		"typo near end":       {text: "endingtokem", path: "Fuzzy"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			page, err := repository.SearchLibrary(ctx, SearchQuery{
@@ -978,8 +972,8 @@ func TestSearchCursorBindsQueryAndSnapshotsAndRejectsMalformedTokens(t *testing.
 	}
 }
 
-func TestSearchLibraryRanksRawTiersAndPreservesDuplicateMetadata(t *testing.T) {
-	repository, ctx, duplicateGroupID := rawSearchFixture(t)
+func TestSearchLibraryReturnsMatchingFoldersAndKeepsRootFiles(t *testing.T) {
+	repository, ctx, _ := rawSearchFixture(t)
 	page, err := repository.SearchLibrary(ctx, SearchQuery{
 		RootIDs: []string{"raw"}, Mode: SearchModeRaw, Text: "dune",
 		Sort: BookSortTitle, Limit: 10,
@@ -987,23 +981,37 @@ func TestSearchLibraryRanksRawTiersAndPreservesDuplicateMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{
-		"Dune", "Dune Messiah", "my-dune-copy.m4b", "metadata.m4b", "typo.m4b",
+	want := map[string]SearchEntityKind{
+		"Dune": SearchEntityFolder, "Dune Messiah": SearchEntityFolder,
+		"Shelf": SearchEntityFolder, "Metadata": SearchEntityFolder,
+		"Typo": SearchEntityFolder, "root-dune.m4b": SearchEntityFile,
 	}
-	var names []string
+	got := make(map[string]SearchEntityKind)
 	for _, group := range page.Groups {
 		if group.Duplicate || len(group.Documents) != 1 || group.ID != group.Documents[0].ID {
 			t.Fatalf("raw group=%#v", group)
 		}
 		document := group.Documents[0]
-		names = append(names, document.DisplayName)
-		if document.DisplayName == "my-dune-copy.m4b" &&
-			(document.DuplicateGroupID != duplicateGroupID || document.DuplicateCount != 2) {
-			t.Fatalf("duplicate metadata=%#v", document)
+		if _, exists := got[document.DisplayName]; exists {
+			t.Fatalf("duplicate result for %q", document.DisplayName)
 		}
+		got[document.DisplayName] = document.EntityKind
 	}
-	if strings.Join(names, "|") != strings.Join(want, "|") {
-		t.Fatalf("names=%v, want %v", names, want)
+	if !mapsEqual(got, want) {
+		t.Fatalf("results=%v, want %v", got, want)
+	}
+}
+
+func TestBuildRawSearchStatementResolvesNestedFilesBeforePagination(t *testing.T) {
+	statement := buildRawSearchStatement(SearchQuery{Limit: 25}, []string{"raw"}, "dune", nil)
+	for _, fragment := range []string{
+		"resolved_targets as (",
+		"regexp_replace(m.relative_path,'/[^/]+$','')",
+		"distinct on (root_id,resolved_document_id)",
+	} {
+		if !strings.Contains(statement.SQL, fragment) {
+			t.Fatalf("statement does not contain %q:\n%s", fragment, statement.SQL)
+		}
 	}
 }
 
@@ -1029,7 +1037,12 @@ func TestSearchLibraryPaginatesRawWithBoundAndStaleCursor(t *testing.T) {
 		cursors = append(cursors, page.NextCursor)
 		query.Cursor = page.NextCursor
 	}
-	if strings.Join(names, "|") != "Dune|Dune Messiah|my-dune-copy.m4b|metadata.m4b|typo.m4b" || len(cursors) != 2 {
+	got := make(map[string]bool, len(names))
+	for _, name := range names {
+		got[name] = true
+	}
+	if len(names) != 6 || len(got) != 6 || !got["Dune"] || !got["Dune Messiah"] ||
+		!got["Shelf"] || !got["Metadata"] || !got["Typo"] || !got["root-dune.m4b"] || len(cursors) != 2 {
 		t.Fatalf("names=%v cursors=%v", names, cursors)
 	}
 	repeated, err := repository.SearchLibrary(ctx, SearchQuery{
@@ -1203,9 +1216,14 @@ func rawSearchFixture(t *testing.T) (*PostgresRepository, context.Context, uuid.
 	seeds := []rawSearchDocumentSeed{
 		{kind: SearchEntityFolder, path: "Dune", name: "Dune", compactName: "dune", compactPath: "dune", searchCompact: "dune", duplicateCount: 1},
 		{kind: SearchEntityFolder, path: "Dune Messiah", name: "Dune Messiah", compactName: "dunemessiah", compactPath: "dunemessiah", searchCompact: "dunemessiah", duplicateCount: 1},
+		{kind: SearchEntityFolder, path: "Shelf", name: "Shelf", compactName: "shelf", compactPath: "shelf", searchCompact: "shelf", duplicateCount: 1},
+		{kind: SearchEntityFolder, path: "Metadata", name: "Metadata", compactName: "metadata", compactPath: "metadata", searchCompact: "metadata", duplicateCount: 1},
+		{kind: SearchEntityFolder, path: "Typo", name: "Typo", compactName: "typo", compactPath: "typo", searchCompact: "typo", duplicateCount: 1},
 		{kind: SearchEntityFile, path: "Shelf/my-dune-copy.m4b", name: "my-dune-copy.m4b", compactName: "mydunecopym4b", compactPath: "shelfmydunecopym4b", searchCompact: "mydunecopym4b", duplicateGroupID: duplicateGroupID, duplicateCount: 2},
+		{kind: SearchEntityFile, path: "Shelf/dune-extra.mp3", name: "dune-extra.mp3", compactName: "duneextramp3", compactPath: "shelfduneextramp3", searchCompact: "duneextramp3", duplicateCount: 1},
 		{kind: SearchEntityFile, path: "Metadata/metadata.m4b", name: "metadata.m4b", compactName: "metadatam4b", compactPath: "metadatametadatam4b", compactMetadata: "dunewriter", searchCompact: "metadatam4bdunewriter", duplicateCount: 1},
 		{kind: SearchEntityFile, path: "Typo/typo.m4b", name: "typo.m4b", compactName: "typom4b", compactPath: "typotypom4b", searchCompact: "dunx", duplicateCount: 1},
+		{kind: SearchEntityFile, path: "root-dune.m4b", name: "root-dune.m4b", compactName: "rootdunem4b", compactPath: "rootdunem4b", searchCompact: "rootdunem4b", duplicateCount: 1},
 	}
 	for _, seed := range seeds {
 		if _, err := pool.Exec(ctx, `

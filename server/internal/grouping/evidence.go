@@ -254,6 +254,7 @@ func clustersFromIdentityGroups(groups map[string][]catalog.SourceFile, identiti
 
 func inferredTreeBook(tree Tree, cluster treeCluster, covers, companions []catalog.SourceFile) catalog.InferredBook {
 	identity := cluster.identity
+	folderSeries, folderPosition, folderTitle := parseFolderSeries(path.Base(strings.TrimSuffix(tree.ScopePath, "/")))
 	if identity.title == "" {
 		identity = consistentTreeIdentity(cluster.audio)
 	}
@@ -268,7 +269,10 @@ func inferredTreeBook(tree Tree, cluster treeCluster, covers, companions []catal
 		title = displayTreeStem(cluster.audio[0].RelativePath, identity.title)
 	}
 	if title == "" {
-		title = path.Base(strings.TrimSuffix(tree.ScopePath, "/"))
+		title = folderTitle
+		if title == "" {
+			title = path.Base(strings.TrimSuffix(tree.ScopePath, "/"))
+		}
 		if title == "." || title == "" {
 			title = displayTreeStem(cluster.audio[0].RelativePath, normalizedTreeFilename(cluster.audio[0].RelativePath))
 		}
@@ -287,6 +291,11 @@ func inferredTreeBook(tree Tree, cluster treeCluster, covers, companions []catal
 		MetadataSource: catalog.MetadataInferred, Confidence: treeConfidence(cluster.reason),
 		ReviewState: cluster.review, ReviewReason: cluster.reason,
 		FileRoles: make(map[uuid.UUID]string),
+	}
+	book.Series = treeDisplayValue(cluster.audio, "series")
+	if book.Series == "" && folderSeries != "" && normalizeComparableTitle(title) == normalizeComparableTitle(folderTitle) {
+		book.Series = folderSeries
+		book.SeriesPosition = folderPosition
 	}
 	if treeDisplayValue(cluster.audio, "title") != "" || author != "" {
 		book.MetadataSource = catalog.MetadataLocal

@@ -229,6 +229,37 @@ func TestBookCoverServesRecognizedLocalArtworkWithoutChangingSourceTree(t *testi
 	}
 }
 
+func TestBookCoverFallsBackToDescriptiveArtworkFilename(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	bookFolder := filepath.Join(root, "Book")
+	if err := os.MkdirAll(bookFolder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("\xff\xd8\xff\xe0descriptive-cover")
+	if err := os.WriteFile(filepath.Join(bookFolder, "Dune - cover art.jpg"), want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bookFolder, "publisher-logo.png"), []byte("logo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := library.NewResolver([]config.Root{{ID: "audio", ContainerPath: root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bookID := uuid.New()
+	repository := &catalogAPIFake{details: map[uuid.UUID]catalog.BookDetail{
+		bookID: {Book: catalog.Book{ID: bookID, RootID: "audio", SourceFolder: "Book", Title: "Dune"}},
+	}}
+	request := newJSONRequest(t, "GET", "/v1/books/"+bookID.String()+"/cover", nil)
+	request.SetPathValue("bookId", bookID.String())
+	response := performHandler(bookCoverHandler(repository, resolver), request)
+	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), want) {
+		t.Fatalf("cover = %d %q", response.Code, response.Body.Bytes())
+	}
+}
+
 func TestBookHandlersRejectInvalidUUIDsWithStableErrors(t *testing.T) {
 	t.Parallel()
 

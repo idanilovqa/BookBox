@@ -357,6 +357,8 @@ class LibraryViewModelTest {
             first.setSort(BookSort.YEAR)
             first.toggleSelection("book-7")
             first.saveGridPosition(index = 18, offset = 42)
+            first.setLayout(LibraryLayout.COMPACT)
+            first.saveCompactPosition(index = 31, offset = 7)
 
             val restored = LibraryViewModel(savedState, source)
 
@@ -366,6 +368,9 @@ class LibraryViewModelTest {
             assertEquals(setOf("book-7"), restored.state.value.selectedBookIds)
             assertEquals(18, restored.state.value.scrollIndex)
             assertEquals(42, restored.state.value.scrollOffset)
+            assertEquals(LibraryLayout.COMPACT, restored.state.value.layout)
+            assertEquals(31, restored.state.value.compactScrollIndex)
+            assertEquals(7, restored.state.value.compactScrollOffset)
         }
 
     private class RecordingCatalogSource(

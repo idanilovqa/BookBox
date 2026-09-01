@@ -35,6 +35,28 @@ func TestInferKeepsChaptersAndSplitsDistinctM4BBooks(t *testing.T) {
 	}
 }
 
+func TestInferPreservesConsistentLocalSeriesMetadata(t *testing.T) {
+	first := audio("01.mp3", "Leviathan Wakes", "James S. A. Corey")
+	first.Metadata.Series = "The Expanse"
+	second := audio("02.mp3", "Leviathan Wakes", "James S. A. Corey")
+	second.Metadata.Series = "The Expanse"
+	books := Infer(folder("The Expanse 01 - Leviathan Wakes", first, second))
+	if len(books) != 1 || books[0].Series != "The Expanse" {
+		t.Fatalf("books=%#v, want preserved series metadata", books)
+	}
+}
+
+func TestInferParsesSeriesAndPositionFromDescriptiveFolder(t *testing.T) {
+	books := Infer(folder(
+		"The Expanse 01 - Leviathan Wakes",
+		audio("chapter-01.mp3", "", ""),
+	))
+	if len(books) != 1 || books[0].Title != "Leviathan Wakes" ||
+		books[0].Series != "The Expanse" || books[0].SeriesPosition != "01" {
+		t.Fatalf("books=%#v, want folder-derived series identity", books)
+	}
+}
+
 func TestInferKeepsFilenameOnlyDifferencesForReview(t *testing.T) {
 	got := Infer(folder("Unknown",
 		audio("Dune.m4b", "", ""),

@@ -10,6 +10,7 @@ import com.rendref.bookbox.core.network.ReviewApi
 import com.rendref.bookbox.core.network.SessionApi
 import com.rendref.bookbox.core.network.SettingsApi
 import com.rendref.bookbox.core.network.TransferManifestApi
+import com.rendref.bookbox.core.network.installCatalogImageLoader
 import com.rendref.bookbox.core.repository.BrowseRepository
 import com.rendref.bookbox.core.repository.BrowseSource
 import com.rendref.bookbox.core.repository.CatalogRepository
@@ -54,6 +55,7 @@ internal class BookBoxRuntime private constructor(
         val client = clients.create(saved)
         val session = session(saved)
         val calls = AuthenticatedCall(client, session)
+        installCatalogImageLoader(calls)
         val browseApi = BrowseApi(calls, baseUrl)
         val settingsApi = SettingsApi(calls, baseUrl)
         val destination = DestinationStore(

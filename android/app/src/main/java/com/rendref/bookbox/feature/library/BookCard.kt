@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -22,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.painter.ColorPainter
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -196,6 +199,96 @@ fun AudiobookCard(
                     Text("View raw files")
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun CompactAudiobookCard(
+    book: BookCardDto,
+    selected: Boolean,
+    onAction: (LibraryAction) -> Unit,
+    modifier: Modifier = Modifier,
+    duplicate: Boolean = false,
+    showRoot: Boolean = false,
+) {
+    val context = if (showRoot && book.rootId.isNotBlank()) " from ${book.rootId}" else ""
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(80.dp)
+            .clickable(onClickLabel = "Open ${book.title}$context") {
+                onAction(LibraryAction.OpenBook(book.id))
+            },
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AsyncImage(
+                model = book.coverUrl,
+                contentDescription = "Cover of ${book.title}$context",
+                modifier = Modifier
+                    .width(54.dp)
+                    .height(80.dp)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentScale = ContentScale.Crop,
+                placeholder = ColorPainter(MaterialTheme.colorScheme.primaryContainer),
+                error = ColorPainter(MaterialTheme.colorScheme.primaryContainer),
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalArrangement = Arrangement.spacedBy(1.dp),
+            ) {
+                Text(
+                    text = book.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = book.authors.joinToString().ifBlank { "Unknown author" },
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                book.series?.takeIf(String::isNotBlank)?.let { series ->
+                    Text(
+                        text = listOfNotNull(
+                            series,
+                            book.seriesPosition?.takeIf(String::isNotBlank),
+                        ).joinToString(" · "),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.82f),
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (duplicate) {
+                    Text(
+                        text = "duplicate",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+            TextButton(onClick = { onAction(LibraryAction.ViewRawFiles(book.id)) }) {
+                Text("Raw", style = MaterialTheme.typography.labelSmall)
+            }
+            Checkbox(
+                checked = selected,
+                onCheckedChange = { onAction(LibraryAction.ToggleSelected(book.id)) },
+                modifier = Modifier.semantics {
+                    contentDescription = "Select ${book.title}$context"
+                },
+            )
         }
     }
 }

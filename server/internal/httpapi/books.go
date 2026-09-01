@@ -24,6 +24,7 @@ type BookCardResponse struct {
 	PublicationYear *int     `json:"publicationYear,omitempty"`
 	Genres          []string `json:"genres"`
 	Series          string   `json:"series,omitempty"`
+	SeriesPosition  string   `json:"seriesPosition,omitempty"`
 	Narrators       []string `json:"narrators"`
 	CoverURL        string   `json:"coverUrl,omitempty"`
 	ReviewState     string   `json:"reviewState"`
@@ -271,6 +272,46 @@ func currentBookCover(
 			}
 		}
 	}
+	type artworkCandidate struct {
+		name  string
+		score int
+		size  int64
+	}
+	var best artworkCandidate
+	title := strings.ToLower(strings.TrimSpace(book.Title))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		extension := strings.ToLower(path.Ext(entry.Name()))
+		if extension != ".jpg" && extension != ".jpeg" && extension != ".png" && extension != ".webp" {
+			continue
+		}
+		stem := strings.ToLower(strings.TrimSuffix(entry.Name(), path.Ext(entry.Name())))
+		score := 1
+		for _, signal := range []string{"cover", "front", "folder", "jacket", "artwork"} {
+			if strings.Contains(stem, signal) {
+				score += 100
+				break
+			}
+		}
+		if title != "" && strings.Contains(stem, title) {
+			score += 50
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		candidate := artworkCandidate{name: entry.Name(), score: score, size: info.Size()}
+		if candidate.score > best.score ||
+			(candidate.score == best.score && candidate.size > best.size) ||
+			(candidate.score == best.score && candidate.size == best.size && candidate.name < best.name) {
+			best = candidate
+		}
+	}
+	if best.name != "" {
+		return path.Join(book.SourceFolder, best.name), nil
+	}
 	return "", os.ErrNotExist
 }
 
@@ -309,7 +350,8 @@ func bookCard(book catalog.Book) BookCardResponse {
 	return BookCardResponse{
 		ID: book.ID.String(), RootID: book.RootID, Title: book.Title, Authors: nonNil(book.Authors),
 		PublicationYear: book.PublicationYear, Genres: nonNil(book.Genres),
-		Series: book.Series, Narrators: nonNil(book.Narrators),
+		Series: book.Series, SeriesPosition: book.SeriesPosition,
+		Narrators:   nonNil(book.Narrators),
 		CoverURL:    "/v1/books/" + book.ID.String() + "/cover",
 		ReviewState: book.ReviewState, SourceFolder: book.SourceFolder,
 	}

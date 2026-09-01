@@ -127,7 +127,7 @@ func TestScanRootQueuesOnlineEnrichmentAfterGrouping(t *testing.T) {
 	if !reflect.DeepEqual(gotKinds, wantKinds) {
 		t.Fatalf("queued kinds=%v, want %v", gotKinds, wantKinds)
 	}
-	if got := repository.dedupeKeys[0]; got != "enrich_book:"+bookID.String() {
+	if got := repository.dedupeKeys[0]; got != enrichmentDedupeKey(repository.books[0]) {
 		t.Fatalf("enrichment dedupe key=%q", got)
 	}
 	wantEvents := []string{
@@ -460,7 +460,7 @@ func TestRegroupScopeQueuesOnlineEnrichmentAfterGrouping(t *testing.T) {
 	if err := handler.Handle(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"publish_search:audiobooks:6", "enrich_book:" + bookID.String()}
+	want := []string{"publish_search:audiobooks:6", enrichmentDedupeKey(repository.books[0])}
 	if !reflect.DeepEqual(repository.dedupeKeys, want) {
 		t.Fatalf("dedupe keys=%v, want %v", repository.dedupeKeys, want)
 	}
@@ -488,7 +488,7 @@ func TestRegroupScopeQueuesEnrichmentOnlyInsideScope(t *testing.T) {
 	if err := (RegroupScopeHandler{Repo: repository}).Handle(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"publish_search:audiobooks:6", "enrich_book:" + inside.String()}
+	want := []string{"publish_search:audiobooks:6", enrichmentDedupeKey(repository.books[0])}
 	if !reflect.DeepEqual(repository.dedupeKeys, want) {
 		t.Fatalf("keys=%v, want %v", repository.dedupeKeys, want)
 	}

@@ -971,6 +971,36 @@ func TestPostgresRepositoryDeduplicatesOnlyActiveJobs(t *testing.T) {
 	}
 }
 
+func TestPostgresRepositoryKeepsTerminalEnrichmentAsCoordinationRecord(t *testing.T) {
+	pool := testpostgres.Open(t)
+	ctx := context.Background()
+	if err := database.Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewPostgresRepository(pool)
+	bookID := uuid.NewString()
+	first, err := repository.EnqueueDeduplicated(ctx, WorkerJob{
+		ID: uuid.New(), Kind: JobEnrichBook, Payload: map[string]any{"bookId": bookID},
+	}, "enrich_book:"+bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`update worker_jobs set status='succeeded', updated_at=now() where id=$1`,
+		first.ID); err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := repository.EnqueueDeduplicated(ctx, WorkerJob{
+		ID: uuid.New(), Kind: JobEnrichBook, Payload: map[string]any{"bookId": bookID},
+	}, "enrich_book:"+bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated.ID != first.ID || repeated.Status != JobSucceeded {
+		t.Fatalf("repeated=%#v, want terminal job %s", repeated, first.ID)
+	}
+}
+
 func TestClaimJobPrioritizesStructuralWorkOverOlderEnrichment(t *testing.T) {
 	repository, _ := workerJobFixture(t)
 	ctx := context.Background()

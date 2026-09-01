@@ -8,9 +8,19 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 const defaultOpenLibraryBaseURL = "https://openlibrary.org"
+
+const (
+	openLibraryRequestInterval = time.Second / 3
+	openLibraryHitTTL          = 30 * 24 * time.Hour
+	openLibraryEmptyTTL        = 7 * 24 * time.Hour
+)
+
+var openLibraryRequestGate requestIntervalGate
 
 var openLibraryFields = []string{
 	"key",
@@ -28,6 +38,52 @@ var openLibraryFields = []string{
 type OpenLibrary struct {
 	endpoint *url.URL
 	client   *http.Client
+	cacheMu  sync.Mutex
+	cache    map[string]openLibraryCacheEntry
+}
+
+type openLibraryCacheEntry struct {
+	candidates []Candidate
+	expiresAt  time.Time
+}
+
+type requestIntervalGate struct {
+	mu   sync.Mutex
+	next time.Time
+}
+
+func (gate *requestIntervalGate) wait(ctx context.Context) error {
+	gate.mu.Lock()
+	now := time.Now()
+	start := now
+	if gate.next.After(start) {
+		start = gate.next
+	}
+	gate.next = start.Add(openLibraryRequestInterval)
+	gate.mu.Unlock()
+	delay := time.Until(start)
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+type openLibraryRateLimitedTransport struct {
+	base http.RoundTripper
+}
+
+func (transport openLibraryRateLimitedTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if err := openLibraryRequestGate.wait(request.Context()); err != nil {
+		return nil, err
+	}
+	return transport.base.RoundTrip(request)
 }
 
 func NewOpenLibrary(baseURL string, client *http.Client) (*OpenLibrary, error) {
@@ -47,9 +103,16 @@ func NewOpenLibrary(baseURL string, client *http.Client) (*OpenLibrary, error) {
 	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/search.json"
 	endpoint.RawQuery = ""
 	endpoint.Fragment = ""
+	providerClient := cloneHTTPClient(client)
+	baseTransport := providerClient.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	providerClient.Transport = openLibraryRateLimitedTransport{base: baseTransport}
 	return &OpenLibrary{
 		endpoint: endpoint,
-		client:   cloneHTTPClient(client),
+		client:   providerClient,
+		cache:    make(map[string]openLibraryCacheEntry),
 	}, nil
 }
 
@@ -60,10 +123,28 @@ func (provider *OpenLibrary) Search(
 	if provider == nil || provider.endpoint == nil || provider.client == nil {
 		return nil, errors.New("Open Library provider is not configured")
 	}
+	cacheKey := strings.ToLower(strings.Join([]string{
+		strings.TrimSpace(query.Title), strings.TrimSpace(query.Author), strings.TrimSpace(query.ISBN),
+	}, "\x00"))
+	provider.cacheMu.Lock()
+	cached, cachedOK := provider.cache[cacheKey]
+	if cachedOK && time.Now().Before(cached.expiresAt) {
+		result := append([]Candidate(nil), cached.candidates...)
+		provider.cacheMu.Unlock()
+		return result, nil
+	}
+	if cachedOK {
+		delete(provider.cache, cacheKey)
+	}
+	provider.cacheMu.Unlock()
 	requestURL := *provider.endpoint
 	parameters := requestURL.Query()
-	parameters.Set("title", strings.TrimSpace(query.Title))
-	parameters.Set("author", strings.TrimSpace(query.Author))
+	if title := strings.TrimSpace(query.Title); title != "" {
+		parameters.Set("title", title)
+	}
+	if author := strings.TrimSpace(query.Author); author != "" {
+		parameters.Set("author", author)
+	}
 	if isbn := strings.TrimSpace(query.ISBN); isbn != "" {
 		parameters.Set("isbn", isbn)
 	}
@@ -90,6 +171,16 @@ func (provider *OpenLibrary) Search(
 		}
 		candidates = append(candidates, candidate)
 	}
+	ttl := openLibraryHitTTL
+	if len(candidates) == 0 {
+		ttl = openLibraryEmptyTTL
+	}
+	provider.cacheMu.Lock()
+	provider.cache[cacheKey] = openLibraryCacheEntry{
+		candidates: append([]Candidate(nil), candidates...),
+		expiresAt:  time.Now().Add(ttl),
+	}
+	provider.cacheMu.Unlock()
 	return candidates, nil
 }
 

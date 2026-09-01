@@ -66,8 +66,8 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 	if err := pool.QueryRow(ctx, "select count(*) from schema_migrations").Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 7 {
-		t.Fatalf("schema migration rows = %d, want 7", applied)
+	if applied != 8 {
+		t.Fatalf("schema migration rows = %d, want 8", applied)
 	}
 
 	var rejectsCrossRootScan bool
@@ -219,8 +219,8 @@ func TestMigrateBackfillsOnlyNeverEnqueuedPendingFingerprints(t *testing.T) {
 	if err := pool.QueryRow(ctx, `select count(*) from schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 7 {
-		t.Fatalf("schema migration rows=%d, want 7", migrationCount)
+	if migrationCount != 8 {
+		t.Fatalf("schema migration rows=%d, want 8", migrationCount)
 	}
 
 	type fingerprintIntent struct {

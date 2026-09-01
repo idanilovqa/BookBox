@@ -280,22 +280,48 @@ func buildRawSearchStatement(
 	}
 	limitPlaceholder := addArgument(query.Limit + 1)
 	return rawSearchStatement{SQL: `
-		with ranked as (
+		with matched as (
 		  select root_id, document_id, entity_kind, book_id, relative_path, display_name,
-		         size, modified_at, title, authors, compact_authors, series, narrators,
+		         size, modified_at, title, authors, compact_authors, series, series_position, narrators,
 		         genres, compact_genres, coalesce(review_state,'') as review_state,
 		         coalesce(review_reason,'') as review_reason,
 		         publication_year, created_at, recently_scanned_at, filenames, duration_ms,
 		         duplicate_group_id, duplicate_count, compact_name, compact_path,
 		         compact_metadata, search_compact, search_terms, search_grams,
 		         ` + rankExpression + ` as rank_value,
-		         word_similarity($2,search_compact)::float8 as score_value,
-		         compact_name as sort_value
+		         word_similarity($2,search_compact)::float8 as score_value
 		  from library_search_documents
 		  where root_id=$1 and entity_kind in ('folder','file') and ` + textCondition + `
+		), resolved_targets as (
+		  select m.*,
+		         coalesce(parent.document_id,m.document_id) as resolved_document_id
+		  from matched m
+		  left join library_search_documents parent
+		    on m.entity_kind='file'
+		   and strpos(m.relative_path,'/')>0
+		   and parent.root_id=m.root_id
+		   and parent.entity_kind='folder'
+		   and parent.relative_path=regexp_replace(m.relative_path,'/[^/]+$','')
+		), deduplicated as (
+		  select distinct on (root_id,resolved_document_id)
+		         root_id,resolved_document_id,rank_value,score_value
+		  from resolved_targets
+		  order by root_id,resolved_document_id,rank_value,score_value desc,relative_path,document_id
+		), ranked as (
+		  select d.root_id,d.document_id,d.entity_kind,d.book_id,d.relative_path,d.display_name,
+		         d.size,d.modified_at,d.title,d.authors,d.compact_authors,d.series,d.series_position,d.narrators,
+		         d.genres,d.compact_genres,coalesce(d.review_state,'') as review_state,
+		         coalesce(d.review_reason,'') as review_reason,d.publication_year,d.created_at,
+		         d.recently_scanned_at,d.filenames,d.duration_ms,d.duplicate_group_id,
+		         d.duplicate_count,d.compact_name,d.compact_path,d.compact_metadata,
+		         d.search_compact,d.search_terms,d.search_grams,
+		         best.rank_value,best.score_value,d.compact_name as sort_value
+		  from deduplicated best
+		  join library_search_documents d
+		    on d.root_id=best.root_id and d.document_id=best.resolved_document_id
 		)
 		select root_id, document_id, entity_kind, book_id, relative_path, display_name,
-		       size, modified_at, title, authors, compact_authors, series, narrators,
+		       size, modified_at, title, authors, compact_authors, series, series_position, narrators,
 		       genres, compact_genres, review_state, review_reason, publication_year, created_at,
 		       recently_scanned_at, filenames, duration_ms, duplicate_group_id,
 		       duplicate_count, compact_name, compact_path, compact_metadata,
@@ -461,7 +487,7 @@ func buildAudiobookSearchStatement(
 		branchOrder := "sort_value " + sortSpec.direction +
 			",compact_name,relative_path,entity_kind,root_id,document_id"
 		baseColumns := `root_id, document_id, entity_kind, book_id, relative_path, display_name,
-		       size, modified_at, title, authors, compact_authors, series, narrators,
+		       size, modified_at, title, authors, compact_authors, series, series_position, narrators,
 		       genres, compact_genres, review_state, review_reason, publication_year, created_at,
 		       recently_scanned_at, filenames, duration_ms, duplicate_group_id,
 		       duplicate_count, compact_name, compact_path, compact_metadata,
@@ -513,7 +539,7 @@ func buildAudiobookSearchStatement(
 			  select * from duplicate_leaders
 			)
 			select root_id, document_id, entity_kind, book_id, relative_path, display_name,
-			       size, modified_at, title, authors, compact_authors, series, narrators,
+			       size, modified_at, title, authors, compact_authors, series, series_position, narrators,
 			       genres, compact_genres, coalesce(review_state,''), coalesce(review_reason,''), publication_year, created_at,
 			       recently_scanned_at, filenames, duration_ms, duplicate_group_id,
 			       duplicate_count, compact_name, compact_path, compact_metadata,
@@ -526,7 +552,7 @@ func buildAudiobookSearchStatement(
 	return rawSearchStatement{SQL: `
 		with matched as (
 		select root_id, document_id, entity_kind, book_id, relative_path, display_name,
-		       size, modified_at, title, authors, compact_authors, series, narrators,
+		       size, modified_at, title, authors, compact_authors, series, series_position, narrators,
 		       genres, compact_genres, coalesce(review_state,'') as review_state,
 		       coalesce(review_reason,'') as review_reason, publication_year, created_at,
 		       recently_scanned_at, filenames, duration_ms, duplicate_group_id,
@@ -546,7 +572,7 @@ func buildAudiobookSearchStatement(
 		  select * from matched where group_member_rank=1
 		)
 		select root_id, document_id, entity_kind, book_id, relative_path, display_name,
-		       size, modified_at, title, authors, compact_authors, series, narrators,
+		       size, modified_at, title, authors, compact_authors, series, series_position, narrators,
 		       genres, compact_genres, coalesce(review_state,''), coalesce(review_reason,''), publication_year, created_at,
 		       recently_scanned_at, filenames, duration_ms, duplicate_group_id,
 		       duplicate_count, compact_name, compact_path, compact_metadata,
@@ -625,7 +651,7 @@ func searchAudiobookGroupsTx(
 	hydratedRows, err := transaction.Query(ctx, `
 		select d.root_id, d.document_id, d.entity_kind, d.book_id,
 		       d.relative_path, d.display_name, d.size, d.modified_at, d.title,
-		       d.authors, d.compact_authors, d.series, d.narrators, d.genres,
+		       d.authors, d.compact_authors, d.series, d.series_position, d.narrators, d.genres,
 		       d.compact_genres, coalesce(d.review_state,''), coalesce(d.review_reason,''), d.publication_year,
 		       d.created_at, d.recently_scanned_at, d.filenames, d.duration_ms,
 		       d.duplicate_group_id, d.duplicate_count, d.compact_name,
@@ -1036,6 +1062,7 @@ func scanSearchDocumentWithExtras(row scanner, extras ...any) (SearchDocument, e
 		&document.RootID, &document.ID, &document.EntityKind, &bookID,
 		&document.RelativePath, &document.DisplayName, &document.Size, &document.ModifiedAt,
 		&document.Title, &document.Authors, &document.CompactAuthors, &document.Series,
+		&document.SeriesPosition,
 		&document.Narrators, &document.Genres, &document.CompactGenres, &document.ReviewState,
 		&document.ReviewReason, &document.PublicationYear, &document.CreatedAt,
 		&document.RecentlyScannedAt,
@@ -1342,19 +1369,19 @@ func publishSearchProjectionTx(
 		if _, err := transaction.Exec(ctx, `
 			insert into library_search_documents(
 				root_id, document_id, entity_kind, book_id, relative_path, display_name,
-				size, modified_at, title, authors, compact_authors, series, narrators,
+				size, modified_at, title, authors, compact_authors, series, series_position, narrators,
 				genres, compact_genres, review_state, review_reason, publication_year, created_at,
 				recently_scanned_at, filenames, duration_ms, duplicate_group_id,
 				duplicate_count, compact_name, compact_path, compact_metadata,
 				search_compact, search_terms, search_grams
 			) values (
 				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-				$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30
+				$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31
 			)
 		`, document.RootID, document.ID, document.EntityKind,
 			nullableUUID(document.BookID), document.RelativePath, document.DisplayName,
 			document.Size, document.ModifiedAt, document.Title, nonNilStrings(document.Authors),
-			nonNilStrings(document.CompactAuthors), document.Series,
+			nonNilStrings(document.CompactAuthors), document.Series, document.SeriesPosition,
 			nonNilStrings(document.Narrators), nonNilStrings(document.Genres),
 			nonNilStrings(document.CompactGenres), nullableText(document.ReviewState),
 			nullableText(document.ReviewReason), document.PublicationYear,

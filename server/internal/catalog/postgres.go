@@ -1780,6 +1780,27 @@ func (repository *PostgresRepository) EnqueueDeduplicated(
 	if job.MaxAttempts < 1 || job.MaxAttempts > 100 {
 		return WorkerJob{}, ErrInvalidData
 	}
+	// Enrichment is idempotent for a book until its dedupe key changes. Keep the
+	// terminal row as the coordination record so every scan does not recreate
+	// the same completed or exhausted request indefinitely.
+	if job.Kind == JobEnrichBook {
+		row := repository.pool.QueryRow(ctx, `
+			select id, kind, payload, status, run_after, attempts, max_attempts,
+			       locked_at, coalesce(locked_by,''), lease_until, lease_token,
+			       coalesce(last_error,''), created_at, updated_at
+			from worker_jobs
+			where kind=$1 and dedupe_key=$2
+			order by created_at desc, id desc
+			limit 1
+		`, job.Kind, dedupeKey)
+		existing, scanErr := scanWorkerJob(row)
+		if scanErr == nil {
+			return existing, nil
+		}
+		if !errors.Is(scanErr, pgx.ErrNoRows) {
+			return WorkerJob{}, fmt.Errorf("load prior enrichment job: %w", scanErr)
+		}
+	}
 	row := repository.pool.QueryRow(ctx, `
 		insert into worker_jobs(
 			id, kind, dedupe_key, payload, run_after, max_attempts

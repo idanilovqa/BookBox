@@ -142,6 +142,7 @@ data class BookCardDto(
     val publicationYear: Int? = null,
     val genres: List<String> = emptyList(),
     val series: String? = null,
+    val seriesPosition: String? = null,
     val narrators: List<String> = emptyList(),
     val coverUrl: String? = null,
     val reviewState: String,

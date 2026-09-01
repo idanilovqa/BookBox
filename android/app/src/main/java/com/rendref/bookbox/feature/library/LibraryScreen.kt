@@ -7,8 +7,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -59,6 +61,8 @@ fun LibraryScreen(
     onSortChange: (BookSort) -> Unit,
     onLoadNextPage: () -> Unit,
     onGridPositionChange: (index: Int, offset: Int) -> Unit,
+    onCompactPositionChange: (index: Int, offset: Int) -> Unit,
+    onLayoutChange: (LibraryLayout) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var filtersVisible by remember { mutableStateOf(false) }
@@ -79,10 +83,21 @@ fun LibraryScreen(
         initialFirstVisibleItemIndex = state.scrollIndex,
         initialFirstVisibleItemScrollOffset = state.scrollOffset,
     )
-    val nearEnd by remember {
+    val compactState = rememberLazyListState(
+        initialFirstVisibleItemIndex = state.compactScrollIndex,
+        initialFirstVisibleItemScrollOffset = state.compactScrollOffset,
+    )
+    val nearEnd by remember(state.layout) {
         derivedStateOf {
-            val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            val total = gridState.layoutInfo.totalItemsCount
+            val lastVisible: Int
+            val total: Int
+            if (state.layout == LibraryLayout.COMPACT) {
+                lastVisible = compactState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                total = compactState.layoutInfo.totalItemsCount
+            } else {
+                lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                total = gridState.layoutInfo.totalItemsCount
+            }
             total > 0 && lastVisible >= total - 3
         }
     }
@@ -92,6 +107,13 @@ fun LibraryScreen(
             gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
         }.distinctUntilChanged().collect { (index, offset) ->
             onGridPositionChange(index, offset)
+        }
+    }
+    LaunchedEffect(compactState) {
+        snapshotFlow {
+            compactState.firstVisibleItemIndex to compactState.firstVisibleItemScrollOffset
+        }.distinctUntilChanged().collect { (index, offset) ->
+            onCompactPositionChange(index, offset)
         }
     }
     LaunchedEffect(nearEnd, state.nextCursor, state.isLoadingMore) {
@@ -153,6 +175,17 @@ fun LibraryScreen(
                     }
                 }
             }
+            OutlinedButton(onClick = {
+                onLayoutChange(
+                    if (state.layout == LibraryLayout.GRID) {
+                        LibraryLayout.COMPACT
+                    } else {
+                        LibraryLayout.GRID
+                    },
+                )
+            }) {
+                Text(if (state.layout == LibraryLayout.GRID) "Compact" else "Grid")
+            }
             if (state.selectedBookIds.isNotEmpty()) {
                 Text(
                     text = "${state.selectedBookIds.size} selected",
@@ -197,6 +230,56 @@ fun LibraryScreen(
             )
         }
 
+        if (state.layout == LibraryLayout.COMPACT) {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                state = compactState,
+                contentPadding = PaddingValues(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (state.isLoading && !hasResults) {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(32.dp),
+                            horizontalArrangement = Arrangement.Center,
+                        ) { CircularProgressIndicator() }
+                    }
+                } else if (!state.isIndexBuilding && !hasResults) {
+                    item {
+                        Text(
+                            text = "No audiobooks match these filters.",
+                            modifier = Modifier.padding(vertical = 32.dp),
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                        )
+                    }
+                }
+                items(displayedGroups, key = { "compact:${it.groupId}" }) { group ->
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        group.books.forEach { book ->
+                            CompactAudiobookCard(
+                                book = book,
+                                selected = book.id in state.selectedBookIds,
+                                onAction = onAction,
+                                duplicate = group.duplicate,
+                                showRoot = state.snapshots.size > 1,
+                            )
+                        }
+                    }
+                }
+                if (state.isLoadingMore) {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(20.dp),
+                            horizontalArrangement = Arrangement.Center,
+                        ) { CircularProgressIndicator() }
+                    }
+                }
+            }
+        } else {
         LazyVerticalGrid(
             columns = GridCells.Adaptive(160.dp),
             modifier = Modifier.weight(1f),
@@ -279,6 +362,7 @@ fun LibraryScreen(
                     }
                 }
             }
+        }
         }
     }
 

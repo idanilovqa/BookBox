@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -402,7 +404,7 @@ func queueIncompleteBooksInScope(
 			if _, err := repository.EnqueueDeduplicated(
 				ctx,
 				job,
-				"enrich_book:"+book.ID.String(),
+				enrichmentDedupeKey(book),
 			); err != nil {
 				return err
 			}
@@ -415,6 +417,22 @@ func queueIncompleteBooksInScope(
 		}
 		cursor = page.NextCursor
 	}
+}
+
+func enrichmentDedupeKey(book catalog.Book) string {
+	identity, _ := json.Marshal(struct {
+		Title       string
+		Authors     []string
+		Series      string
+		Position    string
+		Identifiers map[string]any
+	}{
+		Title: strings.TrimSpace(book.Title), Authors: book.Authors,
+		Series: strings.TrimSpace(book.Series), Position: strings.TrimSpace(book.SeriesPosition),
+		Identifiers: book.Identifiers,
+	})
+	fingerprint := sha256.Sum256(identity)
+	return fmt.Sprintf("enrich_book:%s:%x", book.ID, fingerprint[:8])
 }
 
 func sourceFile(scanRunID uuid.UUID, file scanner.File) catalog.SourceFile {

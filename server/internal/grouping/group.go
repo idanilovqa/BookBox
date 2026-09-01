@@ -33,7 +33,10 @@ var (
 	editionSuffix      = regexp.MustCompile(
 		`\s+(unabridged(\s+edition)?|abridged(\s+edition)?|audiobook|audio\s+book|revised\s+edition|anniversary\s+edition|\d+(st|nd|rd|th)\s+edition)$`,
 	)
-	yearPrefix = regexp.MustCompile(`^(\d{4})`)
+	yearPrefix          = regexp.MustCompile(`^(\d{4})`)
+	folderSeriesPattern = regexp.MustCompile(
+		`^(.{2,}?)\s+(?:book\s+|#)?(\d+(?:\.\d+)?)\s*[-–—:]\s*(.{2,})$`,
+	)
 )
 
 func Infer(folder scanner.Folder) []catalog.InferredBook {
@@ -216,11 +219,15 @@ func inferredBook(
 	groupingKey string,
 ) catalog.InferredBook {
 	primary := audioFiles[0]
+	folderSeries, folderPosition, folderTitle := parseFolderSeries(path.Base(folder.RelativePath))
 	title := consistentValue(audioFiles, func(file scanner.File) string {
 		return file.Metadata.Title
 	})
 	if title == "" {
-		title = path.Base(folder.RelativePath)
+		title = folderTitle
+		if title == "" {
+			title = path.Base(folder.RelativePath)
+		}
 		if title == "." || strings.TrimSpace(title) == "" {
 			title = strings.TrimSuffix(primary.Name, filepath.Ext(primary.Name))
 		}
@@ -234,6 +241,14 @@ func inferredBook(
 	genre := consistentValue(audioFiles, func(file scanner.File) string {
 		return file.Metadata.Genre
 	})
+	series := consistentValue(audioFiles, func(file scanner.File) string {
+		return file.Metadata.Series
+	})
+	seriesPosition := ""
+	if series == "" && folderSeries != "" && normalizeComparableTitle(title) == normalizeComparableTitle(folderTitle) {
+		series = folderSeries
+		seriesPosition = folderPosition
+	}
 	date := consistentValue(audioFiles, func(file scanner.File) string {
 		return file.Metadata.Date
 	})
@@ -265,6 +280,8 @@ func inferredBook(
 		Title:            title,
 		Authors:          stringSlice(author),
 		Narrators:        stringSlice(narrator),
+		Series:           series,
+		SeriesPosition:   seriesPosition,
 		Genres:           stringSlice(genre),
 		ProviderSubjects: []string{},
 		Identifiers:      map[string]any{},
@@ -281,6 +298,14 @@ func inferredBook(
 		}
 	}
 	return book
+}
+
+func parseFolderSeries(folderName string) (series, position, title string) {
+	match := folderSeriesPattern.FindStringSubmatch(strings.TrimSpace(folderName))
+	if len(match) != 4 {
+		return "", "", ""
+	}
+	return strings.TrimSpace(match[1]), strings.TrimSpace(match[2]), strings.TrimSpace(match[3])
 }
 
 func consistentValue(files []scanner.File, value func(scanner.File) string) string {

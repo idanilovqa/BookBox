@@ -57,6 +57,7 @@ type SearchDocument struct {
 	Title             string
 	Authors           []string
 	Series            string
+	SeriesPosition    string
 	Narrators         []string
 	Genres            []string
 	ReviewState       string

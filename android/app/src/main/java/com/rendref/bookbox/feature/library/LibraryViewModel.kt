@@ -28,6 +28,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
+enum class LibraryLayout { GRID, COMPACT }
+
 data class LibraryState(
     val query: BookQuery = BookQuery(),
     val books: List<BookCardDto> = emptyList(),
@@ -44,6 +46,9 @@ data class LibraryState(
     val errorMessage: String? = null,
     val scrollIndex: Int = 0,
     val scrollOffset: Int = 0,
+    val compactScrollIndex: Int = 0,
+    val compactScrollOffset: Int = 0,
+    val layout: LibraryLayout = LibraryLayout.GRID,
 )
 
 class LibraryViewModel(
@@ -61,6 +66,11 @@ class LibraryViewModel(
                 .orEmpty(),
             scrollIndex = savedState[SCROLL_INDEX_KEY] ?: 0,
             scrollOffset = savedState[SCROLL_OFFSET_KEY] ?: 0,
+            compactScrollIndex = savedState[COMPACT_SCROLL_INDEX_KEY] ?: 0,
+            compactScrollOffset = savedState[COMPACT_SCROLL_OFFSET_KEY] ?: 0,
+            layout = savedState.get<String>(LAYOUT_KEY)
+                ?.let { runCatching { LibraryLayout.valueOf(it) }.getOrNull() }
+                ?: LibraryLayout.GRID,
         ),
     )
     val state: StateFlow<LibraryState> = mutableState.asStateFlow()
@@ -272,6 +282,23 @@ class LibraryViewModel(
             )
         }
     }
+
+    fun saveCompactPosition(index: Int, offset: Int) {
+        val safeIndex = index.coerceAtLeast(0)
+        val safeOffset = offset.coerceAtLeast(0)
+        savedState[COMPACT_SCROLL_INDEX_KEY] = safeIndex
+        savedState[COMPACT_SCROLL_OFFSET_KEY] = safeOffset
+        mutableState.value = mutableState.value.copy(
+            compactScrollIndex = safeIndex,
+            compactScrollOffset = safeOffset,
+        )
+    }
+
+    fun setLayout(layout: LibraryLayout) {
+        if (mutableState.value.layout == layout) return
+        savedState[LAYOUT_KEY] = layout.name
+        mutableState.value = mutableState.value.copy(layout = layout)
+    }
 }
 
 private fun appendGroups(current: LibraryState, page: PagedBooks): List<BookSearchGroupDto> {
@@ -296,3 +323,6 @@ private const val QUERY_KEY = "library.query"
 private const val SELECTION_KEY = "library.selection"
 private const val SCROLL_INDEX_KEY = "library.scroll.index"
 private const val SCROLL_OFFSET_KEY = "library.scroll.offset"
+private const val COMPACT_SCROLL_INDEX_KEY = "library.compact.scroll.index"
+private const val COMPACT_SCROLL_OFFSET_KEY = "library.compact.scroll.offset"
+private const val LAYOUT_KEY = "library.layout"

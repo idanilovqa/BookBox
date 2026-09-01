@@ -126,6 +126,57 @@ func TestOpenLibrarySearchSkipsCandidatesWithoutStableIdentity(t *testing.T) {
 	}
 }
 
+func TestOpenLibrarySearchOmitsBlankParametersAndIdentifiesContact(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		query := request.URL.Query()
+		if _, exists := query["author"]; exists {
+			t.Errorf("blank author parameter was sent: %q", request.URL.RawQuery)
+		}
+		if query.Get("title") != "GL16" {
+			t.Errorf("title = %q", query.Get("title"))
+		}
+		if userAgent := request.Header.Get("User-Agent"); !strings.Contains(userAgent, "idanilovqa@gmail.com") {
+			t.Errorf("User-Agent does not identify a contact: %q", userAgent)
+		}
+		_, _ = writer.Write([]byte(`{"docs":[]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	provider, err := NewOpenLibrary(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Search(context.Background(), Query{Title: " GL16 "}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenLibrarySearchCachesIdenticalResults(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		_, _ = writer.Write([]byte(`{"docs":[{"key":"/works/OL1W","title":"Dune"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	provider, err := NewOpenLibrary(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		candidates, searchErr := provider.Search(context.Background(), Query{Title: " Dune "})
+		if searchErr != nil || len(candidates) != 1 {
+			t.Fatalf("candidates=%#v error=%v", candidates, searchErr)
+		}
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts=%d, want one cached request", attempts.Load())
+	}
+}
+
 func TestOpenLibrarySearchRetriesAtMostTwiceForRetryableStatus(t *testing.T) {
 	t.Parallel()
 

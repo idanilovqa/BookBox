@@ -142,7 +142,7 @@ func shapeBookGroups(values []catalog.SearchGroup, roots map[string]struct{}) ([
 }
 
 func searchBookCard(document catalog.SearchDocument) BookCardResponse {
-	return BookCardResponse{ID: document.BookID.String(), RootID: document.RootID, Title: document.Title, Authors: nonNil(document.Authors), PublicationYear: document.PublicationYear, Genres: nonNil(document.Genres), Series: document.Series, Narrators: nonNil(document.Narrators), CoverURL: "/v1/books/" + document.BookID.String() + "/cover", ReviewState: document.ReviewState, ReviewReason: document.ReviewReason, SourceFolder: document.RelativePath, DurationMS: document.DurationMS}
+	return BookCardResponse{ID: document.BookID.String(), RootID: document.RootID, Title: document.Title, Authors: nonNil(document.Authors), PublicationYear: document.PublicationYear, Genres: nonNil(document.Genres), Series: document.Series, SeriesPosition: document.SeriesPosition, Narrators: nonNil(document.Narrators), CoverURL: "/v1/books/" + document.BookID.String() + "/cover", ReviewState: document.ReviewState, ReviewReason: document.ReviewReason, SourceFolder: document.RelativePath, DurationMS: document.DurationMS}
 }
 
 func validReviewStateReason(state, reason string) bool {
