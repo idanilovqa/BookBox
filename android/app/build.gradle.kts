@@ -4,6 +4,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+val bookBoxVersionCode = 2
+val bookBoxVersionName = "1.1.0"
+
 android {
     namespace = "com.rendref.bookbox"
     compileSdk = 36
@@ -12,8 +15,8 @@ android {
         applicationId = "com.rendref.bookbox"
         minSdk = 36
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = bookBoxVersionCode
+        versionName = bookBoxVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -33,6 +36,16 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+}
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        variant.outputs.forEach { output ->
+            output.outputFileName.set(
+                "BookBox-$bookBoxVersionName-$bookBoxVersionCode-${variant.buildType}.apk",
+            )
+        }
     }
 }
 
