@@ -61,6 +61,10 @@ func TestApplyInventoryQueuesOnlyNewOrChangedFilesAndPreservesProbeState(t *test
 	newAudioID := uuid.New()
 	coverID := uuid.New()
 	ebookID := uuid.New()
+	coverFile := inventoryFile(coverID, "cover.jpg", "cover", "", 20, second)
+	coverFile.ImageWidth = 600
+	coverFile.ImageHeight = 900
+	coverFile.ImageFormat = "jpeg"
 	delta, err := repository.ApplyInventory(context.Background(), InventoryUpdate{
 		ScanRunID: scan.ID,
 		RootID:    "audiobooks",
@@ -73,7 +77,7 @@ func TestApplyInventoryQueuesOnlyNewOrChangedFilesAndPreservesProbeState(t *test
 			inventoryFile(companionID, "book.nfo", "companion", "nfo", 5, second),
 			inventoryFile(pendingAudioID, "pending.mp3", "audio", "", 8, first),
 			inventoryFile(pendingCompanionID, "pending.nfo", "companion", "nfo", 6, first),
-			inventoryFile(coverID, "cover.jpg", "cover", "", 20, second),
+			coverFile,
 			inventoryFile(ebookID, "book.epub", "companion", "ebook", 30, second),
 		},
 	})
@@ -86,6 +90,16 @@ func TestApplyInventoryQueuesOnlyNewOrChangedFilesAndPreservesProbeState(t *test
 		"pending.mp3", "pending.nfo", "same.mp3", "unchanged-failed.mp3")
 	if len(delta.MissingFileIDs) != 0 {
 		t.Fatalf("missing IDs=%v, want none", delta.MissingFileIDs)
+	}
+	var coverMedia map[string]any
+	if err := pool.QueryRow(context.Background(), `
+		select media from source_files where id=$1
+	`, coverID).Scan(&coverMedia); err != nil {
+		t.Fatal(err)
+	}
+	if coverMedia["width"] != float64(600) || coverMedia["height"] != float64(900) ||
+		coverMedia["imageFormat"] != "jpeg" {
+		t.Fatalf("cover media=%v", coverMedia)
 	}
 
 	var sameStatus string

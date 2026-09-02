@@ -125,6 +125,9 @@ type InventoryFile struct {
 	CompanionKind string
 	Size          int64
 	ModifiedAt    time.Time
+	ImageWidth    int
+	ImageHeight   int
+	ImageFormat   string
 }
 
 type InventoryUpdate struct {

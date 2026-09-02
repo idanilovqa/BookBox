@@ -163,6 +163,22 @@ func TestInventoryFullScopePreservesHiddenExclusionAndImageCandidateRules(t *tes
 	)
 }
 
+func TestInventoryRecordsBoundedImageHeaderEvidence(t *testing.T) {
+	root := inventoryFixture(t, map[string]string{
+		"Book/Oathbringer.png": string(pngHeader(600, 900)),
+	})
+	result, err := NewInventory(Options{}).Scan(
+		context.Background(), root, FullScope(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Files) != 1 || result.Files[0].ImageWidth != 600 ||
+		result.Files[0].ImageHeight != 900 || result.Files[0].ImageFormat != "png" {
+		t.Fatalf("image inventory = %#v", result.Files)
+	}
+}
+
 func TestInventoryKeepsStableIDsWhileRefreshingChangedFingerprints(t *testing.T) {
 	root := inventoryFixture(t, map[string]string{"Author/Book/01.mp3": "one"})
 	inventory := NewInventory(Options{})

@@ -45,6 +45,9 @@ type InventoryFile struct {
 	CompanionKind string
 	Size          int64
 	ModifiedAt    time.Time
+	ImageWidth    int
+	ImageHeight   int
+	ImageFormat   string
 }
 
 type InventoryResult struct {
@@ -189,6 +192,10 @@ func (inventory *Inventory) Scan(
 			})
 			return nil
 		}
+		imageWidth, imageHeight, imageFormat := 0, 0, ""
+		if kind == KindCover {
+			imageWidth, imageHeight, imageFormat, _ = inspectImageHeader(handle, info.Size())
+		}
 		currentHandle, _, currentOpenErr := resolver.OpenRegular(root.ID, relative)
 		if currentOpenErr != nil {
 			_ = handle.Close()
@@ -243,6 +250,9 @@ func (inventory *Inventory) Scan(
 			CompanionKind: companionKind,
 			Size:          info.Size(),
 			ModifiedAt:    info.ModTime().UTC(),
+			ImageWidth:    imageWidth,
+			ImageHeight:   imageHeight,
+			ImageFormat:   imageFormat,
 		}
 		if file.Folder == "." {
 			file.Folder = ""

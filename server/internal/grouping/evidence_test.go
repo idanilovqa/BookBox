@@ -95,6 +95,8 @@ func TestInferTreeAssignsTitleNamedCoverOnlyToMatchingSharedBook(t *testing.T) {
 	foundation := treeAudio("Shared/Foundation.m4b", "Foundation", "Isaac Asimov")
 	duneCover := treeFile("Shared/Dune.jpg", catalog.FileKindCover, "", nil)
 	logo := treeFile("Shared/publisher-logo.png", catalog.FileKindCover, "", nil)
+	duneCover.Media = map[string]any{"width": 600, "height": 900}
+	logo.Media = map[string]any{"width": 600, "height": 900}
 	result := InferTree(testTree("Shared", dune, foundation, duneCover, logo))
 
 	duneBook := treeBookByTitle(t, result.Books, "Dune")
@@ -105,6 +107,27 @@ func TestInferTreeAssignsTitleNamedCoverOnlyToMatchingSharedBook(t *testing.T) {
 	foundationBook := treeBookByTitle(t, result.Books, "Foundation")
 	if foundationBook.FileRoles[duneCover.ID] != "" || foundationBook.FileRoles[logo.ID] != "" {
 		t.Fatalf("Foundation cover roles=%#v", foundationBook.FileRoles)
+	}
+}
+
+func TestInferTreeRejectsInvalidTinyAndLandscapeCoverCandidates(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		media map[string]any
+	}{
+		{name: "invalid", media: nil},
+		{name: "tiny", media: map[string]any{"width": 80, "height": 120}},
+		{name: "landscape", media: map[string]any{"width": 1400, "height": 600}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			audio := treeAudio("Dune/Dune.m4b", "Dune", "Frank Herbert")
+			candidate := treeFile("Dune/Dune.jpg", catalog.FileKindCover, "", test.media)
+			result := InferTree(testTree("Dune", audio, candidate))
+			book := treeBookByTitle(t, result.Books, "Dune")
+			if book.FileRoles[candidate.ID] != "" {
+				t.Fatalf("cover role=%q", book.FileRoles[candidate.ID])
+			}
+		})
 	}
 }
 
@@ -285,6 +308,7 @@ func TestInferTreeApprovedCases(t *testing.T) {
 
 func TestInferTreeUsesStoredCompanionEvidenceAndSharesCovers(t *testing.T) {
 	cover := treeFile("Mixed/cover.jpg", catalog.FileKindCover, "", nil)
+	cover.Media = map[string]any{"width": 600, "height": 900}
 	ebook := treeFile("Mixed/Dune.epub", catalog.FileKindCompanion, catalog.CompanionEbook, nil)
 	cue := treeFile("Mixed/books.cue", catalog.FileKindCompanion, catalog.CompanionCue, map[string]any{
 		"references": []string{"dune-01.mp3"}, "title": "Dune", "author": "Frank Herbert",

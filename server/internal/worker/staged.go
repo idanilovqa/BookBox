@@ -215,6 +215,8 @@ func (handler *ScanRootHandler) handleInventory(
 			ID: file.ID, RootID: file.RootID, RelativePath: file.RelativePath,
 			FileKind: string(file.Kind), CompanionKind: file.CompanionKind,
 			Size: file.Size, ModifiedAt: file.ModifiedAt,
+			ImageWidth: file.ImageWidth, ImageHeight: file.ImageHeight,
+			ImageFormat: file.ImageFormat,
 		})
 	}
 	complete := len(result.Warnings) == 0

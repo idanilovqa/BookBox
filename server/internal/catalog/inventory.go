@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -67,6 +68,11 @@ func (repository *PostgresRepository) ApplyInventory(
 	for _, inventoryFile := range update.Files {
 		seenPaths[inventoryFile.RelativePath] = struct{}{}
 		inventoryFile.ModifiedAt = postgresTime(inventoryFile.ModifiedAt)
+		mediaValues := inventoryMedia(inventoryFile)
+		mediaJSON, err := json.Marshal(mediaValues)
+		if err != nil {
+			return InventoryDelta{}, ErrInvalidData
+		}
 		stored, exists := storedByPath[inventoryFile.RelativePath]
 		storedID := inventoryFile.ID
 		unchanged := false
@@ -88,10 +94,12 @@ func (repository *PostgresRepository) ApplyInventory(
 				    missing_at=null,
 				    file_kind=$6,
 				    companion_kind=nullif($7,''),
-				    updated_at=$8
+				    updated_at=$8,
+				    media=case when $6='cover' then $9::jsonb else media end
 				where id=$1 and root_id=$2
 			`, storedID, update.RootID, inventoryFile.Size, inventoryFile.ModifiedAt,
-				update.ScanRunID, inventoryFile.FileKind, inventoryFile.CompanionKind, now); err != nil {
+				update.ScanRunID, inventoryFile.FileKind, inventoryFile.CompanionKind, now,
+				mediaJSON); err != nil {
 				return InventoryDelta{}, classifyConstraint(err, "preserve inventory fingerprint")
 			}
 			current = stored
@@ -101,6 +109,13 @@ func (repository *PostgresRepository) ApplyInventory(
 			current.MissingAt = nil
 			current.FileKind = inventoryFile.FileKind
 			current.CompanionKind = inventoryFile.CompanionKind
+			if inventoryFile.FileKind == FileKindCover {
+				storedJSON, _ := json.Marshal(stored.Media)
+				current.Media = mediaValues
+				if !bytes.Equal(storedJSON, mediaJSON) {
+					regroupScopes[inventoryScope(inventoryFile.RelativePath)] = struct{}{}
+				}
+			}
 			delta.UnchangedFiles = append(delta.UnchangedFiles, current)
 		} else {
 			probeStatus := inventoryProbeStatus(inventoryFile)
@@ -110,14 +125,14 @@ func (repository *PostgresRepository) ApplyInventory(
 					scan_run_id, missing_at, file_kind, companion_kind,
 					probe_status, probe_version, probe_error, probed_at, updated_at
 				) values (
-					$1,$2,$3,$4,$5,null,'{}'::jsonb,$6,null,$7,nullif($8,''),
-					$9,0,null,null,$10
+					$1,$2,$3,$4,$5,null,$6::jsonb,$7,null,$8,nullif($9,''),
+					$10,0,null,null,$11
 				)
 				on conflict (root_id, relative_path) do update
 				set size=excluded.size,
 				    modified_at=excluded.modified_at,
 				    sha256=null,
-				    media='{}'::jsonb,
+				    media=excluded.media,
 				    scan_run_id=excluded.scan_run_id,
 				    missing_at=null,
 				    file_kind=excluded.file_kind,
@@ -128,14 +143,14 @@ func (repository *PostgresRepository) ApplyInventory(
 				    probed_at=null,
 				    updated_at=excluded.updated_at
 			`, storedID, update.RootID, inventoryFile.RelativePath, inventoryFile.Size,
-				inventoryFile.ModifiedAt, update.ScanRunID, inventoryFile.FileKind,
+				inventoryFile.ModifiedAt, mediaJSON, update.ScanRunID, inventoryFile.FileKind,
 				inventoryFile.CompanionKind, probeStatus, now); err != nil {
 				return InventoryDelta{}, classifyConstraint(err, "apply inventory fingerprint")
 			}
 			current = SourceFile{
 				ID: storedID, RootID: update.RootID, RelativePath: inventoryFile.RelativePath,
 				Size: inventoryFile.Size, ModifiedAt: inventoryFile.ModifiedAt,
-				Media: map[string]any{}, ScanRunID: &scanID,
+				Media: mediaValues, ScanRunID: &scanID,
 				FileKind: inventoryFile.FileKind, CompanionKind: inventoryFile.CompanionKind,
 				ProbeStatus: probeStatus,
 			}
@@ -241,9 +256,22 @@ func validateInventoryUpdate(update InventoryUpdate) error {
 
 func validInventoryClassification(file InventoryFile) bool {
 	switch file.FileKind {
-	case FileKindAudio, FileKindCover:
-		return file.CompanionKind == ""
+	case FileKindAudio:
+		return file.CompanionKind == "" && file.ImageWidth == 0 &&
+			file.ImageHeight == 0 && file.ImageFormat == ""
+	case FileKindCover:
+		if file.CompanionKind != "" {
+			return false
+		}
+		if file.ImageWidth == 0 && file.ImageHeight == 0 && file.ImageFormat == "" {
+			return true
+		}
+		return file.ImageWidth > 0 && file.ImageHeight > 0 &&
+			(file.ImageFormat == "jpeg" || file.ImageFormat == "png" || file.ImageFormat == "webp")
 	case FileKindCompanion:
+		if file.ImageWidth != 0 || file.ImageHeight != 0 || file.ImageFormat != "" {
+			return false
+		}
 		switch file.CompanionKind {
 		case CompanionCue, CompanionNFO, CompanionOPF, CompanionPlaylist,
 			CompanionEbook, CompanionOther:
@@ -251,6 +279,16 @@ func validInventoryClassification(file InventoryFile) bool {
 		}
 	}
 	return false
+}
+
+func inventoryMedia(file InventoryFile) map[string]any {
+	if file.FileKind != FileKindCover || file.ImageWidth <= 0 || file.ImageHeight <= 0 ||
+		file.ImageFormat == "" {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"width": file.ImageWidth, "height": file.ImageHeight, "imageFormat": file.ImageFormat,
+	}
 }
 
 func inventoryProbeStatus(file InventoryFile) string {

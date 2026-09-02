@@ -282,6 +282,51 @@ class LibraryScreenTest {
             "Select Dune from archive, Archive/Dune",
         ).assertIsDisplayed()
     }
+
+    @Test
+    fun paginationFailureShowsStableManualRetryInGridAndCompactLayouts() {
+        var state by mutableStateOf(
+            LibraryState(
+                groups = listOf(BookSearchGroupDto(dune.id, false, listOf(dune))),
+                nextCursor = "failed-cursor",
+                paginationError = "Couldn't load more",
+            ),
+        )
+        var automaticLoads = 0
+        var retries = 0
+        composeRule.setContent {
+            MaterialTheme {
+                LibraryScreen(
+                    state = state,
+                    onSearchTextChange = {},
+                    onAction = {},
+                    onAuthorChange = {},
+                    onGenreChange = {},
+                    onYearChange = {},
+                    onRootChange = {},
+                    onReviewStateChange = {},
+                    onSortChange = {},
+                    onLoadNextPage = { automaticLoads += 1 },
+                    onGridPositionChange = { _, _ -> },
+                    onRetryNextPage = { retries += 1 },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Couldn't load more").assertIsDisplayed()
+        composeRule.onNodeWithText("Retry").performClick()
+        composeRule.runOnIdle {
+            assertEquals(0, automaticLoads)
+            assertEquals(1, retries)
+            state = state.copy(layout = LibraryLayout.COMPACT)
+        }
+        composeRule.onNodeWithText("Couldn't load more").assertIsDisplayed()
+        composeRule.onNodeWithText("Retry").performClick()
+        composeRule.runOnIdle {
+            assertEquals(0, automaticLoads)
+            assertEquals(2, retries)
+        }
+    }
 }
 
 private val dune = BookCardDto(

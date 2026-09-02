@@ -149,6 +149,10 @@ func coversForTreeCluster(
 	}
 	scored := make([]scoredCover, 0, len(candidates))
 	for _, candidate := range candidates {
+		width, height, validImage := imageDimensions(candidate.Media)
+		if !validImage || width < 200 || height < 200 || width*10 > height*14 {
+			continue
+		}
 		stem := normalizeComparableTitle(strings.TrimSuffix(
 			path.Base(candidate.RelativePath), path.Ext(candidate.RelativePath),
 		))
@@ -171,6 +175,9 @@ func coversForTreeCluster(
 		if !sharedScope && len(candidates) == 1 {
 			score += 70
 		}
+		if height > width {
+			score += 20
+		}
 		scored = append(scored, scoredCover{file: candidate, score: score})
 	}
 	if len(scored) == 0 {
@@ -186,6 +193,26 @@ func coversForTreeCluster(
 		return nil
 	}
 	return []catalog.SourceFile{scored[0].file}
+}
+
+func imageDimensions(media map[string]any) (int, int, bool) {
+	value := func(key string) int {
+		switch number := media[key].(type) {
+		case int:
+			return number
+		case int32:
+			return int(number)
+		case int64:
+			return int(number)
+		case float64:
+			if number > 0 && number == float64(int(number)) {
+				return int(number)
+			}
+		}
+		return 0
+	}
+	width, height := value("width"), value("height")
+	return width, height, width > 0 && height > 0
 }
 
 func negativeCoverStem(stem string) bool {
