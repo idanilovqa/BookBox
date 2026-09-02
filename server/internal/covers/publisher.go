@@ -12,6 +12,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -166,6 +167,13 @@ func validateBackupRoot(backupRoot, sourceRoot string) error {
 	canonicalBackup, err := canonicalFuturePath(backupRoot)
 	if err != nil {
 		return fmt.Errorf("resolve cover backup root: %w", err)
+	}
+	// Both paths are canonical at this boundary. Windows cannot express a
+	// relative path across volumes, but a different volume is safely outside
+	// the library. Resolve links before comparing so junctions cannot bypass
+	// the same-volume containment check below.
+	if !strings.EqualFold(filepath.VolumeName(sourceRoot), filepath.VolumeName(canonicalBackup)) {
+		return nil
 	}
 	relative, err := filepath.Rel(sourceRoot, canonicalBackup)
 	if err != nil {
@@ -374,6 +382,12 @@ func syncDirectory(path string) error {
 		return err
 	}
 	defer directory.Close()
+	// Windows does not support FlushFileBuffers on a directory handle opened
+	// by os.Open. File contents have already been flushed before rename (or
+	// before completing a backup); directory fsync is a Unix durability step.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	return directory.Sync()
 }
 

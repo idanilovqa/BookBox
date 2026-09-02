@@ -273,7 +273,8 @@ $goVerificationAndBuild = @(
     'GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go test -mod=readonly -p=1 -race ./... &&'
     'GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go vet -mod=readonly ./... &&'
     'go build -mod=readonly -trimpath -o /artifacts/bookbox-discovery.exe ./cmd/bookbox-discovery &&'
-    'go build -mod=readonly -trimpath -o /artifacts/bookbox-catalog-worker.exe ./cmd/bookbox-catalog-worker'
+    'go build -mod=readonly -trimpath -o /artifacts/bookbox-catalog-worker.exe ./cmd/bookbox-catalog-worker &&'
+    'go test -mod=readonly -c -o /artifacts/covers-windows.test.exe ./internal/covers'
 ) -join ' '
 Invoke-MonitoredProcess `
     -Label 'Go tests and vet' `
@@ -304,6 +305,12 @@ if (-not (Test-Path -LiteralPath $workerArtifact -PathType Leaf)) {
 }
 Write-Host "Created $discoveryArtifact"
 Write-Host "Created $workerArtifact"
+Invoke-MonitoredProcess `
+    -Label 'Native Windows cover publication tests' `
+    -FilePath (Join-Path $artifacts 'covers-windows.test.exe') `
+    -Arguments @('-test.timeout=60s') `
+    -WorkingDirectory $script:repo `
+    -TimeoutSeconds 90
 foreach ($gate in @(
     'discovery-process.tests.ps1',
     'install-transaction.tests.ps1',
