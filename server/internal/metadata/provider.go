@@ -24,7 +24,10 @@ const (
 	userAgent          = "BookBox/1.0 audiobook metadata catalog (contact: idanilovqa@gmail.com)"
 )
 
-var ErrResponseTooLarge = errors.New("metadata provider response exceeds 2 MiB")
+var (
+	ErrInvalidQuery     = errors.New("metadata provider query is empty")
+	ErrResponseTooLarge = errors.New("metadata provider response exceeds 2 MiB")
+)
 
 type Query struct {
 	Title  string

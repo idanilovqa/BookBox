@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 
@@ -19,6 +21,9 @@ import (
 	"bookbox.local/server/internal/metadata"
 	"bookbox.local/server/internal/scanner"
 )
+
+var enrichmentTrackTitle = regexp.MustCompile(`(?i)^\s*(?:[-_.]*\s*\d+\s*(?:/|of)\s*\d+|track\s*\d+(?:\s*(?:/|of)\s*\d+)?)\s*$`)
+var audiobookEditionSuffix = regexp.MustCompile(`(?i)\s*\((?:unabridged|abridged|audiobook)\)\s*$`)
 
 const (
 	PollInterval       = 2 * time.Second
@@ -393,7 +398,7 @@ func queueIncompleteBooksInScope(
 			}
 			if book.ReviewState == catalog.ReviewConfirmed ||
 				book.MetadataSource == catalog.MetadataConfirmed ||
-				book.MissingAt != nil {
+				book.MissingAt != nil || !meaningfulEnrichmentTitle(book.Title) {
 				continue
 			}
 			job := catalog.WorkerJob{
@@ -512,6 +517,9 @@ func (handler *EnrichBookHandler) Handle(
 		detail.Book.MetadataSource == catalog.MetadataConfirmed {
 		return nil
 	}
+	if !meaningfulEnrichmentTitle(detail.Book.Title) {
+		return nil
+	}
 	decision, err := handler.Matcher.Match(ctx, inferredFromBook(detail.Book))
 	if err != nil {
 		return fmt.Errorf("match book metadata: %w", err)
@@ -559,7 +567,7 @@ func inferredFromBook(book catalog.Book) catalog.InferredBook {
 		RootID:           book.RootID,
 		SourceFolder:     book.SourceFolder,
 		GroupingKey:      book.GroupingKey,
-		Title:            book.Title,
+		Title:            providerTitle(book.Title),
 		Subtitle:         book.Subtitle,
 		Authors:          append([]string(nil), book.Authors...),
 		Narrators:        append([]string(nil), book.Narrators...),
@@ -575,6 +583,23 @@ func inferredFromBook(book catalog.Book) catalog.InferredBook {
 		Confidence:       book.Confidence,
 		ReviewState:      book.ReviewState,
 	}
+}
+
+func meaningfulEnrichmentTitle(title string) bool {
+	title = strings.TrimSpace(title)
+	if title == "" || enrichmentTrackTitle.MatchString(title) {
+		return false
+	}
+	for _, character := range title {
+		if unicode.IsLetter(character) || unicode.IsDigit(character) {
+			return true
+		}
+	}
+	return false
+}
+
+func providerTitle(title string) string {
+	return strings.TrimSpace(audiobookEditionSuffix.ReplaceAllString(strings.TrimSpace(title), ""))
 }
 
 func metadataMatch(

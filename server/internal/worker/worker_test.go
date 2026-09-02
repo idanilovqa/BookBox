@@ -434,6 +434,51 @@ func TestScanRootHandlerQueuesIncompleteBooksAcrossAllPages(t *testing.T) {
 	}
 }
 
+func TestQueueIncompleteBooksSkipsPlaceholderTitles(t *testing.T) {
+	placeholderID := uuid.New()
+	meaningfulID := uuid.New()
+	repository := &scanRepositoryFake{pages: []catalog.Page[catalog.Book]{{
+		Items: []catalog.Book{
+			{ID: placeholderID, RootID: "audio", Title: "- 01/16", ReviewState: catalog.ReviewUnreviewed},
+			{ID: meaningfulID, RootID: "audio", Title: "Arcanum Unbounded", ReviewState: catalog.ReviewUnreviewed},
+		},
+	}}}
+	if err := queueIncompleteBooks(t.Context(), repository, "audio"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(repository.enrichedBooks, []uuid.UUID{meaningfulID}) {
+		t.Fatalf("enriched books=%v", repository.enrichedBooks)
+	}
+}
+
+func TestEnrichBookSkipsPlaceholderTitleBeforeMatcher(t *testing.T) {
+	bookID := uuid.New()
+	repository := &enrichRepositoryFake{detail: catalog.BookDetail{Book: catalog.Book{
+		ID: bookID, RootID: "audio", SourceFolder: "Collection", GroupingKey: "folder",
+		Title: "Track 01 of 16", MetadataSource: catalog.MetadataInferred,
+		ReviewState: catalog.ReviewUnreviewed,
+	}}}
+	matcher := &recordingMatcherFake{}
+	handler := &EnrichBookHandler{Repo: repository, Matcher: matcher}
+	if err := handler.Handle(t.Context(), catalog.WorkerJob{
+		Kind: catalog.JobEnrichBook, Payload: map[string]any{"bookId": bookID.String()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if matcher.calls != 0 || repository.saved || repository.confirmed {
+		t.Fatalf("matcher calls=%d repository=%#v", matcher.calls, repository)
+	}
+}
+
+func TestInferredFromBookNormalizesAudiobookEditionSuffix(t *testing.T) {
+	book := inferredFromBook(catalog.Book{
+		Title: "Oathbringer (Unabridged)", Authors: []string{"Brandon Sanderson"},
+	})
+	if book.Title != "Oathbringer" || !slices.Equal(book.Authors, []string{"Brandon Sanderson"}) {
+		t.Fatalf("inferred book=%#v", book)
+	}
+}
+
 func TestEnrichBookProviderFailureLeavesLocalMetadataUntouched(t *testing.T) {
 	bookID := uuid.New()
 	repository := &enrichRepositoryFake{detail: catalog.BookDetail{Book: catalog.Book{
@@ -757,6 +802,18 @@ func (repository *scanRepositoryFake) EnqueueDeduplicated(
 type matcherFake struct {
 	decision metadata.Decision
 	err      error
+}
+
+type recordingMatcherFake struct {
+	calls int
+}
+
+func (fake *recordingMatcherFake) Match(
+	context.Context,
+	catalog.InferredBook,
+) (metadata.Decision, error) {
+	fake.calls++
+	return metadata.Decision{}, nil
 }
 
 func (fake matcherFake) Match(

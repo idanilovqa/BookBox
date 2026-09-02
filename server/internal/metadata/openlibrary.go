@@ -139,14 +139,19 @@ func (provider *OpenLibrary) Search(
 	provider.cacheMu.Unlock()
 	requestURL := *provider.endpoint
 	parameters := requestURL.Query()
-	if title := strings.TrimSpace(query.Title); title != "" {
-		parameters.Set("title", title)
-	}
-	if author := strings.TrimSpace(query.Author); author != "" {
-		parameters.Set("author", author)
-	}
-	if isbn := strings.TrimSpace(query.ISBN); isbn != "" {
+	title := strings.TrimSpace(query.Title)
+	author := strings.TrimSpace(query.Author)
+	isbn := strings.TrimSpace(query.ISBN)
+	switch {
+	case isbn != "":
 		parameters.Set("isbn", isbn)
+	case title != "" && author != "":
+		parameters.Set("title", title)
+		parameters.Set("author", author)
+	case title != "":
+		parameters.Set("q", title)
+	default:
+		return nil, ErrInvalidQuery
 	}
 	parameters.Set("limit", "10")
 	parameters.Set("fields", strings.Join(openLibraryFields, ","))

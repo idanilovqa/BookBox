@@ -21,11 +21,11 @@ func TestOpenLibrarySearchEncodesRequestAndMapsCandidate(t *testing.T) {
 			t.Errorf("path = %q", request.URL.Path)
 		}
 		query := request.URL.Query()
-		if query.Get("title") != "Dune & Messiah" {
-			t.Errorf("title = %q", query.Get("title"))
+		if _, exists := query["title"]; exists {
+			t.Errorf("title sent with ISBN: %q", request.URL.RawQuery)
 		}
-		if query.Get("author") != "Frank Herbert" {
-			t.Errorf("author = %q", query.Get("author"))
+		if _, exists := query["author"]; exists {
+			t.Errorf("author sent with ISBN: %q", request.URL.RawQuery)
 		}
 		if query.Get("isbn") != "9780441172719" {
 			t.Errorf("isbn = %q", query.Get("isbn"))
@@ -126,7 +126,7 @@ func TestOpenLibrarySearchSkipsCandidatesWithoutStableIdentity(t *testing.T) {
 	}
 }
 
-func TestOpenLibrarySearchOmitsBlankParametersAndIdentifiesContact(t *testing.T) {
+func TestOpenLibrarySearchUsesGeneralQueryForTitleOnly(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -134,8 +134,11 @@ func TestOpenLibrarySearchOmitsBlankParametersAndIdentifiesContact(t *testing.T)
 		if _, exists := query["author"]; exists {
 			t.Errorf("blank author parameter was sent: %q", request.URL.RawQuery)
 		}
-		if query.Get("title") != "GL16" {
-			t.Errorf("title = %q", query.Get("title"))
+		if _, exists := query["title"]; exists {
+			t.Errorf("title parameter was sent: %q", request.URL.RawQuery)
+		}
+		if query.Get("q") != "Arcanum Unbounded" {
+			t.Errorf("q = %q", query.Get("q"))
 		}
 		if userAgent := request.Header.Get("User-Agent"); !strings.Contains(userAgent, "idanilovqa@gmail.com") {
 			t.Errorf("User-Agent does not identify a contact: %q", userAgent)
@@ -148,8 +151,58 @@ func TestOpenLibrarySearchOmitsBlankParametersAndIdentifiesContact(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.Search(context.Background(), Query{Title: " GL16 "}); err != nil {
+	if _, err := provider.Search(context.Background(), Query{Title: " Arcanum Unbounded "}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOpenLibrarySearchUsesTitleAndAuthorWithoutEmptyParameters(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		query := request.URL.Query()
+		if query.Get("title") != "Oathbringer" || query.Get("author") != "Brandon Sanderson" {
+			t.Errorf("query = %q", request.URL.RawQuery)
+		}
+		if _, exists := query["q"]; exists {
+			t.Errorf("general query sent with author: %q", request.URL.RawQuery)
+		}
+		if _, exists := query["isbn"]; exists {
+			t.Errorf("blank ISBN sent: %q", request.URL.RawQuery)
+		}
+		_, _ = writer.Write([]byte(`{"docs":[]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	provider, err := NewOpenLibrary(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Search(context.Background(), Query{
+		Title: "Oathbringer", Author: "Brandon Sanderson",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenLibrarySearchRejectsEmptyQueryWithoutRequest(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		_, _ = writer.Write([]byte(`{"docs":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	provider, err := NewOpenLibrary(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Search(context.Background(), Query{}); !errors.Is(err, ErrInvalidQuery) {
+		t.Fatalf("error=%v, want ErrInvalidQuery", err)
+	}
+	if attempts.Load() != 0 {
+		t.Fatalf("attempts=%d, want zero", attempts.Load())
 	}
 }
 
