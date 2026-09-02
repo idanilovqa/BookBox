@@ -3,13 +3,18 @@ package grouping
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 
 	"bookbox.local/server/internal/catalog"
 )
+
+var trackCounterTitle = regexp.MustCompile(`(?i)^\s*[-_.]*\s*(?:track\s*)?\d+\s*(?:/|of)\s*\d+\s*$`)
+var leadingSequenceNumber = regexp.MustCompile(`^\s*(\d+)\s*(?:[-_. ]|$)`)
 
 // Tree is the persisted, read-only input to subtree grouping. Companion data
 // must already have been parsed into SourceFile.Media before inference begins.
@@ -142,8 +147,28 @@ func inferAutomaticTreeClusters(tree Tree, audio, allFiles []catalog.SourceFile)
 	}
 
 	identities := make([]treeIdentity, len(audio))
+	allTitlesEmpty := true
 	for index, file := range audio {
 		identities[index] = identityForTreeFile(file)
+		allTitlesEmpty = allTitlesEmpty && identities[index].title == ""
+	}
+	if allTitlesEmpty && coherentTrackSequence(audio) {
+		if sequenceAuthorConflict(identities) {
+			return []treeCluster{{
+				identity: consistentTreeIdentity(audio),
+				audio:    audio,
+				reason:   "conflicting_author",
+				review:   catalog.ReviewNeedsReview,
+			}}
+		}
+		return []treeCluster{{
+			identity: consistentTreeIdentity(audio),
+			audio:    audio,
+			reason:   "folder_default",
+			review:   catalog.ReviewUnreviewed,
+		}}
+	}
+	for index, file := range audio {
 		if identities[index].title == "" {
 			identities[index] = companionIdentityForAudio(file, allFiles)
 		}
@@ -181,7 +206,6 @@ func inferAutomaticTreeClusters(tree Tree, audio, allFiles []catalog.SourceFile)
 			return []treeCluster{{identity: identityByKey[key], audio: grouped, reason: reason, review: review}}
 		}
 	}
-
 	filenameGroups := make(map[string][]catalog.SourceFile)
 	for _, file := range audio {
 		stem := normalizedTreeFilename(file.RelativePath)
@@ -373,11 +397,66 @@ func companionIdentityForAudio(audio catalog.SourceFile, files []catalog.SourceF
 }
 
 func identityForTreeFile(file catalog.SourceFile) treeIdentity {
-	return treeIdentity{title: normalizeComparableTitle(mediaString(file.Media, "album", "title")), author: normalize(mediaString(file.Media, "author", "authors"))}
+	title := mediaString(file.Media, "album", "title")
+	if placeholderTrackTitle(title) {
+		title = ""
+	}
+	return treeIdentity{title: normalizeComparableTitle(title), author: normalize(mediaString(file.Media, "author", "authors"))}
 }
 
 func identityForCompanion(file catalog.SourceFile) treeIdentity {
-	return treeIdentity{title: normalizeComparableTitle(mediaString(file.Media, "title", "album")), author: normalize(mediaString(file.Media, "author", "authors"))}
+	title := mediaString(file.Media, "title", "album")
+	if placeholderTrackTitle(title) {
+		title = ""
+	}
+	return treeIdentity{title: normalizeComparableTitle(title), author: normalize(mediaString(file.Media, "author", "authors"))}
+}
+
+func placeholderTrackTitle(value string) bool {
+	return trackCounterTitle.MatchString(strings.TrimSpace(value))
+}
+
+func coherentTrackSequence(audio []catalog.SourceFile) bool {
+	if len(audio) < 2 {
+		return false
+	}
+	allM4B := true
+	numbers := make(map[int]struct{}, len(audio))
+	minimum, maximum := 0, 0
+	for _, file := range audio {
+		allM4B = allM4B && strings.EqualFold(path.Ext(file.RelativePath), ".m4b")
+		number, ok := trackSequenceNumber(file)
+		if !ok || number < 1 {
+			return false
+		}
+		if _, duplicate := numbers[number]; duplicate {
+			return false
+		}
+		numbers[number] = struct{}{}
+		if minimum == 0 || number < minimum {
+			minimum = number
+		}
+		if number > maximum {
+			maximum = number
+		}
+	}
+	return !allM4B && minimum == 1 && maximum == len(audio)
+}
+
+func trackSequenceNumber(file catalog.SourceFile) (int, bool) {
+	if value := mediaString(file.Media, "track"); value != "" {
+		first, _, _ := strings.Cut(value, "/")
+		if number, err := strconv.Atoi(strings.TrimSpace(first)); err == nil {
+			return number, true
+		}
+	}
+	name := strings.TrimSuffix(path.Base(file.RelativePath), path.Ext(file.RelativePath))
+	match := leadingSequenceNumber.FindStringSubmatch(name)
+	if len(match) != 2 {
+		return 0, false
+	}
+	number, err := strconv.Atoi(match[1])
+	return number, err == nil
 }
 
 func consistentTreeIdentity(files []catalog.SourceFile) treeIdentity {
@@ -424,6 +503,20 @@ func authorConflict(identities []treeIdentity) bool {
 		}
 		authorsByTitle[identity.title][identity.author] = struct{}{}
 		if len(authorsByTitle[identity.title]) > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func sequenceAuthorConflict(identities []treeIdentity) bool {
+	authors := make(map[string]struct{})
+	for _, identity := range identities {
+		if identity.author == "" {
+			continue
+		}
+		authors[identity.author] = struct{}{}
+		if len(authors) > 1 {
 			return true
 		}
 	}
@@ -536,7 +629,7 @@ func treeDisplayValue(files []catalog.SourceFile, keys ...string) string {
 	var selected, normalized string
 	for _, file := range files {
 		current := mediaString(file.Media, keys...)
-		if current == "" {
+		if current == "" || titleKeys(keys) && placeholderTrackTitle(current) {
 			continue
 		}
 		currentNormalized := normalize(current)
@@ -547,6 +640,15 @@ func treeDisplayValue(files []catalog.SourceFile, keys ...string) string {
 		}
 	}
 	return selected
+}
+
+func titleKeys(keys []string) bool {
+	for _, key := range keys {
+		if key == "title" || key == "album" {
+			return true
+		}
+	}
+	return false
 }
 
 func companionDisplayValue(files []catalog.SourceFile, keys ...string) string {

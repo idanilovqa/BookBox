@@ -1,14 +1,94 @@
 package grouping
 
 import (
+	"fmt"
 	"path"
 	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"bookbox.local/server/internal/catalog"
 )
+
+func TestPlaceholderTrackTitleRejectsCountersButKeepsNumberedBooks(t *testing.T) {
+	for _, value := range []string{"01/16", "- 01/16", "Track 01 of 16", "track 9/10"} {
+		if !placeholderTrackTitle(value) {
+			t.Errorf("placeholderTrackTitle(%q)=false", value)
+		}
+	}
+	for _, value := range []string{"1984", "11/22/63", "Book 2", "Chapter 1 - Stormblessed"} {
+		if placeholderTrackTitle(value) {
+			t.Errorf("placeholderTrackTitle(%q)=true", value)
+		}
+	}
+}
+
+func TestInferTreeGroupsCounterTitledCollectionByFolder(t *testing.T) {
+	names := []string{
+		"Preface", "The Selish System", "The Hope of Elantris", "The Scadrian System",
+		"The Eleventh Metal", "Allomancer Jak", "The Taldain System", "White Sand",
+		"The Threnodite System", "Shadows for Silence", "The Drominad System", "Sixth of the Dusk",
+		"The Rosharan System", "The Way of Kings Prime", "Edgedancer Prologue", "Edgedancer",
+	}
+	files := make([]catalog.SourceFile, 0, len(names))
+	for index, name := range names {
+		track := index + 1
+		files = append(files, treeFile(
+			fmt.Sprintf("Brandon Sanderson/Arcanum Unbounded/%d - %s.mp3", track, name),
+			catalog.FileKindAudio,
+			"",
+			map[string]any{
+				"title": fmt.Sprintf("- %02d/16", track),
+				"track": strconv.Itoa(track),
+			},
+		))
+	}
+	tree := testTree("Brandon Sanderson/Arcanum Unbounded", files...)
+	result := InferTree(tree)
+
+	if len(result.Books) != 1 {
+		t.Fatalf("books=%#v, want one collection", result.Books)
+	}
+	book := result.Books[0]
+	if book.Title != "Arcanum Unbounded" || book.ReviewReason != "folder_default" {
+		t.Fatalf("collection=%#v", book)
+	}
+	if got := audioPathsForBook(tree, book); len(got) != 16 {
+		t.Fatalf("audio paths=%v, want 16", got)
+	}
+	if evidence := result.Evidence[book.GroupingKey]; evidence.ReasonCode != "folder_default" || len(evidence.Values[catalog.FileRoleAudio]) != 16 {
+		t.Fatalf("evidence=%#v", evidence)
+	}
+}
+
+func TestInferTreeDoesNotAutoConfirmCounterSequenceWithConflictingAuthors(t *testing.T) {
+	first := treeFile("Collection/1 - First.mp3", catalog.FileKindAudio, "", map[string]any{
+		"title": "01/02", "track": "1", "author": "First Author",
+	})
+	second := treeFile("Collection/2 - Second.mp3", catalog.FileKindAudio, "", map[string]any{
+		"title": "02/02", "track": "2", "author": "Second Author",
+	})
+	result := InferTree(testTree("Collection", first, second))
+	if len(result.Books) != 1 || result.Books[0].ReviewReason != "conflicting_author" ||
+		result.Books[0].ReviewState != catalog.ReviewNeedsReview {
+		t.Fatalf("books=%#v", result.Books)
+	}
+}
+
+func TestInferTreeKeepsCounterNamedStandaloneM4BsSeparate(t *testing.T) {
+	first := treeFile("Shared/1 - First.m4b", catalog.FileKindAudio, "", map[string]any{
+		"title": "01/02", "track": "1",
+	})
+	second := treeFile("Shared/2 - Second.m4b", catalog.FileKindAudio, "", map[string]any{
+		"title": "02/02", "track": "2",
+	})
+	result := InferTree(testTree("Shared", first, second))
+	if len(result.Books) != 2 {
+		t.Fatalf("books=%#v, want two standalone M4Bs", result.Books)
+	}
+}
 
 func TestInferTreeApprovedCases(t *testing.T) {
 	tests := []struct {
