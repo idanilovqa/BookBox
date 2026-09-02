@@ -92,21 +92,29 @@ class FoldersScreenTest {
     @Test
     fun folderSearchRoutesTypingAndOpensPathResult() {
         val actions = mutableListOf<FolderAction>()
+        var state by mutableStateOf(
+            folderState.copy(
+                searchQuery = "black box",
+                searchResults = listOf(
+                    RawSearchEntryDto(
+                        id = "00000000-0000-4000-8000-000000000001",
+                        name = "Black.Box",
+                        relativePath = "Author/Black.Box",
+                        kind = "folder",
+                    ),
+                ),
+            ),
+        )
         composeRule.setContent {
             MaterialTheme {
                 FoldersScreen(
-                    state = folderState.copy(
-                        searchQuery = "black box",
-						searchResults = listOf(
-                            RawSearchEntryDto(
-                                id = "00000000-0000-4000-8000-000000000001",
-                                name = "Black.Box",
-                                relativePath = "Author/Black.Box",
-                                kind = "folder",
-                            ),
-                        ),
-                    ),
-                    onAction = actions::add,
+                    state = state,
+                    onAction = { action ->
+                        actions += action
+                        if (action is FolderAction.UpdateSearchQuery) {
+                            state = state.copy(searchQuery = action.query)
+                        }
+                    },
                 )
             }
         }

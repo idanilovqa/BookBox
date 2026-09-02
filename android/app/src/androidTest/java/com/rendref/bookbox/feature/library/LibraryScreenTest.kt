@@ -313,6 +313,8 @@ class LibraryScreenTest {
             }
         }
 
+        composeRule.onNode(hasScrollToIndexAction())
+            .performScrollToNode(hasText("Couldn't load more"))
         composeRule.onNodeWithText("Couldn't load more").assertIsDisplayed()
         composeRule.onNodeWithText("Retry").performClick()
         composeRule.runOnIdle {
@@ -320,6 +322,8 @@ class LibraryScreenTest {
             assertEquals(1, retries)
             state = state.copy(layout = LibraryLayout.COMPACT)
         }
+        composeRule.onNode(hasScrollToIndexAction())
+            .performScrollToNode(hasText("Couldn't load more"))
         composeRule.onNodeWithText("Couldn't load more").assertIsDisplayed()
         composeRule.onNodeWithText("Retry").performClick()
         composeRule.runOnIdle {
