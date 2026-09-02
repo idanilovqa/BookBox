@@ -1015,6 +1015,48 @@ func TestBuildRawSearchStatementResolvesNestedFilesBeforePagination(t *testing.T
 	}
 }
 
+func TestFuzzySearchPredicateRequiresGeneralAndWordBoundarySimilarity(t *testing.T) {
+	predicate := fuzzyTextPredicate("$7")
+	for _, fragment := range []string{
+		"strpos(search_compact,$7)>0",
+		"word_similarity($7,search_terms)>=0.4",
+		"strict_word_similarity($7,search_terms)>=0.25",
+	} {
+		if !strings.Contains(predicate, fragment) {
+			t.Fatalf("predicate %q does not contain %q", predicate, fragment)
+		}
+	}
+	if strings.Contains(predicate, "search_compact)>=0.3") {
+		t.Fatalf("predicate retains permissive fuzzy threshold: %q", predicate)
+	}
+	if score := fuzzyTextScore("$7"); score != "word_similarity($7,search_terms)::float8" {
+		t.Fatalf("score=%q", score)
+	}
+}
+
+func TestSearchStatementsReuseFuzzyPredicateForPagesAndCursors(t *testing.T) {
+	raw := buildRawSearchStatement(SearchQuery{Limit: 25}, []string{"raw"}, "sanderson", nil)
+	audiobooks, err := buildAudiobookSearchStatement(
+		SearchQuery{Limit: 25, Sort: BookSortTitle},
+		[]string{"audiobooks"},
+		"sanderson",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, statement := range map[string]string{
+		"raw page":       raw.SQL,
+		"audiobook page": audiobooks.SQL,
+	} {
+		for _, fragment := range []string{"search_terms)>=0.4", "search_terms)>=0.25"} {
+			if !strings.Contains(statement, fragment) {
+				t.Fatalf("%s does not contain %q:\n%s", name, fragment, statement)
+			}
+		}
+	}
+}
+
 func TestSearchLibraryPaginatesRawWithBoundAndStaleCursor(t *testing.T) {
 	repository, ctx, _ := rawSearchFixture(t)
 	query := SearchQuery{

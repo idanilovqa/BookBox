@@ -228,6 +228,16 @@ func fuzzyGramCondition(grams []string, addArgument func(any) string) string {
 	return "(" + strings.Join(conditions, " or ") + ")"
 }
 
+func fuzzyTextPredicate(queryPlaceholder string) string {
+	return "(strpos(search_compact," + queryPlaceholder + ")>0 or (" +
+		"word_similarity(" + queryPlaceholder + ",search_terms)>=0.4 and " +
+		"strict_word_similarity(" + queryPlaceholder + ",search_terms)>=0.25))"
+}
+
+func fuzzyTextScore(queryPlaceholder string) string {
+	return "word_similarity(" + queryPlaceholder + ",search_terms)::float8"
+}
+
 type searchGroupReference struct {
 	rootID  string
 	groupID uuid.UUID
@@ -255,7 +265,7 @@ func buildRawSearchStatement(
 	textCondition := "search_grams @> array[$2]::text[]"
 	if utf8.RuneCountInString(normalizedText) >= 3 {
 		textCondition = `(` + fuzzyGramCondition(fuzzySearchGrams(normalizedText), addArgument) + `
-			and (strpos(search_compact,$2)>0 or word_similarity($2,search_compact)>=0.3))`
+			and ` + fuzzyTextPredicate(textPlaceholder) + `)`
 	}
 	rankExpression := `case
 		when compact_name=` + textPlaceholder + ` or compact_path=` + textPlaceholder + ` then 0
@@ -289,7 +299,7 @@ func buildRawSearchStatement(
 		         duplicate_group_id, duplicate_count, compact_name, compact_path,
 		         compact_metadata, search_compact, search_terms, search_grams,
 		         ` + rankExpression + ` as rank_value,
-		         word_similarity($2,search_compact)::float8 as score_value
+		         ` + fuzzyTextScore(textPlaceholder) + ` as score_value
 		  from library_search_documents
 		  where root_id=$1 and entity_kind in ('folder','file') and ` + textCondition + `
 		), resolved_targets as (
@@ -410,8 +420,7 @@ func buildAudiobookSearchStatement(
 		} else {
 			conditions = append(conditions, `(`+
 				fuzzyGramCondition(fuzzySearchGrams(normalizedText), addArgument)+`
-				and (strpos(search_compact,`+textPlaceholder+`)>0
-				     or word_similarity(`+textPlaceholder+`,search_compact)>=0.3)
+				and `+fuzzyTextPredicate(textPlaceholder)+`
 			)`)
 		}
 		rankExpression = `case
@@ -423,7 +432,7 @@ func buildAudiobookSearchStatement(
 			  or exists(select 1 from unnest(filenames) f where strpos(catalog_search_compact(f),` + textPlaceholder + `)>0) then 2
 			when strpos(compact_metadata,` + textPlaceholder + `)>0 then 3
 			else 4 end`
-		scoreExpression = "word_similarity(" + textPlaceholder + ",search_compact)::float8"
+		scoreExpression = fuzzyTextScore(textPlaceholder)
 	}
 	if author := strings.TrimSpace(query.Author); author != "" {
 		placeholder := addArgument(searchCompact(author))
@@ -743,7 +752,7 @@ func resolveRawSearchCursorTx(
 	textCondition := "search_grams @> array[$3]::text[]"
 	if utf8.RuneCountInString(normalizedText) >= 3 {
 		textCondition = `(` + fuzzyGramCondition(fuzzySearchGrams(normalizedText), addArgument) + `
-			and (strpos(search_compact,$3)>0 or word_similarity($3,search_compact)>=0.3))`
+			and ` + fuzzyTextPredicate("$3") + `)`
 	}
 	rankExpression := `case
 		when compact_name=$3 or compact_path=$3 then 0
@@ -753,7 +762,7 @@ func resolveRawSearchCursorTx(
 		when strpos(compact_metadata,$3)>0 then 3
 		else 4 end`
 	row := transaction.QueryRow(ctx, `
-		select `+rankExpression+`, word_similarity($3,search_compact)::float8,
+		select `+rankExpression+`, `+fuzzyTextScore("$3")+`,
 		       compact_name, compact_name, relative_path, root_id, document_id,
 		       document_id, entity_kind
 		from library_search_documents
@@ -788,8 +797,7 @@ func resolveAudiobookSearchCursorTx(
 		} else {
 			conditions = append(conditions, `(`+
 				fuzzyGramCondition(fuzzySearchGrams(normalizedText), addArgument)+`
-				and (strpos(search_compact,`+textPlaceholder+`)>0
-				     or word_similarity(`+textPlaceholder+`,search_compact)>=0.3))`)
+				and `+fuzzyTextPredicate(textPlaceholder)+`)`)
 		}
 		rankExpression = `case
 			when compact_name=` + textPlaceholder + ` or compact_path=` + textPlaceholder + ` then 0
@@ -800,7 +808,7 @@ func resolveAudiobookSearchCursorTx(
 			  or exists(select 1 from unnest(filenames) f where strpos(catalog_search_compact(f),` + textPlaceholder + `)>0) then 2
 			when strpos(compact_metadata,` + textPlaceholder + `)>0 then 3
 			else 4 end`
-		scoreExpression = "word_similarity(" + textPlaceholder + ",search_compact)::float8"
+		scoreExpression = fuzzyTextScore(textPlaceholder)
 	}
 	if author := strings.TrimSpace(query.Author); author != "" {
 		conditions = append(conditions, "compact_authors @> array["+addArgument(searchCompact(author))+"]::text[]")
