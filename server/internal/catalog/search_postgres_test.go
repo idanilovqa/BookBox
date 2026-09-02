@@ -622,7 +622,7 @@ func TestSearchLibraryFiltersSortsAndRanksAudiobooks(t *testing.T) {
 	if _, err := pool.Exec(ctx, `
 		update library_search_documents
 		set search_compact='dunx', search_grams=catalog_search_grams('dunx'),
-		    compact_name='dunx', compact_path='trigram', compact_metadata=''
+		    search_terms='dunx', compact_name='dunx', compact_path='trigram', compact_metadata=''
 		where root_id='audiobooks' and entity_kind='audiobook' and title='Trigram Result'
 	`); err != nil {
 		t.Fatal(err)
@@ -1002,16 +1002,74 @@ func TestSearchLibraryReturnsMatchingFoldersAndKeepsRootFiles(t *testing.T) {
 	}
 }
 
+func TestSearchLibraryUsesFilesOnlyForDistinctBooksInSharedFolder(t *testing.T) {
+	repository, ctx := searchPaginationFixture(t, []searchBookDefinition{
+		{title: "Standalone Dune", folder: "Shared", filename: "Standalone Dune.m4b", author: "Author", duration: 1},
+		{title: "Foundation", folder: "Shared", filename: "Foundation.m4b", author: "Other", duration: 2},
+		{title: "Dune Messiah", folder: "Author/Dune Messiah", filename: "part-01.mp3", author: "Author", duration: 3},
+	})
+
+	shared, err := repository.SearchLibrary(ctx, SearchQuery{
+		RootIDs: []string{"audiobooks"}, Mode: SearchModeRaw,
+		Text: "standalone dune", Sort: BookSortTitle, Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shared.Groups) != 1 || len(shared.Groups[0].Documents) != 1 {
+		t.Fatalf("shared results=%#v", shared.Groups)
+	}
+	sharedDocument := shared.Groups[0].Documents[0]
+	if sharedDocument.EntityKind != SearchEntityFile ||
+		sharedDocument.RelativePath != "Shared/Standalone Dune.m4b" {
+		t.Fatalf("shared result=%#v", sharedDocument)
+	}
+
+	dedicated, err := repository.SearchLibrary(ctx, SearchQuery{
+		RootIDs: []string{"audiobooks"}, Mode: SearchModeRaw,
+		Text: "dune messiah", Sort: BookSortTitle, Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundDedicated := false
+	for _, group := range dedicated.Groups {
+		if len(group.Documents) != 1 || group.Documents[0].EntityKind != SearchEntityFolder {
+			t.Fatalf("dedicated result is not a folder: %#v", group)
+		}
+		foundDedicated = foundDedicated || group.Documents[0].RelativePath == "Author/Dune Messiah"
+	}
+	if !foundDedicated {
+		t.Fatalf("dedicated book folder missing from %#v", dedicated.Groups)
+	}
+}
+
 func TestBuildRawSearchStatementResolvesNestedFilesBeforePagination(t *testing.T) {
 	statement := buildRawSearchStatement(SearchQuery{Limit: 25}, []string{"raw"}, "dune", nil)
 	for _, fragment := range []string{
 		"resolved_targets as (",
 		"regexp_replace(m.relative_path,'/[^/]+$','')",
-		"distinct on (root_id,resolved_document_id)",
+		"parent.book_id is distinct from m.book_id",
+		"not exists (",
+		"'book:'||m.book_id::text",
+		"distinct on (root_id,resolution_key)",
 	} {
 		if !strings.Contains(statement.SQL, fragment) {
 			t.Fatalf("statement does not contain %q:\n%s", fragment, statement.SQL)
 		}
+	}
+}
+
+func TestRawSearchParentValidationRejectsMissingNestedParent(t *testing.T) {
+	if err := validateRawSearchParentRows(1, nil); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("error=%v, want ErrInvalidData", err)
+	}
+	if err := validateRawSearchParentRows(0, nil); err != nil {
+		t.Fatalf("valid projection error=%v", err)
+	}
+	probe := errors.New("query failed")
+	if err := validateRawSearchParentRows(0, probe); !errors.Is(err, probe) {
+		t.Fatalf("query error=%v, want %v", err, probe)
 	}
 }
 
@@ -1232,6 +1290,7 @@ func TestSearchCursorUsesBoundedDigestsForManyRoots(t *testing.T) {
 type rawSearchDocumentSeed struct {
 	kind                                                                 SearchEntityKind
 	path, name, compactName, compactPath, compactMetadata, searchCompact string
+	searchTerms                                                          string
 	duplicateGroupID                                                     uuid.UUID
 	duplicateCount                                                       int
 }
@@ -1264,10 +1323,14 @@ func rawSearchFixture(t *testing.T) (*PostgresRepository, context.Context, uuid.
 		{kind: SearchEntityFile, path: "Shelf/my-dune-copy.m4b", name: "my-dune-copy.m4b", compactName: "mydunecopym4b", compactPath: "shelfmydunecopym4b", searchCompact: "mydunecopym4b", duplicateGroupID: duplicateGroupID, duplicateCount: 2},
 		{kind: SearchEntityFile, path: "Shelf/dune-extra.mp3", name: "dune-extra.mp3", compactName: "duneextramp3", compactPath: "shelfduneextramp3", searchCompact: "duneextramp3", duplicateCount: 1},
 		{kind: SearchEntityFile, path: "Metadata/metadata.m4b", name: "metadata.m4b", compactName: "metadatam4b", compactPath: "metadatametadatam4b", compactMetadata: "dunewriter", searchCompact: "metadatam4bdunewriter", duplicateCount: 1},
-		{kind: SearchEntityFile, path: "Typo/typo.m4b", name: "typo.m4b", compactName: "typom4b", compactPath: "typotypom4b", searchCompact: "dunx", duplicateCount: 1},
+		{kind: SearchEntityFile, path: "Typo/typo.m4b", name: "typo.m4b", compactName: "typom4b", compactPath: "typotypom4b", searchCompact: "dunx", searchTerms: "dunx", duplicateCount: 1},
 		{kind: SearchEntityFile, path: "root-dune.m4b", name: "root-dune.m4b", compactName: "rootdunem4b", compactPath: "rootdunem4b", searchCompact: "rootdunem4b", duplicateCount: 1},
 	}
 	for _, seed := range seeds {
+		searchTerms := seed.searchTerms
+		if searchTerms == "" {
+			searchTerms = seed.name
+		}
 		if _, err := pool.Exec(ctx, `
 			insert into library_search_documents(
 				root_id,document_id,entity_kind,relative_path,display_name,
@@ -1276,7 +1339,7 @@ func rawSearchFixture(t *testing.T) (*PostgresRepository, context.Context, uuid.
 			) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,catalog_search_grams($11))
 		`, "raw", uuid.New(), seed.kind, seed.path, seed.name,
 			nullableUUID(seed.duplicateGroupID), seed.duplicateCount, seed.compactName,
-			seed.compactPath, seed.compactMetadata, seed.searchCompact, seed.name); err != nil {
+			seed.compactPath, seed.compactMetadata, seed.searchCompact, searchTerms); err != nil {
 			t.Fatal(err)
 		}
 	}

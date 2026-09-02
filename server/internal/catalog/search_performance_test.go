@@ -86,7 +86,7 @@ func TestLibrarySearchPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rawPageContainsPath(typoPage, "Shelf/XYQToken000001.m4b") {
+	if !rawPageContainsPath(typoPage, "Shelf") {
 		t.Fatalf("typo search did not recall target: %#v", typoPage.Groups)
 	}
 
@@ -179,6 +179,19 @@ func seedSearchPerformanceProjection(
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
+		insert into library_search_documents(
+			root_id, document_id, entity_kind, relative_path, display_name,
+			duplicate_count, compact_name, compact_path, compact_metadata,
+			search_compact, search_terms, search_grams
+		) values (
+			$1, md5('search-performance-shelf')::uuid, 'folder', 'Shelf', 'Shelf',
+			1, 'shelf', 'shelf', '', 'shelfshelf', 'shelf shelf',
+			catalog_search_grams('shelfshelf')
+		)
+	`, searchPerformanceRoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
 		insert into books(
 			id, root_id, source_folder, grouping_key, title, authors,
 			publication_year, metadata_source, confidence, review_state,
@@ -247,7 +260,7 @@ func seedSearchPerformanceProjection(
 		insert into library_search_snapshots(root_id, scan_run_id, completed_at, document_count)
 		values ($1, $2, '2026-08-08T00:00:00Z', $3)
 	`, searchPerformanceRoot, scanID,
-		searchPerformanceRawCount+searchPerformanceAudiobookCount); err != nil {
+		searchPerformanceRawCount+searchPerformanceAudiobookCount+1); err != nil {
 		t.Fatal(err)
 	}
 	for _, definition := range indexDefinitions {

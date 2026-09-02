@@ -304,7 +304,37 @@ func buildRawSearchStatement(
 		  where root_id=$1 and entity_kind in ('folder','file') and ` + textCondition + `
 		), resolved_targets as (
 		  select m.*,
-		         coalesce(parent.document_id,m.document_id) as resolved_document_id
+		         case
+		           when m.entity_kind='folder' or strpos(m.relative_path,'/')=0 then m.document_id
+		           when m.book_id is not null
+		             and parent.book_id is distinct from m.book_id
+		             and lower(m.relative_path) ~ '\.(m4b|m4a|mp3|aac|flac|ogg|opus|wav)$'
+		             and not exists (
+		               select 1 from matched direct_parent
+		               where direct_parent.root_id=m.root_id
+		                 and direct_parent.document_id=parent.document_id
+		                 and direct_parent.entity_kind='folder'
+		                 and direct_parent.rank_value<=2
+		             ) then m.document_id
+		           else parent.document_id
+		         end as result_document_id,
+		         case
+		           when m.entity_kind='file'
+		             and strpos(m.relative_path,'/')>0
+		             and m.book_id is not null
+		             and parent.book_id is distinct from m.book_id
+		             and lower(m.relative_path) ~ '\.(m4b|m4a|mp3|aac|flac|ogg|opus|wav)$'
+		             and not exists (
+		               select 1 from matched direct_parent
+		               where direct_parent.root_id=m.root_id
+		                 and direct_parent.document_id=parent.document_id
+		                 and direct_parent.entity_kind='folder'
+		                 and direct_parent.rank_value<=2
+		             ) then 'book:'||m.book_id::text
+		           when m.entity_kind='folder' or strpos(m.relative_path,'/')=0
+		             then 'document:'||m.document_id::text
+		           else 'document:'||parent.document_id::text
+		         end as resolution_key
 		  from matched m
 		  left join library_search_documents parent
 		    on m.entity_kind='file'
@@ -312,11 +342,24 @@ func buildRawSearchStatement(
 		   and parent.root_id=m.root_id
 		   and parent.entity_kind='folder'
 		   and parent.relative_path=regexp_replace(m.relative_path,'/[^/]+$','')
+		  where not (
+		    m.entity_kind='folder'
+		    and m.book_id is null
+		    and m.rank_value>=3
+		    and exists (
+		      select 1 from matched child
+		      where child.root_id=m.root_id
+		        and child.entity_kind='file'
+		        and child.book_id is not null
+		        and regexp_replace(child.relative_path,'/[^/]+$','')=m.relative_path
+		        and lower(child.relative_path) ~ '\.(m4b|m4a|mp3|aac|flac|ogg|opus|wav)$'
+		    )
+		  )
 		), deduplicated as (
-		  select distinct on (root_id,resolved_document_id)
-		         root_id,resolved_document_id,rank_value,score_value
+		  select distinct on (root_id,resolution_key)
+		         root_id,result_document_id,rank_value,score_value
 		  from resolved_targets
-		  order by root_id,resolved_document_id,rank_value,score_value desc,relative_path,document_id
+		  order by root_id,resolution_key,rank_value,score_value desc,relative_path,document_id
 		), ranked as (
 		  select d.root_id,d.document_id,d.entity_kind,d.book_id,d.relative_path,d.display_name,
 		         d.size,d.modified_at,d.title,d.authors,d.compact_authors,d.series,d.series_position,d.narrators,
@@ -328,7 +371,7 @@ func buildRawSearchStatement(
 		         best.rank_value,best.score_value,d.compact_name as sort_value
 		  from deduplicated best
 		  join library_search_documents d
-		    on d.root_id=best.root_id and d.document_id=best.resolved_document_id
+		    on d.root_id=best.root_id and d.document_id=best.result_document_id
 		)
 		select root_id, document_id, entity_kind, book_id, relative_path, display_name,
 		       size, modified_at, title, authors, compact_authors, series, series_position, narrators,
@@ -355,6 +398,22 @@ func searchRawGroupsTx(
 	snapshots []SearchSnapshot,
 	cursor *searchCursor,
 ) ([]SearchGroup, string, error) {
+	var missingParents int
+	queryErr := transaction.QueryRow(ctx, `
+		select count(*)
+		from library_search_documents child
+		left join library_search_documents parent
+		  on parent.root_id=child.root_id
+		 and parent.entity_kind='folder'
+		 and parent.relative_path=regexp_replace(child.relative_path,'/[^/]+$','')
+		where child.root_id=$1
+		  and child.entity_kind='file'
+		  and strpos(child.relative_path,'/')>0
+		  and parent.document_id is null
+	`, rootIDs[0]).Scan(&missingParents)
+	if err := validateRawSearchParentRows(missingParents, queryErr); err != nil {
+		return nil, "", err
+	}
 	statement := buildRawSearchStatement(query, rootIDs, normalizedText, cursor)
 	rows, err := transaction.Query(ctx, statement.SQL, statement.Arguments...)
 	if err != nil {
@@ -395,6 +454,16 @@ func searchRawGroupsTx(
 		return nil, "", err
 	}
 	return groups, nextCursor, nil
+}
+
+func validateRawSearchParentRows(missing int, queryErr error) error {
+	if queryErr != nil {
+		return fmt.Errorf("validate raw search projection: %w", queryErr)
+	}
+	if missing != 0 {
+		return ErrInvalidData
+	}
+	return nil
 }
 
 func buildAudiobookSearchStatement(
