@@ -520,9 +520,17 @@ database:
             $safeToDelete = $false
             throw 'Recovery task port remains in use.'
         }
-        $alive = foreach ($id in $ownedProcesses) {
-            Get-Process -Id $id -ErrorAction SilentlyContinue
-        }
+        $processExitDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        do {
+            $alive = foreach ($id in $ownedProcesses) {
+                Get-Process -Id $id -ErrorAction SilentlyContinue
+            }
+            if (@($alive).Count -eq 0 -or
+                [DateTime]::UtcNow -ge $processExitDeadline) {
+                break
+            }
+            Start-Sleep -Milliseconds 100
+        } while ($true)
         if (@($alive).Count -ne 0) {
             $safeToDelete = $false
             throw 'Recovery child process remains alive.'
