@@ -1115,7 +1115,7 @@ for each row execute function e2e_pause_catalog_refinement();
         -RootIds @('audiobooks', 'archive') `
         -RawRootId 'audiobooks' `
         -PreviousCompletedAt $initialSearch.RawCompletedAt `
-        -ExpectedRawRelativePath 'Monitor Trigger/Needlebox Watched.mp3' `
+        -ExpectedRawRelativePath 'Monitor Trigger' `
         -TimeoutSeconds ([Math]::Min($TimeoutSeconds, 180))) |
         Where-Object { $_.PSObject.Properties.Name -contains 'RawCompletedAt' } |
         Select-Object -Last 1
@@ -1137,7 +1137,7 @@ for each row execute function e2e_pause_catalog_refinement();
         -Password $password `
         -RootIds @('audiobooks', 'archive') `
         -RawRootId 'audiobooks' `
-        -ExpectedRawRelativePath 'Monitor Trigger/Needlebox Watched.mp3' `
+        -ExpectedRawRelativePath 'Monitor Trigger' `
         -TimeoutSeconds 30) |
         Where-Object { $_.PSObject.Properties.Name -contains 'RawCompletedAt' } |
         Select-Object -Last 1
@@ -1156,7 +1156,7 @@ for each row execute function e2e_pause_catalog_refinement();
             -Password $password `
             -RootIds @('audiobooks', 'archive') `
             -RawRootId 'audiobooks' `
-            -ExpectedRawRelativePath 'Monitor Trigger/Needlebox Watched.mp3' `
+            -ExpectedRawRelativePath 'Monitor Trigger' `
             -TimeoutSeconds 30) |
             Where-Object { $_.PSObject.Properties.Name -contains 'RawCompletedAt' } |
             Select-Object -Last 1

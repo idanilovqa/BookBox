@@ -169,13 +169,13 @@ do {
             $_.sourceFolder -eq 'Frank Herbert/Needlebox Long Recording'
         }).Count -eq 1
     })
-    $duneFile = @($raw.entries | Where-Object {
-        $_.kind -eq 'file' -and $_.name -eq 'Needlebox.m4b' -and
-        $_.duplicateBook -eq $true
+    $needleboxFolder = @($raw.entries | Where-Object {
+        $_.kind -eq 'folder' -and
+        $_.relativePath -eq 'Frank Herbert/Needlebox Copy One'
     })
     $expectedRaw = [string]::IsNullOrWhiteSpace($ExpectedRawRelativePath) -or
         @($raw.entries | Where-Object {
-            $_.kind -eq 'file' -and $_.relativePath -eq $ExpectedRawRelativePath
+            $_.kind -eq 'folder' -and $_.relativePath -eq $ExpectedRawRelativePath
         }).Count -eq 1
     $changed = [string]::IsNullOrWhiteSpace($PreviousCompletedAt) -or
         "$($raw.snapshot.completedAt)" -ne $PreviousCompletedAt
@@ -185,7 +185,7 @@ do {
         $duplicateGroups.Count -eq 1 -and
         $otherNarratorReady.Count -eq 1 -and
         $outsideToleranceReady.Count -eq 1 -and
-        $duneFile.Count -ge 1 -and
+        $needleboxFolder.Count -eq 1 -and
         $expectedRaw -and
         $changed
     ) {
@@ -247,17 +247,16 @@ foreach ($group in @($books.groups)) {
         throw 'An audiobook duplicate group crossed configured roots.'
     }
 }
-$duneFiles = @($raw.entries | Where-Object {
-    $_.kind -eq 'file' -and $_.name -eq 'Needlebox.m4b' -and
-    $_.duplicateBook -eq $true
+$needleboxFolders = @($raw.entries | Where-Object {
+    $_.kind -eq 'folder' -and
+    $_.relativePath -like 'Frank Herbert/Needlebox *'
 })
-if ($duneFiles.Count -lt 1) {
-    throw 'Raw search did not return a duplicate-marked Needlebox.m4b file.'
+if ($needleboxFolders.Count -ne 4) {
+    throw "Raw search did not return the four dedicated Needlebox folders; got $($needleboxFolders.Count)."
 }
 $nestedRawExpected = [ordered]@{
     'Needlebox Nested' = 'folder'
     'Needlebox Nested/Needlebox Assets' = 'folder'
-    'Needlebox Nested/Needlebox Assets/cover.jpg' = 'file'
 }
 foreach ($expected in $nestedRawExpected.GetEnumerator()) {
     $matches = @($raw.entries | Where-Object {
@@ -267,6 +266,9 @@ foreach ($expected in $nestedRawExpected.GetEnumerator()) {
         $returned = @($raw.entries | ForEach-Object { "$($_.relativePath):$($_.kind)" }) -join ', '
         throw "Raw search missed $($expected.Key):$($expected.Value). Returned: $returned"
     }
+}
+if (@($raw.entries | Where-Object { $_.kind -eq 'file' }).Count -ne 0) {
+    throw 'Raw search exposed files nested inside dedicated folders.'
 }
 $rawIDs = [Collections.Generic.HashSet[string]]::new(
     [StringComparer]::Ordinal
@@ -283,7 +285,7 @@ foreach ($entry in @($raw.entries)) {
 }
 if (-not [string]::IsNullOrWhiteSpace($ExpectedRawRelativePath) -and
     @($raw.entries | Where-Object {
-        $_.kind -eq 'file' -and $_.relativePath -eq $ExpectedRawRelativePath
+        $_.kind -eq 'folder' -and $_.relativePath -eq $ExpectedRawRelativePath
     }).Count -ne 1) {
     throw 'Raw search did not return the expected monitored file.'
 }
