@@ -10,6 +10,7 @@ import com.rendref.bookbox.core.repository.BookSort
 import com.rendref.bookbox.core.repository.CatalogFiltersDto
 import com.rendref.bookbox.core.repository.CatalogSource
 import com.rendref.bookbox.core.repository.PagedBooks
+import java.io.IOException
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -123,6 +124,40 @@ class LibraryViewModelTest {
             assertEquals(listOf("one", "two"), viewModel.state.value.books.map(BookCardDto::id))
             assertFalse(viewModel.state.value.isLoadingMore)
         }
+
+    @Test
+    fun `failed pagination is latched until an explicit retry`() = runTest(dispatcher) {
+        var attempts = 0
+        val source = RecordingCatalogSource { query ->
+            if (query.cursor == null) {
+                page(book("one"), nextCursor = "cursor-2")
+            } else {
+                attempts += 1
+                if (attempts == 1) throw IOException("offline")
+                page(book("two"))
+            }
+        }
+        val viewModel = LibraryViewModel(SavedStateHandle(), source)
+        advanceTimeBy(150)
+        advanceUntilIdle()
+
+        viewModel.loadNextPage()
+        advanceUntilIdle()
+        viewModel.loadNextPage()
+        advanceUntilIdle()
+
+        assertEquals(1, attempts)
+        assertEquals("Couldn't load more", viewModel.state.value.paginationError)
+        assertFalse(viewModel.state.value.canLoadNextPage)
+        assertEquals(null, viewModel.state.value.errorMessage)
+
+        viewModel.retryNextPage()
+        advanceUntilIdle()
+
+        assertEquals(2, attempts)
+        assertEquals(listOf("one", "two"), viewModel.state.value.books.map(BookCardDto::id))
+        assertEquals(null, viewModel.state.value.paginationError)
+    }
 
     @Test
     fun `audiobook results preserve multi-root groups and snapshots`() =
@@ -254,16 +289,16 @@ class LibraryViewModelTest {
             viewModel.loadNextPage()
             advanceUntilIdle()
             assertEquals(listOf("group-a"), viewModel.state.value.groups.map { it.groupId })
-            assertEquals("Unable to load more audiobooks", viewModel.state.value.errorMessage)
+            assertEquals("Couldn't load more", viewModel.state.value.paginationError)
 
             invalidPage = page(
                 groups = listOf(group("group-b", book("a1"))),
                 snapshots = listOf(firstSnapshot),
             )
-            viewModel.loadNextPage()
+            viewModel.retryNextPage()
             advanceUntilIdle()
             assertEquals(listOf("group-a"), viewModel.state.value.groups.map { it.groupId })
-            assertEquals("Unable to load more audiobooks", viewModel.state.value.errorMessage)
+            assertEquals("Couldn't load more", viewModel.state.value.paginationError)
         }
 
     @Test

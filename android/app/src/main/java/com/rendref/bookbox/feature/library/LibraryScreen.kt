@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -61,8 +62,9 @@ fun LibraryScreen(
     onSortChange: (BookSort) -> Unit,
     onLoadNextPage: () -> Unit,
     onGridPositionChange: (index: Int, offset: Int) -> Unit,
-    onCompactPositionChange: (index: Int, offset: Int) -> Unit,
-    onLayoutChange: (LibraryLayout) -> Unit,
+    onCompactPositionChange: (index: Int, offset: Int) -> Unit = { _, _ -> },
+    onLayoutChange: (LibraryLayout) -> Unit = {},
+    onRetryNextPage: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var filtersVisible by remember { mutableStateOf(false) }
@@ -116,8 +118,8 @@ fun LibraryScreen(
             onCompactPositionChange(index, offset)
         }
     }
-    LaunchedEffect(nearEnd, state.nextCursor, state.isLoadingMore) {
-        if (nearEnd && state.nextCursor != null && !state.isLoadingMore) {
+    LaunchedEffect(nearEnd, state.canLoadNextPage, state.isLoadingMore) {
+        if (nearEnd && state.canLoadNextPage && !state.isLoadingMore) {
             onLoadNextPage()
         }
     }
@@ -268,14 +270,9 @@ fun LibraryScreen(
                         }
                     }
                 }
-                if (state.isLoadingMore) {
+                if (state.isLoadingMore || state.paginationError != null) {
                     item {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(20.dp),
-                            horizontalArrangement = Arrangement.Center,
-                        ) { CircularProgressIndicator() }
+                        PaginationFooter(state, onRetryNextPage)
                     }
                 }
             }
@@ -350,16 +347,9 @@ fun LibraryScreen(
                     }
                 }
             }
-            if (state.isLoadingMore) {
+            if (state.isLoadingMore || state.paginationError != null) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(20.dp),
-                        horizontalArrangement = Arrangement.Center,
-                    ) {
-                        CircularProgressIndicator()
-                    }
+                    PaginationFooter(state, onRetryNextPage)
                 }
             }
         }
@@ -376,6 +366,24 @@ fun LibraryScreen(
             onReviewStateChange = onReviewStateChange,
             onDismiss = { filtersVisible = false },
         )
+    }
+}
+
+@Composable
+private fun PaginationFooter(state: LibraryState, onRetry: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(64.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (state.isLoadingMore) {
+            CircularProgressIndicator()
+        } else {
+            Text(state.paginationError.orEmpty())
+            TextButton(onClick = onRetry) { Text("Retry") }
+        }
     }
 }
 

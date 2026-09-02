@@ -40,6 +40,7 @@ data class LibraryState(
     val nextCursor: String? = null,
     val isLoading: Boolean = false,
     val isLoadingMore: Boolean = false,
+    val paginationError: String? = null,
     val isIndexBuilding: Boolean = false,
     val isCatalogStale: Boolean = false,
     val catalogStatusMessage: String? = null,
@@ -49,7 +50,10 @@ data class LibraryState(
     val compactScrollIndex: Int = 0,
     val compactScrollOffset: Int = 0,
     val layout: LibraryLayout = LibraryLayout.GRID,
-)
+) {
+    val canLoadNextPage: Boolean
+        get() = nextCursor != null && paginationError == null
+}
 
 class LibraryViewModel(
     private val savedState: SavedStateHandle,
@@ -76,6 +80,7 @@ class LibraryViewModel(
     val state: StateFlow<LibraryState> = mutableState.asStateFlow()
 
     private val consumedCursors = mutableSetOf<String>()
+    private var failedPaginationCursor: String? = null
     private var paginationJob: Job? = null
 
     init {
@@ -140,6 +145,7 @@ class LibraryViewModel(
         if (
             paginationJob?.isActive == true ||
             cursor in consumedCursors ||
+            cursor == failedPaginationCursor ||
             mutableState.value.isLoading
         ) {
             return
@@ -148,6 +154,7 @@ class LibraryViewModel(
             isLoadingMore = true,
             isIndexBuilding = false,
             errorMessage = null,
+            paginationError = null,
         )
         val baseQuery = mutableState.value.query.withoutCursor()
         lateinit var launchedJob: Job
@@ -166,25 +173,17 @@ class LibraryViewModel(
                     filters = page.filters,
                     nextCursor = page.nextCursor,
                     isLoadingMore = false,
+                    paginationError = null,
                 )
             } catch (failure: CancellationException) {
                 throw failure
             } catch (_: SearchIndexBuilding) {
-                mutableState.value = mutableState.value.copy(
-                    isLoadingMore = false,
-                    isIndexBuilding = true,
-                    errorMessage = null,
-                )
+                recordPaginationFailure(cursor)
+                mutableState.value = mutableState.value.copy(isIndexBuilding = true)
             } catch (_: IOException) {
-                mutableState.value = mutableState.value.copy(
-                    isLoadingMore = false,
-                    errorMessage = "Unable to load more audiobooks",
-                )
+                recordPaginationFailure(cursor)
             } catch (_: Exception) {
-                mutableState.value = mutableState.value.copy(
-                    isLoadingMore = false,
-                    errorMessage = "Unable to load more audiobooks",
-                )
+                recordPaginationFailure(cursor)
             } finally {
                 if (paginationJob === launchedJob) paginationJob = null
             }
@@ -193,11 +192,27 @@ class LibraryViewModel(
         launchedJob.start()
     }
 
+    fun retryNextPage() {
+        failedPaginationCursor = null
+        mutableState.value = mutableState.value.copy(paginationError = null)
+        loadNextPage()
+    }
+
+    private fun recordPaginationFailure(cursor: String) {
+        failedPaginationCursor = cursor
+        mutableState.value = mutableState.value.copy(
+            isLoadingMore = false,
+            errorMessage = null,
+            paginationError = "Couldn't load more",
+        )
+    }
+
     private fun updateQuery(transform: BookQuery.() -> BookQuery) {
         val updated = query.value.transform().withoutCursor()
         if (updated == query.value) return
         savedState[QUERY_KEY] = updated
         consumedCursors.clear()
+        failedPaginationCursor = null
         paginationJob?.cancel()
         paginationJob = null
         query.value = updated
@@ -207,6 +222,7 @@ class LibraryViewModel(
             isLoadingMore = false,
             isIndexBuilding = false,
             errorMessage = null,
+            paginationError = null,
         )
     }
 
@@ -214,6 +230,7 @@ class LibraryViewModel(
         when (update) {
             is SearchUpdate.Loading -> {
                 consumedCursors.clear()
+                failedPaginationCursor = null
                 paginationJob?.cancel()
                 paginationJob = null
                 mutableState.value = mutableState.value.copy(
@@ -222,6 +239,7 @@ class LibraryViewModel(
                     isLoadingMore = false,
                     isIndexBuilding = false,
                     errorMessage = null,
+                    paginationError = null,
                 )
             }
 
@@ -252,6 +270,7 @@ class LibraryViewModel(
                     isCatalogStale = catalogStale,
                     catalogStatusMessage = STALE_CATALOG_STATUS.takeIf { catalogStale },
                     errorMessage = null,
+                    paginationError = null,
                 )
             }
 
@@ -262,6 +281,7 @@ class LibraryViewModel(
                     isLoadingMore = false,
                     isIndexBuilding = false,
                     errorMessage = "Unable to load audiobooks",
+                    paginationError = null,
                 )
             }
 
@@ -271,6 +291,7 @@ class LibraryViewModel(
                 isLoadingMore = false,
                 isIndexBuilding = true,
                 errorMessage = null,
+                paginationError = null,
             )
 
             is SearchUpdate.Inactive -> mutableState.value = mutableState.value.copy(
@@ -279,6 +300,7 @@ class LibraryViewModel(
                 isLoadingMore = false,
                 isIndexBuilding = false,
                 errorMessage = null,
+                paginationError = null,
             )
         }
     }

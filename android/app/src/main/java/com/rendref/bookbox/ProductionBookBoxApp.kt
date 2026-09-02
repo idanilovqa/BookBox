@@ -379,6 +379,7 @@ internal fun ConnectedApp(
                 onReviewStateChange = library::setReviewState,
                 onSortChange = library::setSort,
                 onLoadNextPage = library::loadNextPage,
+                onRetryNextPage = library::retryNextPage,
                 onGridPositionChange = library::saveGridPosition,
                 onCompactPositionChange = library::saveCompactPosition,
                 onLayoutChange = library::setLayout,
