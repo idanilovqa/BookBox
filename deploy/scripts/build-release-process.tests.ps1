@@ -43,7 +43,7 @@ if (
 }
 if (
     $text -notmatch [regex]::Escape(
-        "'(?m)^ARG BOOKBOX_VERSION=1\.0\.0\r?$'"
+        '"(?m)^ARG BOOKBOX_VERSION=$([regex]::Escape($Version))\r?$"'
     )
 ) {
     throw 'Release version-stamp validation must accept Windows CRLF checkouts.'

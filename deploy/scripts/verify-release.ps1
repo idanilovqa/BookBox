@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
-    [string] $Version = '1.0.0'
+    [string] $Version = '1.1.0',
+
+    [ValidateRange(1, 2147483647)]
+    [int] $VersionCode = 2
 )
 
 $ErrorActionPreference = 'Stop'
@@ -182,8 +185,8 @@ foreach ($apk in $apks) {
     if ($applicationID -cne 'com.rendref.bookbox') {
         throw "$([IO.Path]::GetFileName($apk)) application ID is $applicationID."
     }
-    if ($versionName -cne $Version -or $versionCode -ne '1') {
-        throw "$([IO.Path]::GetFileName($apk)) has version $versionName ($versionCode), expected $Version (1)."
+    if ($versionName -cne $Version -or $versionCode -ne "$VersionCode") {
+        throw "$([IO.Path]::GetFileName($apk)) has version $versionName ($versionCode), expected $Version ($VersionCode)."
     }
     if ($minimum -ne '36' -or $target -ne '36') {
         throw "$([IO.Path]::GetFileName($apk)) requires min/target SDK 36."

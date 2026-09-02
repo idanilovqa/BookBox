@@ -1,6 +1,6 @@
 FROM golang:1.26.5-alpine AS build
 
-ARG BOOKBOX_VERSION=1.0.0
+ARG BOOKBOX_VERSION=1.1.0
 
 WORKDIR /src
 COPY server/go.mod server/go.sum ./

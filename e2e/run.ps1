@@ -503,8 +503,8 @@ function Assert-ApiVersion {
     } catch {
         throw "Runtime health response is not valid JSON: $($body -join ' ')"
     }
-    if ($health.status -cne 'ok' -or $health.version -cne '1.0.0') {
-        throw "Runtime health must report status=ok and version=1.0.0; got $($body -join ' ')"
+    if ($health.status -cne 'ok' -or $health.version -cne '1.1.0') {
+        throw "Runtime health must report status=ok and version=1.1.0; got $($body -join ' ')"
     }
 }
 

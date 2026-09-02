@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
-    [string] $Version = '1.0.0'
+    [string] $Version = '1.1.0',
+
+    [ValidateRange(1, 2147483647)]
+    [int] $VersionCode = 2
 )
 
 $ErrorActionPreference = 'Stop'
@@ -158,6 +161,27 @@ function Initialize-JavaAndGradle {
     [IO.Directory]::CreateDirectory($env:GRADLE_USER_HOME) | Out-Null
 }
 
+function Get-AndroidApkOutput {
+    param([Parameter(Mandatory)][string] $Directory)
+    $resolvedDirectory = [IO.Path]::GetFullPath($Directory).TrimEnd('\')
+    $metadataPath = Join-Path $resolvedDirectory 'output-metadata.json'
+    if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) {
+        throw "Android output metadata was not produced: $metadataPath"
+    }
+    $metadata = Get-Content -Raw -LiteralPath $metadataPath | ConvertFrom-Json
+    $outputs = @($metadata.elements | ForEach-Object { [string] $_.outputFile })
+    if ($outputs.Count -ne 1 -or [string]::IsNullOrWhiteSpace($outputs[0])) {
+        throw "Android output metadata must name exactly one APK: $metadataPath"
+    }
+    $candidate = [IO.Path]::GetFullPath((Join-Path $resolvedDirectory $outputs[0]))
+    if ([IO.Path]::GetDirectoryName($candidate).TrimEnd('\') -cne $resolvedDirectory -or
+        [IO.Path]::GetExtension($candidate) -cne '.apk' -or
+        -not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        throw "Android output metadata contains an unsafe or missing APK: $metadataPath"
+    }
+    return $candidate
+}
+
 function Get-AndroidSdk {
     if ($env:ANDROID_HOME -and (Test-Path -LiteralPath $env:ANDROID_HOME -PathType Container)) {
         return [IO.Path]::GetFullPath($env:ANDROID_HOME)
@@ -224,10 +248,17 @@ $serverMain = Get-Content -LiteralPath (
 $apiDockerfile = Get-Content -LiteralPath (
     Join-Path $script:repo 'deploy\Dockerfile.api'
 ) -Raw
+$androidBuild = Get-Content -LiteralPath (
+    Join-Path $android 'app\build.gradle.kts'
+) -Raw
 if ($serverMain -notmatch 'var\s+version\s*=\s*"dev"' -or
-    $apiDockerfile -notmatch '(?m)^ARG BOOKBOX_VERSION=1\.0\.0\r?$' -or
+    $apiDockerfile -notmatch "(?m)^ARG BOOKBOX_VERSION=$([regex]::Escape($Version))\r?$" -or
     $apiDockerfile -notmatch [regex]::Escape('-X main.version=${BOOKBOX_VERSION}')) {
-    throw 'Release blocker: the API must keep a dev source default and stamp BOOKBOX_VERSION=1.0.0 through Docker ldflags.'
+    throw "Release blocker: the API must keep a dev source default and stamp BOOKBOX_VERSION=$Version through Docker ldflags."
+}
+if ($androidBuild -notmatch [regex]::Escape("val bookBoxVersionName = `"$Version`"") -or
+    $androidBuild -notmatch [regex]::Escape("val bookBoxVersionCode = $VersionCode")) {
+    throw "Release blocker: Android must declare version $Version ($VersionCode)."
 }
 Initialize-JavaAndGradle
 $sdk = Get-AndroidSdk
@@ -331,10 +362,7 @@ Invoke-MonitoredProcess `
     -WorkingDirectory $android `
     -TimeoutSeconds 2400
 
-$debugSource = Join-Path $android 'app\build\outputs\apk\debug\app-debug.apk'
-if (-not (Test-Path -LiteralPath $debugSource -PathType Leaf)) {
-    throw "Debug APK was not produced: $debugSource"
-}
+$debugSource = Get-AndroidApkOutput (Join-Path $android 'app\build\outputs\apk\debug')
 Copy-Item -LiteralPath $debugSource -Destination $debugArtifact
 Write-Host "Created $debugArtifact"
 
@@ -359,10 +387,7 @@ if ((Test-Path -LiteralPath $keystore -PathType Leaf) -and
         ) `
         -WorkingDirectory $android `
         -TimeoutSeconds 1200
-    $unsigned = Join-Path $android 'app\build\outputs\apk\release\app-release-unsigned.apk'
-    if (-not (Test-Path -LiteralPath $unsigned -PathType Leaf)) {
-        throw "Unsigned release APK was not produced: $unsigned"
-    }
+    $unsigned = Get-AndroidApkOutput (Join-Path $android 'app\build\outputs\apk\release')
     $sdk = Get-AndroidSdk
     $zipalign = Get-LatestBuildTool $sdk 'zipalign.exe'
     $apksigner = Get-LatestBuildTool $sdk 'apksigner.bat'
@@ -393,6 +418,6 @@ if ((Test-Path -LiteralPath $keystore -PathType Leaf) -and
 Invoke-Checked 'APK and discovery metadata, signatures, and checksums' {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $script:repo 'deploy\scripts\verify-release.ps1') `
-        -Version $Version
+        -Version $Version -VersionCode $VersionCode
 }
 Write-Host "PASS: BookBox v$Version release artifacts passed every automated gate."
