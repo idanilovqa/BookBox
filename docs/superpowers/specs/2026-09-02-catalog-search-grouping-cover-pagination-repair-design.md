@@ -36,6 +36,8 @@ Exact normalized substring matches will keep their current behavior. Fuzzy match
 
 The pair preserves expected misspellings such as `sandyrsen` for `sanderson` while rejecting unrelated records that passed the old `0.30` check. The repository will define the predicate and score expression once, then reuse them in the page query and cursor resolver. Candidate generation through the trigram index remains in place.
 
+Live-library verification exposed borderline false positives (`Jefferson`, `Sandstorm`, and `Reasons and Persons`) even with that pair. Fuzzy candidates therefore also require bounded Levenshtein distance against a whole word or contiguous phrase: one edit for short queries, two for queries of eight or more characters. This preserves `sandyrsen` and transpositions such as `sandreson` without admitting unrelated shared syllables. The check runs after indexed candidate generation, supports compact multiword queries, and rejects fuzzy queries beyond the extension's 255-character limit while retaining exact search.
+
 Tests will include exact title and author matches, the reported unrelated results, realistic author and title misspellings, stable ranking, and cursor continuation with the same predicate.
 
 ## Folder-First Raw Search
@@ -83,6 +85,8 @@ Eligible books will use the existing request order: ISBN, title and author, then
 Provider candidates remain reviewable. Automatic confirmation must meet the existing confidence policy using meaningful title and author evidence. A provider response cannot turn a placeholder track into a confirmed book.
 
 When a confirmed provider candidate supplies a cover URL, the cover publication job will retrieve and store that image under the existing HTTPS and size limits. Local cover art takes precedence for display while it exists and passes validation; the provider cover acts as the fallback.
+
+Deployment verification also exposed Windows publication failures. Canonical backup paths on a different volume are outside the library and must be accepted. File data remains flushed before publication, but the unsupported Windows directory-flush operation is skipped. Native Windows publication, backup, and rollback tests are now mandatory in the release pipeline alongside the Linux suite.
 
 Tests will cover eligibility rejection, title-only collection lookup, audiobook-suffix normalization, candidate scoring, and provider-cover publication.
 

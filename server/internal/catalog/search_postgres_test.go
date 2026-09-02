@@ -1079,6 +1079,7 @@ func TestFuzzySearchPredicateRequiresGeneralAndWordBoundarySimilarity(t *testing
 		"strpos(search_compact,$7)>0",
 		"word_similarity($7,search_terms)>=0.4",
 		"strict_word_similarity($7,search_terms)>=0.25",
+		"catalog_search_spelling_match($7,search_terms)",
 	} {
 		if !strings.Contains(predicate, fragment) {
 			t.Fatalf("predicate %q does not contain %q", predicate, fragment)

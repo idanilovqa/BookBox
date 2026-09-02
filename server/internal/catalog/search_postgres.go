@@ -231,7 +231,8 @@ func fuzzyGramCondition(grams []string, addArgument func(any) string) string {
 func fuzzyTextPredicate(queryPlaceholder string) string {
 	return "(strpos(search_compact," + queryPlaceholder + ")>0 or (" +
 		"word_similarity(" + queryPlaceholder + ",search_terms)>=0.4 and " +
-		"strict_word_similarity(" + queryPlaceholder + ",search_terms)>=0.25))"
+		"strict_word_similarity(" + queryPlaceholder + ",search_terms)>=0.25 and " +
+		"catalog_search_spelling_match(" + queryPlaceholder + ",search_terms)))"
 }
 
 func fuzzyTextScore(queryPlaceholder string) string {
