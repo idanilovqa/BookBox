@@ -228,7 +228,7 @@ func snapshotTree(t *testing.T, root string) []string {
 	return snapshot
 }
 
-func TestRecognizedNamesAreExact(t *testing.T) {
+func TestSupportedImagesAreInventoriedAsCoverCandidates(t *testing.T) {
 	root := createTree(t,
 		"Book/coverlet.jpg", "Book/front-cover.jpg", "Book/folder.jpeg",
 		"Book/cover.gif", "Book/actual.mp3",
@@ -239,10 +239,7 @@ func TestRecognizedNamesAreExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertPaths(t, got, "Book/actual.mp3", "Book/folder.jpeg")
-	for _, file := range got.Files {
-		if strings.Contains(file.RelativePath, "coverlet") {
-			t.Fatalf("accepted non-recognized cover: %s", file.RelativePath)
-		}
-	}
+	assertPaths(t, got,
+		"Book/actual.mp3", "Book/coverlet.jpg", "Book/folder.jpeg", "Book/front-cover.jpg",
+	)
 }

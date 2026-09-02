@@ -106,6 +106,7 @@ func InferTree(tree Tree) Result {
 	}
 
 	sharedCovers := filesOfKind(files, catalog.FileKindCover)
+	sharedScope := len(clusters) > 1
 	for index := range clusters {
 		cluster := &clusters[index]
 		sort.Slice(cluster.audio, func(i, j int) bool { return cluster.audio[i].RelativePath < cluster.audio[j].RelativePath })
@@ -113,7 +114,8 @@ func InferTree(tree Tree) Result {
 			cluster.key = treeGroupingKey(tree, *cluster)
 		}
 		companions := companionsForCluster(files, cluster.identity, cluster.audio)
-		book := inferredTreeBook(tree, *cluster, sharedCovers, companions)
+		covers := coversForTreeCluster(tree, *cluster, sharedCovers, sharedScope)
+		book := inferredTreeBook(tree, *cluster, covers, companions)
 		result.Books = append(result.Books, book)
 		result.Evidence[book.GroupingKey] = treeGroupingEvidence(book, cluster.reason, byID)
 	}
@@ -125,6 +127,92 @@ func InferTree(tree Tree) Result {
 		return left.GroupingKey < right.GroupingKey
 	})
 	return result
+}
+
+func coversForTreeCluster(
+	tree Tree,
+	cluster treeCluster,
+	candidates []catalog.SourceFile,
+	sharedScope bool,
+) []catalog.SourceFile {
+	if len(candidates) == 0 {
+		return nil
+	}
+	title := cluster.identity.title
+	if title == "" {
+		_, _, folderTitle := parseFolderSeries(path.Base(strings.TrimSuffix(tree.ScopePath, "/")))
+		title = normalizeComparableTitle(folderTitle)
+	}
+	type scoredCover struct {
+		file  catalog.SourceFile
+		score int
+	}
+	scored := make([]scoredCover, 0, len(candidates))
+	for _, candidate := range candidates {
+		stem := normalizeComparableTitle(strings.TrimSuffix(
+			path.Base(candidate.RelativePath), path.Ext(candidate.RelativePath),
+		))
+		if negativeCoverStem(stem) {
+			continue
+		}
+		score := 0
+		if stem == "cover" || stem == "folder" || stem == "front" {
+			score += 100
+		}
+		if coverTitleAgreement(stem, title) {
+			score += 80
+		}
+		for _, signal := range []string{"cover", "front", "folder", "jacket", "artwork"} {
+			if strings.Contains(stem, signal) {
+				score += 30
+				break
+			}
+		}
+		if !sharedScope && len(candidates) == 1 {
+			score += 70
+		}
+		scored = append(scored, scoredCover{file: candidate, score: score})
+	}
+	if len(scored) == 0 {
+		return nil
+	}
+	sort.Slice(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		return scored[i].file.RelativePath < scored[j].file.RelativePath
+	})
+	if scored[0].score < 70 || len(scored) > 1 && scored[0].score-scored[1].score < 15 {
+		return nil
+	}
+	return []catalog.SourceFile{scored[0].file}
+}
+
+func negativeCoverStem(stem string) bool {
+	for _, signal := range []string{
+		"back", "booklet", "disc", "disk", "map", "banner", "logo", "thumb", "thumbnail",
+	} {
+		if strings.Contains(stem, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func coverTitleAgreement(stem, title string) bool {
+	if stem == "" || title == "" {
+		return false
+	}
+	if strings.Contains(stem, title) || strings.Contains(title, stem) {
+		return true
+	}
+	ignored := map[string]bool{"abridged": true, "unabridged": true, "audiobook": true}
+	for _, word := range strings.Fields(title) {
+		if len([]rune(word)) >= 4 && !ignored[word] && strings.Contains(stem, word) {
+			return true
+		}
+	}
+	return false
 }
 
 func inferAutomaticTreeClusters(tree Tree, audio, allFiles []catalog.SourceFile) []treeCluster {

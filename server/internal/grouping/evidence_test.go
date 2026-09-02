@@ -90,6 +90,24 @@ func TestInferTreeKeepsCounterNamedStandaloneM4BsSeparate(t *testing.T) {
 	}
 }
 
+func TestInferTreeAssignsTitleNamedCoverOnlyToMatchingSharedBook(t *testing.T) {
+	dune := treeAudio("Shared/Dune.m4b", "Dune", "Frank Herbert")
+	foundation := treeAudio("Shared/Foundation.m4b", "Foundation", "Isaac Asimov")
+	duneCover := treeFile("Shared/Dune.jpg", catalog.FileKindCover, "", nil)
+	logo := treeFile("Shared/publisher-logo.png", catalog.FileKindCover, "", nil)
+	result := InferTree(testTree("Shared", dune, foundation, duneCover, logo))
+
+	duneBook := treeBookByTitle(t, result.Books, "Dune")
+	if duneBook.FileRoles[duneCover.ID] != catalog.FileRoleCover ||
+		duneBook.FileRoles[logo.ID] != "" {
+		t.Fatalf("Dune cover roles=%#v", duneBook.FileRoles)
+	}
+	foundationBook := treeBookByTitle(t, result.Books, "Foundation")
+	if foundationBook.FileRoles[duneCover.ID] != "" || foundationBook.FileRoles[logo.ID] != "" {
+		t.Fatalf("Foundation cover roles=%#v", foundationBook.FileRoles)
+	}
+}
+
 func TestInferTreeApprovedCases(t *testing.T) {
 	tests := []struct {
 		name string

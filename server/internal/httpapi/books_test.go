@@ -260,6 +260,43 @@ func TestBookCoverFallsBackToDescriptiveArtworkFilename(t *testing.T) {
 	}
 }
 
+func TestBookCoverPrefersCatalogAssignedArtwork(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	bookFolder := filepath.Join(root, "Book")
+	if err := os.MkdirAll(bookFolder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	assigned := []byte("assigned-oathbringer-art")
+	if err := os.WriteFile(filepath.Join(bookFolder, "Oathbringer.jpg"), assigned, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bookFolder, "cover.jpg"), []byte("unassigned-generic-art"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := library.NewResolver([]config.Root{{ID: "audio", ContainerPath: root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bookID := uuid.New()
+	repository := &catalogAPIFake{details: map[uuid.UUID]catalog.BookDetail{
+		bookID: {
+			Book: catalog.Book{ID: bookID, RootID: "audio", SourceFolder: "Book", Title: "Oathbringer"},
+			Files: []catalog.SourceFile{{
+				ID: uuid.New(), RootID: "audio", RelativePath: "Book/Oathbringer.jpg",
+				FileKind: catalog.FileKindCover, Size: int64(len(assigned)),
+			}},
+		},
+	}}
+	request := newJSONRequest(t, "GET", "/v1/books/"+bookID.String()+"/cover", nil)
+	request.SetPathValue("bookId", bookID.String())
+	response := performHandler(bookCoverHandler(repository, resolver), request)
+	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), assigned) {
+		t.Fatalf("cover = %d %q", response.Code, response.Body.Bytes())
+	}
+}
+
 func TestBookHandlersRejectInvalidUUIDsWithStableErrors(t *testing.T) {
 	t.Parallel()
 

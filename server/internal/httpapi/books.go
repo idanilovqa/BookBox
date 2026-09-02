@@ -225,7 +225,7 @@ func bookCoverHandler(repository CatalogRepository, resolver *library.Resolver) 
 		if !ok {
 			return
 		}
-		coverRelative, err := currentBookCover(resolver, detail.Book)
+		coverRelative, err := currentBookCover(resolver, detail)
 		if err != nil {
 			writeCatalogError(response, catalog.ErrNotFound)
 			return
@@ -252,8 +252,29 @@ func bookCoverHandler(repository CatalogRepository, resolver *library.Resolver) 
 
 func currentBookCover(
 	resolver *library.Resolver,
-	book catalog.Book,
+	detail catalog.BookDetail,
 ) (string, error) {
+	book := detail.Book
+	for _, file := range detail.Files {
+		if file.FileKind != catalog.FileKindCover || file.MissingAt != nil ||
+			file.RootID != book.RootID ||
+			catalog.ValidateRelativePath(file.RelativePath) != nil ||
+			path.Dir(file.RelativePath) != book.SourceFolder {
+			continue
+		}
+		handle, resolved, err := resolver.OpenRegular(book.RootID, file.RelativePath)
+		if err != nil || resolved.Relative != file.RelativePath {
+			if handle != nil {
+				handle.Close()
+			}
+			continue
+		}
+		info, statErr := handle.Stat()
+		handle.Close()
+		if statErr == nil && info.Mode().IsRegular() {
+			return file.RelativePath, nil
+		}
+	}
 	folder, err := resolver.Resolve(book.RootID, book.SourceFolder)
 	if err != nil {
 		return "", err

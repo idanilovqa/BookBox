@@ -219,10 +219,7 @@ func classifyInventoryFile(name string) (FileKind, string, bool) {
 	case ".m4b", ".m4a", ".mp3", ".aac", ".flac", ".ogg", ".opus", ".wav":
 		return KindAudio, "", true
 	case ".jpg", ".jpeg", ".png", ".webp":
-		stem := strings.TrimSuffix(lower, extension)
-		if stem == "cover" || stem == "folder" || stem == "front" {
-			return KindCover, "", true
-		}
+		return KindCover, "", true
 	case ".cue":
 		return KindCompanion, "cue", true
 	case ".nfo":

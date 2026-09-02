@@ -141,12 +141,12 @@ func TestInventoryRejectsPathScopeSymlinkAliases(t *testing.T) {
 	}
 }
 
-func TestInventoryFullScopePreservesHiddenExclusionAndCoverNameRules(t *testing.T) {
+func TestInventoryFullScopePreservesHiddenExclusionAndImageCandidateRules(t *testing.T) {
 	root := inventoryFixture(t, map[string]string{
 		"Keep/book.mp3":          "audio",
 		"Keep/front.webp":        "cover",
-		"Keep/front-cover.jpg":   "not a recognized cover",
-		"Keep/coverlet.jpg":      "not a recognized cover",
+		"Keep/front-cover.jpg":   "image candidate",
+		"Keep/coverlet.jpg":      "image candidate",
 		"Keep/.hidden/book.mp3":  "hidden",
 		".hidden/book.mp3":       "hidden",
 		"Excluded/book.mp3":      "excluded",
@@ -158,7 +158,9 @@ func TestInventoryFullScopePreservesHiddenExclusionAndCoverNameRules(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertInventoryPaths(t, result.Files, "Keep/book.mp3", "Keep/front.webp")
+	assertInventoryPaths(t, result.Files,
+		"Keep/book.mp3", "Keep/coverlet.jpg", "Keep/front-cover.jpg", "Keep/front.webp",
+	)
 }
 
 func TestInventoryKeepsStableIDsWhileRefreshingChangedFingerprints(t *testing.T) {
