@@ -36,12 +36,13 @@ type treeIdentity struct {
 }
 
 type treeCluster struct {
-	identity treeIdentity
-	audio    []catalog.SourceFile
-	reason   string
-	review   string
-	locked   bool
-	key      string
+	displayTitle string
+	identity     treeIdentity
+	audio        []catalog.SourceFile
+	reason       string
+	review       string
+	locked       bool
+	key          string
 }
 
 // InferTree conservatively groups every active audio file exactly once. User
@@ -267,20 +268,21 @@ func inferAutomaticTreeClusters(tree Tree, audio, allFiles []catalog.SourceFile)
 		identities[index] = identityForTreeFile(file)
 		allTitlesEmpty = allTitlesEmpty && identities[index].title == ""
 	}
-	if allTitlesEmpty && coherentTrackSequence(audio) {
+	namedTitle := namedTrackSequenceTitle(tree, audio)
+	if allTitlesEmpty && (coherentTrackSequence(audio) || namedTitle != "") {
 		if sequenceAuthorConflict(identities) {
 			return []treeCluster{{
-				identity: consistentTreeIdentity(audio),
-				audio:    audio,
-				reason:   "conflicting_author",
-				review:   catalog.ReviewNeedsReview,
+				identity: consistentTreeIdentity(audio), displayTitle: namedTitle,
+				audio:  audio,
+				reason: "conflicting_author",
+				review: catalog.ReviewNeedsReview,
 			}}
 		}
 		return []treeCluster{{
-			identity: consistentTreeIdentity(audio),
-			audio:    audio,
-			reason:   "folder_default",
-			review:   catalog.ReviewUnreviewed,
+			identity: consistentTreeIdentity(audio), displayTitle: namedTitle,
+			audio:  audio,
+			reason: "folder_default",
+			review: catalog.ReviewUnreviewed,
 		}}
 	}
 	for index, file := range audio {
@@ -397,7 +399,10 @@ func inferredTreeBook(tree Tree, cluster treeCluster, covers, companions []catal
 	if identity.title == "" {
 		identity = consistentTreeIdentity(cluster.audio)
 	}
-	title := treeDisplayValue(cluster.audio, "album")
+	title := cluster.displayTitle
+	if title == "" {
+		title = treeDisplayValue(cluster.audio, "album")
+	}
 	if title == "" {
 		title = treeDisplayValue(cluster.audio, "title")
 	}

@@ -131,3 +131,30 @@ func TestInventoryUsesFullTitleForAbbreviatedSeriesTag(t *testing.T) {
 		t.Fatalf("short tag obscured full folder title: %+v", result.Books)
 	}
 }
+
+func TestAuthorScopeGroupsEnhancedLastHeroTracks(t *testing.T) {
+	var files []catalog.SourceFile
+	for n := 1; n <= 9; n++ {
+		number := strconv.Itoa(n)
+		files = append(files, inventoryGroupingAudio("Terry Pratchett/Discworld/(#27) The Last Hero/DW27 - The Last Hero - "+number+" (enhanced).m4a"))
+	}
+	other := inventoryGroupingAudio("Terry Pratchett/Discworld/(#23) Carpe Jugulum/Carpe Jugulum.m4b")
+	other.Media = map[string]any{"album": "Carpe Jugulum", "author": "Terry Pratchett"}
+	files = append(files, other)
+	result := inferInventoryTree(grouping.Tree{RootID: "audiobooks", ScopePath: "Terry Pratchett", Files: files}, grouping.InferTree)
+	if len(result.Books) != 2 {
+		t.Fatalf("expected two books, got %d", len(result.Books))
+	}
+	found := false
+	for _, b := range result.Books {
+		if b.Title == "The Last Hero" {
+			found = true
+			if len(b.SourceFileIDs) != 9 {
+				t.Fatalf("wrong track count: %d", len(b.SourceFileIDs))
+			}
+		}
+	}
+	if !found {
+		t.Fatal("Last Hero grouping absent")
+	}
+}
