@@ -12,6 +12,7 @@ enum class BookSort(
     val wireValue: String,
 ) {
     TITLE("title"),
+    SERIES("series"),
     AUTHOR("author"),
     YEAR("year"),
     RECENTLY_ADDED("recently_added"),

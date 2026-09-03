@@ -496,6 +496,7 @@ private fun FilterSection(
 
 private fun BookSort.displayLabel(): String = when (this) {
     BookSort.TITLE -> "Title"
+    BookSort.SERIES -> "Series"
     BookSort.AUTHOR -> "Author"
     BookSort.YEAR -> "Year"
     BookSort.RECENTLY_ADDED -> "Recently added"

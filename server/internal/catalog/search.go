@@ -32,6 +32,7 @@ type bookSortSpec struct {
 }
 
 var bookSortSpecs = map[string]bookSortSpec{
+	BookSortSeries: {valueSQL: seriesSortSQL("b."), direction: "asc", cursorKind: cursorText},
 	BookSortTitle: {
 		valueSQL:   "lower(b.title)",
 		direction:  "asc",

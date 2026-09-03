@@ -1,8 +1,10 @@
 package worker
 
 import (
+	"bookbox.local/server/internal/metadata"
 	"context"
 	"errors"
+	"time"
 
 	"bookbox.local/server/internal/catalog"
 	"bookbox.local/server/internal/config"
@@ -28,6 +30,18 @@ func QueueMetadataEnrichment(ctx context.Context, repo enrichmentMaintenanceRepo
 				return err
 			}
 			for _, book := range page.Items {
+				if book.MissingAt == nil && (book.Series == "" || book.SeriesPosition == "") {
+					if writer, ok := repo.(interface {
+						FillMissingBookSeries(context.Context, uuid.UUID, time.Time, string, string) (bool, error)
+					}); ok {
+						series, position := metadata.InferSeriesIdentity(seriesEvidence(book))
+						if series != "" && (series != book.Series || position != book.SeriesPosition) {
+							if _, err := writer.FillMissingBookSeries(ctx, book.ID, book.UpdatedAt, series, position); err != nil {
+								return err
+							}
+						}
+					}
+				}
 				if book.MissingAt != nil || book.ConfirmedMatchID == nil {
 					continue
 				}
@@ -40,6 +54,18 @@ func QueueMetadataEnrichment(ctx context.Context, repo enrichmentMaintenanceRepo
 				}
 				if detail.Book.MissingAt != nil || detail.Book.ConfirmedMatchID == nil {
 					continue
+				}
+				if detail.Book.Series == "" || detail.Book.SeriesPosition == "" {
+					if writer, ok := repo.(interface {
+						FillMissingBookSeries(context.Context, uuid.UUID, time.Time, string, string) (bool, error)
+					}); ok {
+						series, position := metadata.InferSeriesFromFiles(seriesEvidence(detail.Book), detail.Files)
+						if series != "" && (series != detail.Book.Series || position != detail.Book.SeriesPosition) {
+							if _, err := writer.FillMissingBookSeries(ctx, detail.Book.ID, detail.Book.UpdatedAt, series, position); err != nil {
+								return err
+							}
+						}
+					}
 				}
 				hasCover := false
 				for _, file := range detail.Files {
@@ -67,6 +93,19 @@ func QueueMetadataEnrichment(ctx context.Context, repo enrichmentMaintenanceRepo
 			}
 			cursor = page.NextCursor
 		}
+		if publisher, ok := repo.(interface {
+			QueuePendingSeriesProjection(context.Context, string) error
+		}); ok {
+			if err := publisher.QueuePendingSeriesProjection(ctx, root.ID); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+func seriesEvidence(book catalog.Book) catalog.InferredBook {
+	evidence := inferredFromBook(book)
+	evidence.Title = book.Title
+	return evidence
 }

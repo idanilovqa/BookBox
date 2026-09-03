@@ -58,6 +58,7 @@ const (
 	JobSucceeded = "succeeded"
 	JobDead      = "dead"
 
+	BookSortSeries          = "series"
 	BookSortTitle           = "title"
 	BookSortAuthor          = "author"
 	BookSortYear            = "year"

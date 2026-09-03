@@ -195,6 +195,7 @@ type searchDocumentSort struct {
 }
 
 var searchDocumentSorts = map[string]searchDocumentSort{
+	BookSortSeries:          {expression: seriesSortSQL(""), direction: "asc", cursorKind: cursorText},
 	BookSortTitle:           {expression: "lower(title)", direction: "asc", cursorKind: cursorText},
 	BookSortAuthor:          {expression: "lower(coalesce(authors[1],''))", direction: "asc", cursorKind: cursorText},
 	BookSortYear:            {expression: "coalesce(publication_year,-2147483648)", direction: "desc", cursorKind: cursorYear},
@@ -1106,12 +1107,13 @@ func searchCursorScope(query SearchQuery, rootIDs []string, normalizedText strin
 
 func searchSnapshotDigest(snapshots []SearchSnapshot) string {
 	type identity struct {
-		RootID    string    `json:"rootId"`
-		ScanRunID uuid.UUID `json:"scanRunId"`
+		RootID     string    `json:"rootId"`
+		ScanRunID  uuid.UUID `json:"scanRunId"`
+		Generation int64     `json:"generation"`
 	}
 	values := make([]identity, len(snapshots))
 	for index, snapshot := range snapshots {
-		values[index] = identity{snapshot.RootID, snapshot.ScanRunID}
+		values[index] = identity{snapshot.RootID, snapshot.ScanRunID, snapshot.CatalogGeneration}
 	}
 	return searchDigest(values)
 }

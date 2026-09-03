@@ -518,7 +518,7 @@ func (repository *PostgresRepository) GetBook(
 	detail := BookDetail{Book: book}
 	fileRows, err := repository.pool.Query(ctx, `
 		select f.id, f.root_id, f.relative_path, f.size, f.modified_at,
-		       coalesce(f.sha256,''), f.media, f.scan_run_id, f.missing_at
+		       coalesce(f.sha256,''), f.media, f.scan_run_id, f.missing_at, f.file_kind, coalesce(f.companion_kind,'')
 		from book_files bf
 		join source_files f on f.id=bf.file_id and f.root_id=bf.root_id
 		where bf.book_id=$1
@@ -2842,6 +2842,8 @@ func scanSourceFile(row scanner) (SourceFile, error) {
 		&media,
 		&file.ScanRunID,
 		&file.MissingAt,
+		&file.FileKind,
+		&file.CompanionKind,
 	); err != nil {
 		return SourceFile{}, err
 	}

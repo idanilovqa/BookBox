@@ -140,6 +140,7 @@ func (matcher *Matcher) search(ctx context.Context, local catalog.InferredBook) 
 					continue
 				}
 				seen[key] = true
+				candidate = candidateWithSeries(candidate, local)
 				scored = append(scored, ScoredCandidate{Candidate: candidate, Score: score(scoringBook, candidate)})
 			}
 		}

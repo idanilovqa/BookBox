@@ -91,3 +91,24 @@ func TestEnrichmentDedupeKeyUsesCleanSearchTitle(t *testing.T) {
 		t.Fatal("different books must not share an enrichment key")
 	}
 }
+
+type seriesMaintenanceRepository struct {
+	coverMaintenanceRepository
+	filledSeries, filledPosition string
+}
+
+func (r *seriesMaintenanceRepository) FillMissingBookSeries(_ context.Context, _ uuid.UUID, _ time.Time, series, position string) (bool, error) {
+	r.filledSeries = series
+	r.filledPosition = position
+	return true, nil
+}
+func TestMaintenanceBackfillsConfirmedSeries(t *testing.T) {
+	book := catalog.Book{ID: uuid.New(), RootID: "audio", Title: "The Great Hunt (The Wheel of Time Book 2)", ReviewState: catalog.ReviewConfirmed}
+	repo := &seriesMaintenanceRepository{coverMaintenanceRepository: coverMaintenanceRepository{stagedRepositoryFake: stagedRepositoryFake{books: []catalog.Book{book}}}}
+	if err := QueueMetadataEnrichment(t.Context(), repo, []config.Root{{ID: "audio"}}); err != nil {
+		t.Fatal(err)
+	}
+	if repo.filledSeries != "The Wheel of Time" || repo.filledPosition != "2" {
+		t.Fatalf("series not backfilled: %+v", repo)
+	}
+}
