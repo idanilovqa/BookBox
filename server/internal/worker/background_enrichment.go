@@ -4,6 +4,7 @@ import (
 	"bookbox.local/server/internal/metadata"
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"bookbox.local/server/internal/catalog"
@@ -79,6 +80,13 @@ func QueueMetadataEnrichment(ctx context.Context, repo enrichmentMaintenanceRepo
 				}
 				match, ok := confirmedMatch(detail.Matches, book.ID, *detail.Book.ConfirmedMatchID)
 				if ok {
+					if strings.TrimSpace(match.CoverURL) == "" {
+						_, err := repo.EnqueueDeduplicated(ctx, catalog.WorkerJob{ID: uuid.New(), Kind: catalog.JobEnrichBook, Payload: map[string]any{"bookId": book.ID.String()}}, "enrich_cover:"+book.ID.String()+":"+match.ID.String())
+						if err != nil {
+							return err
+						}
+						continue
+					}
 					// queueCover only needs the enqueue portion of EnrichRepository.
 					if err := enqueueMatchCover(ctx, repo, book.ID, match); err != nil {
 						return err

@@ -63,6 +63,7 @@ func inferFullInventoryTree(
 	for _, correction := range tree.Corrections {
 		rootCorrection = rootCorrection || correction.SourceFolder == ""
 	}
+	chapterScopes := numericChapterScopes(tree)
 	audioScopes := make(map[uuid.UUID]string)
 	scopeSet := make(map[string]struct{})
 	for _, file := range tree.Files {
@@ -70,6 +71,9 @@ func inferFullInventoryTree(
 			continue
 		}
 		scope := fullInventoryAudioScope(file.RelativePath)
+		if chapterScope, ok := chapterScopes[file.ID]; ok {
+			scope = chapterScope
+		}
 		// Keep explicit cross-folder assignments within their correction scope.
 		for _, correction := range tree.Corrections {
 			corrected := correction.SourceFolder

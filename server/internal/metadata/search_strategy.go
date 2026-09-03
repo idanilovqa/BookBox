@@ -197,6 +197,8 @@ func (matcher *Matcher) search(ctx context.Context, local catalog.InferredBook) 
 				continue
 			}
 			for _, candidate := range candidates {
+				candidate.Subjects = catalog.CleanOptionalMetadata(candidate.Subjects)
+				candidate.Genres = catalog.CleanOptionalMetadata(candidate.Genres)
 				key := candidate.Provider + "\x00" + candidate.ProviderID
 				if seen[key] || candidate.ProviderID == "" || strings.TrimSpace(candidate.Title) == "" {
 					continue
@@ -319,6 +321,8 @@ func folderAuthorHints(local catalog.InferredBook) []string {
 func corroboratedFolderAuthor(local catalog.InferredBook, candidates []ScoredCandidate) []string {
 	// A provider-confirmed existing author remains stronger than a folder hint.
 	for _, candidate := range candidates {
+		candidate.Subjects = catalog.CleanOptionalMetadata(candidate.Subjects)
+		candidate.Genres = catalog.CleanOptionalMetadata(candidate.Genres)
 		if len(local.Authors) > 0 && authorSimilarity(normalizedAuthors(local.Authors), normalizedAuthors(candidate.Authors)) >= 0.8 {
 			for _, title := range localSearchTitles(local) {
 				variant := local
@@ -333,7 +337,7 @@ func corroboratedFolderAuthor(local catalog.InferredBook, candidates []ScoredCan
 		for _, c := range candidates {
 			authorMatch := false
 			for _, author := range c.Authors {
-				if normalizeText(author, true) == normalizeText(hint, true) {
+				if equivalentEditionAuthors([]string{author}, []string{hint}) {
 					authorMatch = true
 				}
 			}

@@ -116,12 +116,19 @@ func (worker *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("drain fingerprint outbox: %w", err)
 	}
 	nextScan := now.Add(scanInterval)
+	nextRecovery := now.Add(time.Minute)
 
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 		now = clock().UTC()
+		if !now.Before(nextRecovery) {
+			if err := worker.Repo.RecoverExpiredJobs(ctx, now); err != nil {
+				return fmt.Errorf("recover expired worker jobs: %w", err)
+			}
+			nextRecovery = now.Add(time.Minute)
+		}
 		if _, err := drain(ctx, now, 256); err != nil {
 			return fmt.Errorf("drain fingerprint outbox: %w", err)
 		}
@@ -537,6 +544,40 @@ func (handler *EnrichBookHandler) Handle(
 		// Confirmation may have committed before an earlier cover enqueue failed.
 		if detail.Book.ConfirmedMatchID != nil {
 			if match, ok := confirmedMatch(detail.Matches, bookID, *detail.Book.ConfirmedMatchID); ok {
+				if strings.TrimSpace(match.CoverURL) == "" {
+					for _, file := range detail.Files {
+						if file.MissingAt == nil && file.FileKind == catalog.FileKindCover {
+							return nil
+						}
+					}
+					writer, ok := handler.Repo.(interface {
+						FillConfirmedCoverURL(context.Context, uuid.UUID, uuid.UUID, time.Time, string) error
+					})
+					if !ok {
+						return nil
+					}
+					local := inferredFromBook(detail.Book)
+					local.MetadataSource, local.ReviewState = catalog.MetadataInferred, catalog.ReviewUnreviewed
+					var lookupErr error
+					if coverMatcher, ok := handler.Matcher.(interface {
+						MatchCover(context.Context, catalog.InferredBook, string) (string, error)
+					}); ok {
+						match.CoverURL, lookupErr = coverMatcher.MatchCover(ctx, local, match.Provider)
+					} else {
+						var decision metadata.Decision
+						decision, lookupErr = handler.Matcher.Match(ctx, local)
+						match.CoverURL = metadata.SameWorkCover(local, match.Provider, decision.Candidates)
+					}
+					if lookupErr != nil {
+						return fmt.Errorf("search confirmed book cover: %w", lookupErr)
+					}
+					if match.CoverURL == "" {
+						return nil
+					}
+					if err := writer.FillConfirmedCoverURL(ctx, bookID, match.ID, detail.Book.UpdatedAt, match.CoverURL); err != nil {
+						return err
+					}
+				}
 				return handler.queueCover(ctx, bookID, match)
 			}
 		}

@@ -915,3 +915,26 @@ func (publisher *publisherFake) Publish(
 	publisher.request = request
 	return catalog.CoverEvent{ID: uuid.New()}, publisher.err
 }
+
+func TestWorkerRecoversLeasesExpiringAfterStartup(t *testing.T) {
+	now := time.Now()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	repo := &jobRepositoryFake{}
+	waits := 0
+	w := Worker{Repo: repo, WorkerID: "replacement", Clock: func() time.Time { return now }, Wait: func(context.Context, time.Duration) error {
+		waits++
+		if waits == 1 {
+			now = now.Add(16 * time.Minute)
+			return nil
+		}
+		cancel()
+		return context.Canceled
+	}}
+	if err := w.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if repo.recoveries < 2 {
+		t.Fatalf("leases only recovered at startup: %d", repo.recoveries)
+	}
+}

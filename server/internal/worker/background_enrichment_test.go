@@ -112,3 +112,15 @@ func TestMaintenanceBackfillsConfirmedSeries(t *testing.T) {
 		t.Fatalf("series not backfilled: %+v", repo)
 	}
 }
+
+func TestMaintenanceSearchesForCoverWhenConfirmedURLIsEmpty(t *testing.T) {
+	id, mid := uuid.New(), uuid.New()
+	b := catalog.Book{ID: id, RootID: "audio", Title: "Reaper Man", ReviewState: catalog.ReviewConfirmed, ConfirmedMatchID: &mid}
+	r := &coverMaintenanceRepository{stagedRepositoryFake: stagedRepositoryFake{books: []catalog.Book{b}}, detail: catalog.BookDetail{Book: b, Matches: []catalog.MetadataMatch{{ID: mid, BookID: id, Confirmed: true}}}}
+	if err := QueueMetadataEnrichment(t.Context(), r, []config.Root{{ID: "audio"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.jobs) != 1 || r.jobs[0].Kind != catalog.JobEnrichBook {
+		t.Fatalf("no cover search: %+v", r.jobs)
+	}
+}

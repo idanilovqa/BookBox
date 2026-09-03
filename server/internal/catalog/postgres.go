@@ -1043,10 +1043,10 @@ func decodeConfirmedCandidate(
 	if candidate.Narrators, err = cleanCandidateStrings(candidate.Narrators); err != nil {
 		return confirmedCandidatePayload{}, err
 	}
-	if candidate.Genres, err = cleanCandidateStrings(candidate.Genres); err != nil {
+	if candidate.Genres, err = cleanCandidateStrings(CleanOptionalMetadata(candidate.Genres)); err != nil {
 		return confirmedCandidatePayload{}, err
 	}
-	if candidate.Subjects, err = cleanCandidateStrings(candidate.Subjects); err != nil {
+	if candidate.Subjects, err = cleanCandidateStrings(CleanOptionalMetadata(candidate.Subjects)); err != nil {
 		return confirmedCandidatePayload{}, err
 	}
 	if len(candidate.PublishedDate) >= 4 {

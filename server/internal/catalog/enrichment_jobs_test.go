@@ -140,3 +140,37 @@ func TestSyncUnchangedRootsDoesNotWaitForScanLocks(t *testing.T) {
 		t.Fatalf("unchanged startup configuration waited for scan: %v", err)
 	}
 }
+
+func TestConfirmedCoverURLRejectsStaleIdentity(t *testing.T) {
+	repo, pool := workerJobFixture(t)
+	if err := repo.SyncRoots(t.Context(), []LibraryRoot{{ID: "audio", DisplayName: "Audio"}}); err != nil {
+		t.Fatal(err)
+	}
+	id, mid := uuid.New(), uuid.New()
+	if _, err := pool.Exec(t.Context(), `insert into books(id,root_id,source_folder,grouping_key,title,metadata_source,confidence,review_state) values($1,'audio','Book','folder','Reaper Man','inferred',0.8,'unreviewed')`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveMatches(t.Context(), id, []MetadataMatch{{ID: mid, BookID: id, Provider: MetadataOpenLibrary, ProviderID: "work", Score: 1, Payload: map[string]any{"title": "Reaper Man"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ConfirmMatch(t.Context(), id, mid); err != nil {
+		t.Fatal(err)
+	}
+	b, err := repo.GetBook(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.FillConfirmedCoverURL(t.Context(), id, mid, b.Book.UpdatedAt.Add(-time.Second), "https://covers.openlibrary.org/b/id/1-L.jpg"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale cover: %v", err)
+	}
+	if err := repo.FillConfirmedCoverURL(t.Context(), id, mid, b.Book.UpdatedAt, "https://covers.openlibrary.org/b/id/1-L.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := repo.GetBook(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Book.Title != b.Book.Title || *after.Book.ConfirmedMatchID != mid || after.Matches[0].CoverURL == "" {
+		t.Fatalf("identity changed or no cover: %+v", after)
+	}
+}
