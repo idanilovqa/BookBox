@@ -20,6 +20,7 @@ func SearchTitle(title string) string {
 	title = bracketedSequencePrefix.ReplaceAllString(title, "")
 	title = sequencePrefix.ReplaceAllString(title, "")
 	title = editionSuffix.ReplaceAllString(title, "")
+	title = colonSeries.ReplaceAllString(title, "")
 	return strings.TrimSpace(seriesLabelSuffix.ReplaceAllString(title, ""))
 }
 
@@ -173,7 +174,7 @@ func (matcher *Matcher) search(ctx context.Context, local catalog.InferredBook) 
 	return d, nil
 }
 
-var spacedSequencePrefix = regexp.MustCompile(`^[0-9]{1,3}\s+`)
+var spacedSequencePrefix = regexp.MustCompile(`(?i)^(?:[a-z]{1,4})?[0-9]{1,3}\s+`)
 
 // SearchTitles keeps the original identity first and adds a number-free search
 // alternative. A leading number can be meaningful, as in "12 Years a Slave".
