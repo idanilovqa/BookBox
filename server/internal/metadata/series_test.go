@@ -77,3 +77,25 @@ func TestSeriesRejectsCollectionAndNarratorFolders(t *testing.T) {
 		t.Fatalf("explicit label lost: %s %s", s, p)
 	}
 }
+
+func TestSeriesFolderWithAuthorDecoration(t *testing.T) {
+	for _, tc := range []struct{ title, folder, position string }{
+		{"M01: The Final Empire", "Brandon Sanderson/Mistborn Series - Brandon Sanderson", "1"},
+		{"M03: The Hero of Ages", "Brandon Sanderson/Mistborn Series - Brandon Sanderson", "3"},
+		{"The Final Empire", "Brandon Sanderson/Mistborn Series - Brandon Sanderson/M01_ The Final Empire", "1"},
+		{"The Hero of Ages", "Brandon Sanderson/Mistborn Series - Brandon Sanderson/M03__The Hero of Ages", "3"},
+		{"The Final Empire", "Brandon Sanderson/Brandon Sanderson - Mistborn Series/M01_ The Final Empire", "1"},
+	} {
+		t.Run(tc.folder+tc.title, func(t *testing.T) {
+			s, p := InferSeriesIdentity(catalog.InferredBook{Title: tc.title, Authors: []string{"Brandon Sanderson"}, SourceFolder: tc.folder})
+			if s != "Mistborn" || p != tc.position {
+				t.Fatalf("got %q %q", s, p)
+			}
+		})
+	}
+	for _, folder := range []string{"Brandon Sanderson/Brandon Sanderson/M01_ The Final Empire", "Brandon Sanderson/Brandon Sanderson Collection/M01_ The Final Empire"} {
+		if s, p := InferSeriesIdentity(catalog.InferredBook{Title: "The Final Empire", Authors: []string{"Brandon Sanderson"}, SourceFolder: folder}); s != "" || p != "" {
+			t.Fatalf("author folder became series: %s %s", s, p)
+		}
+	}
+}

@@ -81,6 +81,7 @@ func InferSeriesIdentity(book catalog.InferredBook) (string, string) {
 	if m == nil || parent == "." || parent == "" || len(book.Authors) == 0 {
 		return series, position
 	}
+	parent = undecoratedSeriesFolder(parent, book.Authors)
 	for _, author := range book.Authors {
 		if authorName := normalizeText(author, false); authorName != "" && strings.Contains(normalizeText(parent, false), authorName) {
 			return series, position
@@ -147,4 +148,33 @@ func InferSeriesFromFiles(book catalog.InferredBook, files []catalog.SourceFile)
 		return foundSeries, foundPosition
 	}
 	return series, position
+}
+
+// Remove only a delimited, corroborated author name from a series folder.
+// Bare author/collection folders continue through the existing rejection rules.
+func undecoratedSeriesFolder(name string, authors []string) string {
+	for _, split := range chainedSeparator.FindAllStringIndex(name, -1) {
+		left, right := strings.TrimSpace(name[:split[0]]), strings.TrimSpace(name[split[1]:])
+		for _, author := range authors {
+			known := normalizeText(author, true)
+			if known == "" {
+				continue
+			}
+			series := ""
+			if normalizeText(left, true) == known {
+				series = right
+			}
+			if normalizeText(right, true) == known {
+				series = left
+			}
+			if series != "" {
+				fields := strings.Fields(series)
+				if len(fields) > 1 && strings.EqualFold(fields[len(fields)-1], "Series") {
+					series = strings.Join(fields[:len(fields)-1], " ")
+				}
+				return series
+			}
+		}
+	}
+	return name
 }
