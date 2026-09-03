@@ -68,6 +68,9 @@ func searchQueries(local catalog.InferredBook) []Query {
 // the combined form when all of its words match; never drop a differing subtitle.
 func candidateComparisonTitle(local catalog.InferredBook, candidate Candidate) string {
 	title := SearchTitle(candidate.Title)
+	if clean := anniversaryTitleVariant(title); normalizeText(clean, false) == normalizeText(SearchTitle(local.Title), false) {
+		title = clean
+	}
 	if strings.TrimSpace(candidate.Subtitle) != "" {
 		full := title + ": " + strings.TrimSpace(candidate.Subtitle)
 		if normalizeText(SearchTitle(local.Title), false) == normalizeText(full, false) {
@@ -95,14 +98,14 @@ func searchDecision(local catalog.InferredBook, candidates []ScoredCandidate) De
 	identities := map[string]int{}
 	var editionAuthors [][][]string
 	for _, c := range all {
-		key := normalizeText(SearchTitle(c.Title), false) + "\x00" + strings.Join(normalizedAuthors(c.Authors), "\x00")
+		key := normalizeText(workTitle(c.Title), false) + "\x00" + strings.Join(normalizedAuthors(c.Authors), "\x00")
 		if len(c.Authors) == 0 {
 			key += "\x00" + c.Provider + "\x00" + c.ProviderID
 		}
 		index, ok := identities[key]
 		if !ok {
 			for i, work := range works {
-				if normalizeText(SearchTitle(work.Title), false) != normalizeText(SearchTitle(c.Title), false) {
+				if normalizeText(workTitle(work.Title), false) != normalizeText(workTitle(c.Title), false) {
 					continue
 				}
 				compatible := true
@@ -234,6 +237,11 @@ func SearchTitles(title string) []string {
 	}
 	if alternative := strings.TrimSpace(spacedSequencePrefix.ReplaceAllString(clean, "")); alternative != "" && alternative != clean {
 		titles = append(titles, alternative)
+	}
+	for _, candidate := range append([]string(nil), titles...) {
+		if clean := anniversaryTitleVariant(candidate); clean != candidate {
+			titles = append(titles, clean)
+		}
 	}
 	return titles
 }
