@@ -64,9 +64,22 @@ func searchQueries(local catalog.InferredBook) []Query {
 	return queries
 }
 
+// Providers may store a subtitle separately from a local full title. Only use
+// the combined form when all of its words match; never drop a differing subtitle.
+func candidateComparisonTitle(local catalog.InferredBook, candidate Candidate) string {
+	title := SearchTitle(candidate.Title)
+	if strings.TrimSpace(candidate.Subtitle) != "" {
+		full := title + ": " + strings.TrimSpace(candidate.Subtitle)
+		if normalizeText(SearchTitle(local.Title), false) == normalizeText(full, false) {
+			return full
+		}
+	}
+	return title
+}
+
 func sameBookTitle(local catalog.InferredBook, candidate Candidate) bool {
 	title := normalizeText(SearchTitle(local.Title), false)
-	other := normalizeText(SearchTitle(candidate.Title), false)
+	other := normalizeText(candidateComparisonTitle(local, candidate), false)
 	// A known series can appear as a title prefix in a provider's edition.
 	series := normalizeText(local.Series, false)
 	if series != "" {
@@ -210,7 +223,7 @@ func searchTitleDecision(local catalog.InferredBook, candidates []ScoredCandidat
 		rescored := make([]ScoredCandidate, len(candidates))
 		for j, candidate := range candidates {
 			comparison := candidate.Candidate
-			comparison.Title = SearchTitle(comparison.Title)
+			comparison.Title = candidateComparisonTitle(variant, comparison)
 			rescored[j] = ScoredCandidate{Candidate: candidate.Candidate, Score: score(variant, comparison)}
 		}
 		d := searchDecision(variant, rescored)

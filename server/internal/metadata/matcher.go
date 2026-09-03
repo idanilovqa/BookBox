@@ -388,6 +388,13 @@ func normalizeText(value string, sortTokens bool) string {
 }
 
 func authorSimilarity(left, right []string) float64 {
+	// Audio tags sometimes combine all contributors in a single string. Compare
+	// the complete attribution before scoring individual names, without guessing
+	// whether a comma separates coauthors or a surname from a given name.
+	attribution := normalizeText(strings.Join(left, " "), true)
+	if ((len(left) == 1 && len(right) > 1) || (len(right) == 1 && len(left) > 1)) && attribution != "" && attribution == normalizeText(strings.Join(right, " "), true) {
+		return 1
+	}
 	var total float64
 	for _, local := range left {
 		total += bestAuthorSimilarity(local, right)
