@@ -59,3 +59,19 @@ func TestNamedTracksPreserveMeaningfulAlphanumericTitles(t *testing.T) {
 		}
 	}
 }
+
+func TestDatedAuthorPrefixedTracksAreOneBook(t *testing.T) {
+	folder := "Michael Crichton/Michael Crichton/1969 - The Andromeda Strain [Unabridged]"
+	var files []catalog.SourceFile
+	for n := 1; n <= 6; n++ {
+		files = append(files, treeFile(fmt.Sprintf("%s/Michael Crichton -The Andromeda Strain-%02d (1969).mp3", folder, n), catalog.FileKindAudio, "", map[string]any{}))
+	}
+	result := InferTree(testTree(folder, files...))
+	if len(result.Books) != 1 || result.Books[0].Title != "The Andromeda Strain" || len(result.Books[0].SourceFileIDs) != 6 {
+		t.Fatalf("split dated tracks: %+v", result.Books)
+	}
+	files[5].RelativePath = folder + "/Michael Crichton  A Different Book 06 (1969).mp3"
+	if title := namedTrackSequenceTitle(testTree(folder, files...), files); title != "" {
+		t.Fatalf("mixed books merged: %s", title)
+	}
+}

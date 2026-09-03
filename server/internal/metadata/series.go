@@ -36,6 +36,16 @@ func InferSeriesIdentity(book catalog.InferredBook) (string, string) {
 		}
 		return series, position
 	}
+	for _, interpretation := range TitleCleanupInterpretations(book) {
+		if interpretation.Series != "" && !interpretation.SearchOnly {
+			return apply(interpretation.Series, interpretation.SeriesPosition)
+		}
+	}
+	if m := trailingOrdinal.FindStringSubmatch(book.Title); m != nil {
+		evidence := book
+		evidence.Title = m[1] + " " + strings.TrimSpace(trailingOrdinal.ReplaceAllString(book.Title, ""))
+		return InferSeriesIdentity(evidence)
+	}
 	if m := prefixSeries.FindStringSubmatch(book.Title); m != nil {
 		return apply(m[1], m[2])
 	}

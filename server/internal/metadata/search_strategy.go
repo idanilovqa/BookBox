@@ -27,6 +27,11 @@ func SearchTitle(title string) string {
 func searchQueries(local catalog.InferredBook) []Query {
 	author := firstNonEmpty(local.Authors)
 	titles := localSearchTitles(local)
+	for _, interpretation := range TitleCleanupInterpretations(local) {
+		if interpretation.SearchOnly {
+			titles = append(titles, interpretation.Title)
+		}
+	}
 	var queries []Query
 	seen := map[Query]bool{}
 	add := func(q Query) {

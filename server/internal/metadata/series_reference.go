@@ -8,14 +8,14 @@ import (
 	"strings"
 )
 
-var shortSeriesPattern = regexp.MustCompile(`(?i)^(.+?)\s+(?:book\s+|volume\s+|#)?([0-9]{1,3}(?:\.[0-9]{1,3})?)$`)
+var shortSeriesPattern = regexp.MustCompile(`(?i)^(.+?)\s+(?:book\s+|volume\s+|novella\s+|#)?([0-9]{1,3}(?:\.[0-9]{1,3})?)$`)
 
 func shortSeriesReference(title string) (string, string) {
 	m := shortSeriesPattern.FindStringSubmatch(strings.TrimSpace(title))
 	if m == nil {
 		return "", ""
 	}
-	name := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(m[1]), ","))
+	name := strings.TrimSpace(strings.TrimRight(strings.TrimSpace(m[1]), ",:"))
 	normalized := normalizeText(name, false)
 	switch normalized {
 	case "book", "volume", "part", "chapter", "track", "disc", "cd", "the", "a":
@@ -83,6 +83,11 @@ func folderSeriesReference(local catalog.InferredBook) (title, series, position 
 }
 func localSearchTitles(local catalog.InferredBook) []string {
 	titles := SearchTitles(local.Title)
+	for _, interpretation := range TitleCleanupInterpretations(local) {
+		if !interpretation.SearchOnly {
+			titles = append(titles, interpretation.Title)
+		}
+	}
 	if title := fullerAuthorFolderTitle(local); title != "" {
 		titles = append(titles, title)
 	}
