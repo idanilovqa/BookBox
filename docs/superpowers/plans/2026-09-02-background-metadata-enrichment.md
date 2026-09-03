@@ -8,4 +8,6 @@ Architecture: metadata query strategy plus isolated leased background processing
 - [x] Add PostgreSQL tests for enrichment retry cooldowns and filtered job claiming, then implement both in server/internal/catalog.
 - [x] Add worker tests for independent startup/periodic enrichment and shutdown; wire a separate metadata lane in server/cmd/bookbox-catalog-worker.
 - [x] Verify focused metadata, worker, catalog, HTTP API and command packages in disposable PostgreSQL; inspect diff and cross-compile Windows worker.
-- [ ] Deploy validated binaries, inspect service health and job progress, and report the remaining ambiguity/provider limitations.
+- [x] Deploy validated binaries, inspect service health and job progress, and report the remaining ambiguity/provider limitations.
+
+Deployment verified: API healthy; Windows worker hash matches the verified build. Startup maintenance queued 1,818 enrichment jobs, and the independent metadata lane is processing cover jobs while scans run.
