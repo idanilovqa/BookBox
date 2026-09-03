@@ -109,9 +109,10 @@ func BuildSearchProjection(input SearchProjectionInput) (SearchProjection, error
 		reviewReason := ""
 		if book.ReviewState == ReviewNeedsReview {
 			reviewReason = ReviewReasonLegacy
-			if evidence, exists := input.Evidence[bookID]; exists && evidence.ReasonCode != "" {
-				reviewReason = evidence.ReasonCode
-			}
+		}
+		if evidence, exists := input.Evidence[bookID]; exists && evidence.ReasonCode != "" &&
+			(book.ReviewState == ReviewNeedsReview || evidence.ReasonCode == ReviewReasonCorrupt) {
+			reviewReason = evidence.ReasonCode
 		}
 		duration, known, filenames, _, err := audiobookMedia(assignments[bookID], files)
 		if err != nil {

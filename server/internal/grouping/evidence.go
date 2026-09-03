@@ -110,6 +110,12 @@ func InferTree(tree Tree) Result {
 	sharedScope := len(clusters) > 1
 	for index := range clusters {
 		cluster := &clusters[index]
+		if hasCorruptedIdentityTags(cluster.audio) {
+			cluster.reason = catalog.ReviewReasonCorrupt
+			if !cluster.locked {
+				cluster.review = catalog.ReviewNeedsReview
+			}
+		}
 		sort.Slice(cluster.audio, func(i, j int) bool { return cluster.audio[i].RelativePath < cluster.audio[j].RelativePath })
 		if cluster.key == "" {
 			cluster.key = treeGroupingKey(tree, *cluster)
@@ -128,6 +134,17 @@ func InferTree(tree Tree) Result {
 		return left.GroupingKey < right.GroupingKey
 	})
 	return result
+}
+
+func hasCorruptedIdentityTags(files []catalog.SourceFile) bool {
+	for _, file := range files {
+		title := strings.ToLower(strings.TrimSpace(mediaString(file.Media, "album", "title")))
+		author := strings.ToLower(strings.TrimSpace(mediaString(file.Media, "author", "authors")))
+		if title == "tr" && author == "tyh" {
+			return true
+		}
+	}
+	return false
 }
 
 func coversForTreeCluster(

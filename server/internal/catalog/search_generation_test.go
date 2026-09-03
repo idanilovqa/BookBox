@@ -80,6 +80,22 @@ func TestBuildSearchProjectionOmitsReviewReasonForUnreviewedBooks(t *testing.T) 
 	}
 }
 
+func TestBuildSearchProjectionCarriesCorruptedMetadataWarningForConfirmedGrouping(t *testing.T) {
+	input := oneBookProjectionInput(1_000)
+	input.Books[0].ReviewState = ReviewConfirmed
+	input.Evidence = map[uuid.UUID]GroupingEvidence{
+		input.Books[0].ID: {ReasonCode: ReviewReasonCorrupt, ReviewState: ReviewConfirmed},
+	}
+	projection, err := BuildSearchProjection(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := audiobookDocument(t, projection, input.Books[0].ID)
+	if document.ReviewState != ReviewConfirmed || document.ReviewReason != ReviewReasonCorrupt {
+		t.Fatalf("review state=%q reason=%q", document.ReviewState, document.ReviewReason)
+	}
+}
+
 func TestBuildSearchProjectionBackfillsLegacyNeedsReviewReason(t *testing.T) {
 	input := oneBookProjectionInput(1_000)
 	input.Books[0].ReviewState = ReviewNeedsReview

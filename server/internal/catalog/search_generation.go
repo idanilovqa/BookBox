@@ -19,6 +19,7 @@ var groupingEvidenceReasons = map[string]bool{
 	"conflicting_author": true, "weak_loose_files": true,
 	"probe_failed": true, "manual": true,
 	"reorganization_incomplete": true,
+	ReviewReasonCorrupt:         true,
 }
 
 func (repository *PostgresRepository) PublishSearchProjection(

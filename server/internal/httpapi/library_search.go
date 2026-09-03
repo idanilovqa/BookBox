@@ -150,11 +150,13 @@ func validReviewStateReason(state, reason string) bool {
 		return false
 	}
 	switch state {
-	case catalog.ReviewUnreviewed, catalog.ReviewConfirmed:
+	case catalog.ReviewUnreviewed:
 		return reason == ""
+	case catalog.ReviewConfirmed:
+		return reason == "" || reason == catalog.ReviewReasonCorrupt
 	case catalog.ReviewNeedsReview:
 		switch reason {
-		case "conflicting_title", "conflicting_author", "weak_loose_files", "probe_failed", "reorganization_incomplete", catalog.ReviewReasonLegacy:
+		case "conflicting_title", "conflicting_author", "weak_loose_files", "probe_failed", "reorganization_incomplete", catalog.ReviewReasonLegacy, catalog.ReviewReasonCorrupt:
 			return true
 		default:
 			return false

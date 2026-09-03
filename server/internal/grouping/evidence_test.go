@@ -77,6 +77,28 @@ func TestInferTreeDoesNotAutoConfirmCounterSequenceWithConflictingAuthors(t *tes
 	}
 }
 
+func TestInferTreeMarksCorruptedIdentityTagsForReview(t *testing.T) {
+	first := treeFile("Book/01.mp3", catalog.FileKindAudio, "", map[string]any{
+		"album": "N. A. Kun", "author": "Legends and Myths",
+	})
+	second := treeFile("Book/02.mp3", catalog.FileKindAudio, "", map[string]any{
+		"album": "tr", "author": "tyh",
+	})
+	tree := testTree("Book", first, second)
+	tree.Corrections = []catalog.GroupingCorrection{{
+		ID: uuid.New(), RootID: tree.RootID, SourceFolder: tree.ScopePath,
+		Groups: []catalog.GroupingGroup{{GroupingKey: "book", FileIDs: []uuid.UUID{first.ID, second.ID}}},
+	}}
+	result := InferTree(tree)
+	if len(result.Books) != 1 || result.Books[0].ReviewState != catalog.ReviewConfirmed ||
+		result.Books[0].ReviewReason != "corrupted_metadata" {
+		t.Fatalf("books=%#v", result.Books)
+	}
+	if evidence := result.Evidence[result.Books[0].GroupingKey]; evidence.ReasonCode != "corrupted_metadata" {
+		t.Fatalf("evidence=%#v", evidence)
+	}
+}
+
 func TestInferTreeKeepsCounterNamedStandaloneM4BsSeparate(t *testing.T) {
 	first := treeFile("Shared/1 - First.m4b", catalog.FileKindAudio, "", map[string]any{
 		"title": "01/02", "track": "1",

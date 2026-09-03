@@ -91,7 +91,7 @@ fun AudiobookCard(
                     error = ColorPainter(MaterialTheme.colorScheme.primaryContainer),
                 )
                 Text(
-                    text = book.reviewState.displayLabel(),
+                    text = reviewBadgeLabel(book.reviewState, book.reviewReason),
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(10.dp)
@@ -309,3 +309,6 @@ private fun String.displayLabel(): String =
         .replaceFirstChar { character ->
             if (character.isLowerCase()) character.titlecase() else character.toString()
         }
+
+internal fun reviewBadgeLabel(reviewState: String, reviewReason: String?): String =
+    (reviewReason?.takeIf(String::isNotBlank) ?: reviewState).displayLabel()

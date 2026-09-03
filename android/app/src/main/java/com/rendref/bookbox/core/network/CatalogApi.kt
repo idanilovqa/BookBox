@@ -160,7 +160,8 @@ class CatalogApi(
 
 private fun validReviewPair(book: BookCardDto): Boolean = when (book.reviewState) {
     "needs_review" -> !book.reviewReason.isNullOrBlank()
-    "confirmed", "unreviewed" -> book.reviewReason == null
+    "confirmed" -> book.reviewReason == null || book.reviewReason == "corrupted_metadata"
+    "unreviewed" -> book.reviewReason == null
     else -> false
 }
 

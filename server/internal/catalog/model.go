@@ -19,10 +19,11 @@ const (
 	MetadataConfirmed   = "confirmed"
 	MetadataMixed       = "mixed"
 
-	ReviewUnreviewed   = "unreviewed"
-	ReviewNeedsReview  = "needs_review"
-	ReviewConfirmed    = "confirmed"
-	ReviewReasonLegacy = "legacy_review_state"
+	ReviewUnreviewed    = "unreviewed"
+	ReviewNeedsReview   = "needs_review"
+	ReviewConfirmed     = "confirmed"
+	ReviewReasonLegacy  = "legacy_review_state"
+	ReviewReasonCorrupt = "corrupted_metadata"
 
 	FileRoleAudio   = "audio"
 	FileRoleCover   = "cover"

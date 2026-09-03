@@ -282,6 +282,13 @@ func TestBooksSearchRejectsInvalidReviewStateReasonPairs(t *testing.T) {
 	}
 }
 
+func TestCorruptedMetadataIsAValidReviewReason(t *testing.T) {
+	if !validReviewStateReason(catalog.ReviewNeedsReview, "corrupted_metadata") ||
+		!validReviewStateReason(catalog.ReviewConfirmed, "corrupted_metadata") {
+		t.Fatal("corrupted metadata review reason was rejected")
+	}
+}
+
 func TestSearchHandlersRejectNonpositiveCatalogGeneration(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
