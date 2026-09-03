@@ -66,8 +66,8 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 	if err := pool.QueryRow(ctx, "select count(*) from schema_migrations").Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 9 {
-		t.Fatalf("schema migration rows = %d, want 9", applied)
+	if applied != 10 {
+		t.Fatalf("schema migration rows = %d, want 10", applied)
 	}
 
 	var rejectsCrossRootScan bool
@@ -219,8 +219,8 @@ func TestMigrateBackfillsOnlyNeverEnqueuedPendingFingerprints(t *testing.T) {
 	if err := pool.QueryRow(ctx, `select count(*) from schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 9 {
-		t.Fatalf("schema migration rows=%d, want 9", migrationCount)
+	if migrationCount != 10 {
+		t.Fatalf("schema migration rows=%d, want 10", migrationCount)
 	}
 
 	type fingerprintIntent struct {
@@ -938,5 +938,43 @@ func assertSearchIndex(
 		if !strings.Contains(definition, want) {
 			t.Fatalf("index %s definition=%q, want %q", index, definition, want)
 		}
+	}
+}
+
+func TestMigrateIndexesCompletedEnrichmentJobLookup(t *testing.T) {
+	pool := testpostgres.Open(t)
+	if err := Migrate(t.Context(), pool); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	if _, err := tx.Exec(t.Context(), "set local enable_seqscan=off"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := tx.Query(t.Context(), `
+		explain select id, status from worker_jobs
+		where kind='enrich_book' and dedupe_key='finished-book'
+		order by created_at desc, id desc limit 1
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan += line + "\n"
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan, "worker_jobs_dedupe_history") || strings.Contains(plan, "Sort") {
+		t.Fatalf("terminal-job lookup needs an ordered history index: %s", plan)
 	}
 }
