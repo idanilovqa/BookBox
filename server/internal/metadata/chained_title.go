@@ -6,29 +6,34 @@ import (
 	"strings"
 )
 
-var chainedSeriesLabel = regexp.MustCompile(`(?i)^([^0-9]+?)\s+(?:book\s+|volume\s+)?([0-9]{1,3}(?:\.[0-9]{1,3})?)\s+-\s+(.+)$`)
+var chainedSeriesLabel = regexp.MustCompile(`(?i)^([^0-9]+?)\s+(?:(?:book|volume)\s+|#)?([0-9]{1,3}(?:\.[0-9]{1,3})?)(?:\s+[-–—]\s+|:\s+)(.+)$`)
+var chainedSeparator = regexp.MustCompile(`\s+[-–—]\s+|:\s+`)
+var trilogyDescriptor = regexp.MustCompile(`(?i)\s+trilogy$`)
 
-// Strip a leading author only when it agrees with the recorded attribution.
+// Accept Series NN - Title with an optional corroborated Author - prefix.
+// Keep the original title among search queries; provider identity still decides
+// the canonical title. A conflicting author prefix must not become a series.
 func chainedTitleReference(local catalog.InferredBook) (title, series, position string) {
-	author, rest, ok := strings.Cut(local.Title, " - ")
-	if !ok {
-		return
-	}
-	matched := false
-	for _, known := range local.Authors {
-		if normalizeText(author, true) == normalizeText(known, true) {
-			matched = true
-			break
+	rest := strings.TrimSpace(local.Title)
+	if split := chainedSeparator.FindStringIndex(rest); split != nil {
+		author := rest[:split[0]]
+		knownAuthors := append(append([]string(nil), local.Authors...), strings.Split(strings.ReplaceAll(local.SourceFolder, "\\", "/"), "/")...)
+		for _, known := range knownAuthors {
+			if normalizeText(author, true) != "" && normalizeText(author, true) == normalizeText(known, true) {
+				rest = rest[split[1]:]
+				break
+			}
 		}
 	}
-	if !matched {
-		return
-	}
 	m := chainedSeriesLabel.FindStringSubmatch(rest)
-	if m == nil || mediaPartPrefix.MatchString(rest) {
+	if m == nil || mediaPartPrefix.MatchString(rest) || chainedSeparator.MatchString(m[1]) {
 		return
 	}
-	return strings.TrimSpace(m[3]), strings.TrimSpace(m[1]), normalizedPosition(m[2])
+	series = strings.TrimSpace(trilogyDescriptor.ReplaceAllString(strings.TrimSpace(m[1]), ""))
+	if series == "" {
+		return "", "", ""
+	}
+	return strings.TrimSpace(m[3]), series, normalizedPosition(m[2])
 }
 
 // A missing middle initial is a common edition variation. Conflicting initials

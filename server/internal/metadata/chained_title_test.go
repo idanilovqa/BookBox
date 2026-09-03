@@ -58,3 +58,43 @@ func TestEditionAuthorsKeepConflictingInitialsSeparate(t *testing.T) {
 		t.Fatal("missing initial bridged conflicting authors")
 	}
 }
+
+func TestSeriesTitleLayoutVariants(t *testing.T) {
+	for _, tc := range []struct{ title, author, clean, series, order string }{
+		{"John Gwynne - The Fallen and the Faithful 03 - Ruin", "John Gwynne", "Ruin", "The Fallen and the Faithful", "3"},
+		{"John Gwynne – The Fallen and the Faithful Book 03 – Ruin", "John Gwynne", "Ruin", "The Fallen and the Faithful", "3"},
+		{"John Gwynne: The Fallen and the Faithful #03: Ruin", "John Gwynne", "Ruin", "The Fallen and the Faithful", "3"},
+		{"Liveship Traders Trilogy 02 - Mad Ship", "Robin Hobb", "Mad Ship", "Liveship Traders", "2"},
+		{"Liveship Traders trilogy Volume 02 — Mad Ship", "Robin Hobb", "Mad Ship", "Liveship Traders", "2"},
+		{"Liveship Traders #02: Mad Ship", "Robin Hobb", "Mad Ship", "Liveship Traders", "2"},
+	} {
+		t.Run(tc.title, func(t *testing.T) {
+			local := catalog.InferredBook{Title: tc.title, Authors: []string{tc.author}}
+			title, series, order := chainedTitleReference(local)
+			if title != tc.clean || series != tc.series || order != tc.order {
+				t.Fatalf("got %q / %q / %q", title, series, order)
+			}
+			p := queryProvider(func(_ context.Context, q Query) ([]Candidate, error) {
+				if q.Title == tc.clean && q.Author == tc.author {
+					return []Candidate{{Provider: ProviderOpenLibrary, ProviderID: "work", Title: tc.clean, Authors: local.Authors}}, nil
+				}
+				return nil, nil
+			})
+			d, err := NewMatcher(p).Match(t.Context(), local)
+			if err != nil || d.Selected == nil {
+				t.Fatalf("not matched: %+v %v", d, err)
+			}
+			if d.Selected.Series != tc.series || d.Selected.SeriesPosition != tc.order {
+				t.Fatalf("lost series: %+v", d.Selected)
+			}
+		})
+	}
+}
+
+func TestSeriesTitlePreservesAmbiguousNumbers(t *testing.T) {
+	for _, title := range []string{"1984", "Catch-22", "Chapter 02 - A Beginning", "Another Writer – Trilogy 02 – A Book", "Another Writer: Trilogy 02: A Book"} {
+		if got, _, _ := chainedTitleReference(catalog.InferredBook{Title: title, Authors: []string{"John Gwynne"}}); got != "" {
+			t.Fatalf("unsafe cleanup of %q: %q", title, got)
+		}
+	}
+}
