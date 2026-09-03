@@ -92,6 +92,17 @@ func TestEnrichmentDedupeKeyUsesCleanSearchTitle(t *testing.T) {
 	}
 }
 
+func TestMeaningfulEnrichmentTitleRejectsShortNumericChapter(t *testing.T) {
+	for _, title := range []string{"01", "9", "123"} {
+		if meaningfulEnrichmentTitle(title) {
+			t.Fatalf("chapter counter %q is meaningful", title)
+		}
+	}
+	if !meaningfulEnrichmentTitle("1984") {
+		t.Fatal("four-digit book title was rejected")
+	}
+}
+
 type seriesMaintenanceRepository struct {
 	coverMaintenanceRepository
 	filledSeries, filledPosition string

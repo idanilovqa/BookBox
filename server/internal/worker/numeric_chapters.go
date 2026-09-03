@@ -12,6 +12,21 @@ import (
 var numericChapterFolder = regexp.MustCompile(`^[0-9]{1,3}$`)
 var numericChapterFilename = regexp.MustCompile(`^[0-9_. -]+$`)
 
+func numericChapterBookScope(directory string) (string, bool) {
+	root := directory
+	depth := 0
+	for numericChapterFolder.MatchString(path.Base(root)) {
+		root = path.Dir(root)
+		depth++
+	}
+	if root == "." || depth < 2 {
+		return "", false
+	}
+	parent := path.Base(path.Dir(root))
+	repeated := regexp.MustCompile(`(?i)^` + regexp.QuoteMeta(path.Base(root)) + ` \([0-9]{4}\) by .+`)
+	return root, repeated.MatchString(parent)
+}
+
 // Collapse only numeric chapter trees with counter filenames and no competing
 // identity tags. Named files, numeric book titles and M4B stay separate.
 func numericChapterScopes(tree grouping.Tree) map[uuid.UUID]string {
@@ -20,18 +35,8 @@ func numericChapterScopes(tree grouping.Tree) map[uuid.UUID]string {
 		if f.MissingAt != nil || f.FileKind != catalog.FileKindAudio {
 			continue
 		}
-		dir := path.Dir(f.RelativePath)
-		root := dir
-		depth := 0
-		for numericChapterFolder.MatchString(path.Base(root)) {
-			root = path.Dir(root)
-			depth++
-		}
-		// Require the named book folder to be repeated by its enclosing
-		// dated author/title folder; numeric hierarchy alone is ambiguous.
-		parent := path.Base(path.Dir(root))
-		repeatedBook := regexp.MustCompile(`(?i)^` + regexp.QuoteMeta(path.Base(root)) + ` \([0-9]{4}\) by .+`).MatchString(parent)
-		if root != "." && depth >= 2 && repeatedBook {
+		root, repeatedBook := numericChapterBookScope(path.Dir(f.RelativePath))
+		if repeatedBook {
 			candidates[root] = append(candidates[root], f)
 		}
 	}

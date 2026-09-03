@@ -153,6 +153,14 @@ func fullInventoryAudioScope(relativePath string) string {
 	return directory
 }
 
+func regroupInventoryAudioScope(relativePath string) string {
+	directory := fullInventoryAudioScope(relativePath)
+	if bookScope, ok := numericChapterBookScope(directory); ok {
+		return bookScope
+	}
+	return directory
+}
+
 func fullInventoryFileScope(relativePath string, scopes []string) (string, bool) {
 	directory := path.Dir(relativePath)
 	if directory == "." {
@@ -384,7 +392,7 @@ func (handler ProbeFileHandler) Handle(ctx context.Context, job catalog.WorkerJo
 		return err
 	}
 	if changed {
-		return enqueueRegroup(ctx, handler.Repo, file.RootID, fullInventoryAudioScope(file.RelativePath), generation.Value)
+		return enqueueRegroup(ctx, handler.Repo, file.RootID, regroupInventoryAudioScope(file.RelativePath), generation.Value)
 	}
 	return nil
 }

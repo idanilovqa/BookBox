@@ -666,6 +666,13 @@ func meaningfulEnrichmentTitle(title string) bool {
 	if title == "" || enrichmentTrackTitle.MatchString(title) {
 		return false
 	}
+	shortCounter := len([]rune(title)) <= 3
+	for _, character := range title {
+		shortCounter = shortCounter && unicode.IsDigit(character)
+	}
+	if shortCounter {
+		return false
+	}
 	for _, character := range title {
 		if unicode.IsLetter(character) || unicode.IsDigit(character) {
 			return true

@@ -43,3 +43,13 @@ func TestNumericChapterSubtreesGroupAtNamedBook(t *testing.T) {
 		t.Fatal("meaningful numeric titles merged")
 	}
 }
+
+func TestNumericChapterFileRegroupsAtRepeatedBookScope(t *testing.T) {
+	got := regroupInventoryAudioScope("Wuthering Heights (2008) By Emily Bronte/Wuthering Heights/02/03/track.mp3")
+	if got != "Wuthering Heights (2008) By Emily Bronte/Wuthering Heights" {
+		t.Fatalf("scope=%q", got)
+	}
+	if got := regroupInventoryAudioScope("Library/01/02/track.mp3"); got != "Library/01/02" {
+		t.Fatalf("ambiguous numeric books promoted to %q", got)
+	}
+}
