@@ -150,3 +150,116 @@ func TestMatcherAutomaticallySelectsReaperManWithSequencePrefix(t *testing.T) {
 		t.Fatalf("unexpected provider queries: %+v", queries)
 	}
 }
+
+func TestMatcherIdentifiesSpaceNumberedBooks(t *testing.T) {
+	for _, tc := range []struct{ dirty, title, author string }{
+		{"01 The Eye of the World", "The Eye of the World", "Robert Jordan"},
+		{"01 The Great Train Robbery", "The Great Train Robbery", ""},
+		{"02 The Great Hunt", "The Great Hunt", "Robert Jordan"},
+		{"03 The Dragon Reborn", "The Dragon Reborn", "Robert Jordan"},
+		{"11 Knife of Dreams", "Knife of Dreams", "Robert Jordan"},
+	} {
+		t.Run(tc.dirty, func(t *testing.T) {
+			var queries []Query
+			p := queryProvider(func(_ context.Context, q Query) ([]Candidate, error) {
+				queries = append(queries, q)
+				if q.Title != tc.title {
+					return nil, nil
+				}
+				author := tc.author
+				if author == "" {
+					author = "Michael Crichton"
+				}
+				return []Candidate{{Provider: ProviderOpenLibrary, ProviderID: "correct", Title: tc.title, Authors: []string{author}, CoverURL: "https://covers.openlibrary.org/b/id/1-L.jpg"}}, nil
+			})
+			var authors []string
+			if tc.author != "" {
+				authors = []string{tc.author}
+			}
+			d, err := NewMatcher(p).Match(t.Context(), catalog.InferredBook{Title: tc.dirty, Authors: authors})
+			if err != nil || d.Selected == nil || d.Selected.Title != tc.title {
+				t.Fatalf("book not identified: decision=%+v queries=%+v err=%v", d, queries, err)
+			}
+		})
+	}
+}
+
+func TestMatcherPreservesMeaningfulLeadingNumber(t *testing.T) {
+	var queries []Query
+	p := queryProvider(func(_ context.Context, q Query) ([]Candidate, error) {
+		queries = append(queries, q)
+		return []Candidate{{Provider: ProviderOpenLibrary, ProviderID: "correct", Title: "12 Years a Slave", Authors: []string{"Solomon Northup"}}}, nil
+	})
+	d, err := NewMatcher(p).Match(t.Context(), catalog.InferredBook{Title: "12 Years a Slave", Authors: []string{"Solomon Northup"}})
+	if err != nil || d.Selected == nil || d.Selected.Title != "12 Years a Slave" || len(queries) != 1 || queries[0].Title != "12 Years a Slave" {
+		t.Fatalf("meaningful number was lost: decision=%+v queries=%+v err=%v", d, queries, err)
+	}
+}
+
+func TestMatcherRecognizesSeriesLabelButNotPartialVolume(t *testing.T) {
+	p := queryProvider(func(context.Context, Query) ([]Candidate, error) {
+		return []Candidate{
+			{Provider: ProviderOpenLibrary, ProviderID: "full", Title: "The Great Hunt (The Wheel of Time Book 2)", Authors: []string{"Robert Jordan"}},
+			{Provider: ProviderOpenLibrary, ProviderID: "part", Title: "The Great Hunt (part 1/2)", Authors: []string{"Robert Jordan"}},
+		}, nil
+	})
+	d, err := NewMatcher(p).Match(t.Context(), catalog.InferredBook{Title: "02 The Great Hunt", Authors: []string{"Robert Jordan"}})
+	if err != nil || d.Selected == nil || d.Selected.ProviderID != "full" {
+		t.Fatalf("full novel not identified: %+v %v", d, err)
+	}
+}
+
+func TestMatcherUsesFolderAuthorToDisambiguateTitle(t *testing.T) {
+	var queries []Query
+	p := queryProvider(func(_ context.Context, q Query) ([]Candidate, error) {
+		queries = append(queries, q)
+		return []Candidate{
+			{Provider: ProviderOpenLibrary, ProviderID: "wrong", Title: "The Great Train Robbery", Authors: []string{"John Gosling"}},
+			{Provider: ProviderOpenLibrary, ProviderID: "correct", Title: "The Great Train Robbery", Authors: []string{"Michael Crichton"}},
+		}, nil
+	})
+	d, err := NewMatcher(p).Match(t.Context(), catalog.InferredBook{Title: "01 The Great Train Robbery", SourceFolder: "Michael Crichton/Michael Crichton/1975 - The Great Train Robbery [Unabridged]"})
+	if err != nil || d.Selected == nil || d.Selected.ProviderID != "correct" {
+		t.Fatalf("folder author not used: %+v %v queries=%+v", d, err, queries)
+	}
+}
+
+func TestMatcherWaitsForFolderAuthorBeforeAcceptingSameTitle(t *testing.T) {
+	var queries []Query
+	p := queryProvider(func(_ context.Context, q Query) ([]Candidate, error) {
+		queries = append(queries, q)
+		author, id := "John Gosling", "wrong"
+		if q.Author == "Michael Crichton" {
+			author, id = "Michael Crichton", "correct"
+		}
+		return []Candidate{{Provider: ProviderOpenLibrary, ProviderID: id, Title: "The Great Train Robbery", Authors: []string{author}}}, nil
+	})
+	d, err := NewMatcher(p).Match(t.Context(), catalog.InferredBook{Title: "01 The Great Train Robbery", SourceFolder: "Michael Crichton/1975 - The Great Train Robbery"})
+	if err != nil || d.Selected == nil || d.Selected.ProviderID != "correct" || len(queries) < 2 {
+		t.Fatalf("accepted wrong author before hint search: %+v queries=%+v err=%v", d, queries, err)
+	}
+}
+
+func TestMatcherPreservesBareVolumeAndBookLabels(t *testing.T) {
+	for _, label := range []string{"Volume 1", "Volume 2", "Book 1"} {
+		t.Run(label, func(t *testing.T) {
+			p := queryProvider(func(context.Context, Query) ([]Candidate, error) {
+				return []Candidate{{Provider: ProviderOpenLibrary, ProviderID: "partial", Title: "The Great Hunt (" + label + ")", Authors: []string{"Robert Jordan"}}}, nil
+			})
+			d, err := NewMatcher(p).Match(t.Context(), catalog.InferredBook{Title: "02 The Great Hunt", Authors: []string{"Robert Jordan"}})
+			if err != nil || d.Selected != nil {
+				t.Fatalf("partial volume accepted as full book: %+v %v", d, err)
+			}
+		})
+	}
+}
+
+func TestMatcherISBNOverridesUncorroboratedFolderHint(t *testing.T) {
+	p := queryProvider(func(context.Context, Query) ([]Candidate, error) {
+		return []Candidate{{Provider: ProviderOpenLibrary, ProviderID: "isbn", Title: "Some Book", Authors: []string{"An Author"}, ISBN: "9781234567890"}}, nil
+	})
+	d, err := NewMatcher(p).Match(t.Context(), catalog.InferredBook{Title: "Some Book", SourceFolder: "Audio Books/Some Book", Identifiers: map[string]any{"isbn": "9781234567890"}})
+	if err != nil || d.Selected == nil {
+		t.Fatalf("exact ISBN blocked by folder hint: %+v %v", d, err)
+	}
+}

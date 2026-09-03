@@ -443,12 +443,12 @@ func enrichmentDedupeKey(book catalog.Book) string {
 		Position    string
 		Identifiers map[string]any
 	}{
-		Title: metadata.SearchTitle(book.Title), Authors: book.Authors,
+		Title: strings.Join(metadata.SearchTitles(book.Title), "\x00"), Authors: book.Authors,
 		Series: strings.TrimSpace(book.Series), Position: strings.TrimSpace(book.SeriesPosition),
 		Identifiers: book.Identifiers,
 	})
 	fingerprint := sha256.Sum256(identity)
-	return fmt.Sprintf("enrich_book:v2:%s:%x", book.ID, fingerprint[:8])
+	return fmt.Sprintf("enrich_book:v3:%s:%x", book.ID, fingerprint[:8])
 }
 
 func sourceFile(scanRunID uuid.UUID, file scanner.File) catalog.SourceFile {

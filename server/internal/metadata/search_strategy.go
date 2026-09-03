@@ -18,12 +18,13 @@ func SearchTitle(title string) string {
 	title = strings.TrimSpace(title)
 	title = bracketedSequencePrefix.ReplaceAllString(title, "")
 	title = sequencePrefix.ReplaceAllString(title, "")
-	return strings.TrimSpace(editionSuffix.ReplaceAllString(title, ""))
+	title = editionSuffix.ReplaceAllString(title, "")
+	return strings.TrimSpace(seriesLabelSuffix.ReplaceAllString(title, ""))
 }
 
 func searchQueries(local catalog.InferredBook) []Query {
 	author := firstNonEmpty(local.Authors)
-	clean := SearchTitle(local.Title)
+	titles := SearchTitles(local.Title)
 	var queries []Query
 	seen := map[Query]bool{}
 	add := func(q Query) {
@@ -36,10 +37,17 @@ func searchQueries(local catalog.InferredBook) []Query {
 	if isbn := inferredISBN(local); isbn != "" {
 		add(Query{ISBN: isbn})
 	}
-	add(Query{Title: clean, Author: author})
+	for _, title := range titles {
+		add(Query{Title: title, Author: author})
+		for _, hint := range folderAuthorHints(local) {
+			add(Query{Title: title, Author: hint})
+		}
+	}
 	add(Query{Title: strings.TrimSpace(local.Title), Author: author})
 	if author != "" {
-		add(Query{Title: clean})
+		for _, title := range titles {
+			add(Query{Title: title})
+		}
 		add(Query{Author: author})
 	}
 	return queries
@@ -135,12 +143,12 @@ func (matcher *Matcher) search(ctx context.Context, local catalog.InferredBook) 
 				scored = append(scored, ScoredCandidate{Candidate: candidate, Score: score(scoringBook, candidate)})
 			}
 		}
-		d := searchDecision(scoringBook, scored)
+		d := searchTitleDecision(scoringBook, scored)
 		if d.Selected != nil {
 			return d, nil
 		}
 	}
-	d := searchDecision(scoringBook, scored)
+	d := searchTitleDecision(scoringBook, scored)
 	if d.Selected == nil && len(failures) > 0 {
 		return Decision{}, errors.Join(failures...)
 	}
@@ -150,4 +158,93 @@ func (matcher *Matcher) search(ctx context.Context, local catalog.InferredBook) 
 		d.Candidates = d.Candidates[:20]
 	}
 	return d, nil
+}
+
+var spacedSequencePrefix = regexp.MustCompile(`^[0-9]{1,3}\s+`)
+
+// SearchTitles keeps the original identity first and adds a number-free search
+// alternative. A leading number can be meaningful, as in "12 Years a Slave".
+func SearchTitles(title string) []string {
+	clean := SearchTitle(title)
+	titles := []string{clean}
+	if alternative := strings.TrimSpace(spacedSequencePrefix.ReplaceAllString(clean, "")); alternative != "" && alternative != clean {
+		titles = append(titles, alternative)
+	}
+	return titles
+}
+
+func searchTitleDecision(local catalog.InferredBook, candidates []ScoredCandidate) Decision {
+	requireFolderAuthor := len(local.Authors) == 0 && len(folderAuthorHints(local)) > 0
+	local.Authors = corroboratedFolderAuthor(local, candidates)
+	var best Decision
+	for i, title := range SearchTitles(local.Title) {
+		variant := local
+		variant.Title = title
+		rescored := make([]ScoredCandidate, len(candidates))
+		for j, candidate := range candidates {
+			comparison := candidate.Candidate
+			comparison.Title = SearchTitle(comparison.Title)
+			rescored[j] = ScoredCandidate{Candidate: candidate.Candidate, Score: score(variant, comparison)}
+		}
+		d := searchDecision(variant, rescored)
+		isbnMatch := d.Selected != nil && inferredISBN(local) != "" && inferredISBN(local) == normalizeISBN(d.Selected.ISBN)
+		if requireFolderAuthor && len(local.Authors) == 0 && d.Selected != nil && !isbnMatch {
+			d.Selected = nil
+			d.ReviewState = catalog.ReviewNeedsReview
+		}
+		if d.Selected != nil {
+			return d
+		}
+		if i == 0 || (len(d.Candidates) > 0 && d.Candidates[0].Score > best.Candidates[0].Score) {
+			best = d
+		}
+	}
+	return best
+}
+
+var seriesLabelSuffix = regexp.MustCompile(`(?i)\s+\([^()]*[[:alpha:]][^()]*\s+(?:book|volume)\s+[0-9]{1,3}\)\s*$`)
+
+// Folder names are search hints, never persisted as author metadata without a
+// provider result that corroborates the hint and the book title.
+func folderAuthorHints(local catalog.InferredBook) []string {
+	if len(local.Authors) > 0 {
+		return nil
+	}
+	parts := strings.Split(strings.ReplaceAll(local.SourceFolder, "\\", "/"), "/")
+	var hints []string
+	seen := map[string]bool{}
+	for i := len(parts) - 2; i >= 0 && len(hints) < 3; i-- {
+		hint := strings.TrimSpace(parts[i])
+		key := strings.ToLower(hint)
+		if len(strings.Fields(hint)) < 2 || strings.ContainsAny(hint, "0123456789") || seen[key] {
+			continue
+		}
+		seen[key] = true
+		hints = append(hints, hint)
+	}
+	return hints
+}
+
+func corroboratedFolderAuthor(local catalog.InferredBook, candidates []ScoredCandidate) []string {
+	for _, hint := range folderAuthorHints(local) {
+		for _, c := range candidates {
+			authorMatch := false
+			for _, author := range c.Authors {
+				if normalizeText(author, false) == normalizeText(hint, false) {
+					authorMatch = true
+				}
+			}
+			if !authorMatch {
+				continue
+			}
+			for _, title := range SearchTitles(local.Title) {
+				variant := local
+				variant.Title = title
+				if sameBookTitle(variant, c.Candidate) {
+					return []string{hint}
+				}
+			}
+		}
+	}
+	return local.Authors
 }
