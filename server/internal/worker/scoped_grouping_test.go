@@ -122,3 +122,12 @@ func TestRootBooksIgnoreUnrelatedDescendantCorrection(t *testing.T) {
 		t.Fatalf("unrelated correction merged root books: %+v", result.Books)
 	}
 }
+
+func TestInventoryUsesFullTitleForAbbreviatedSeriesTag(t *testing.T) {
+	file := inventoryGroupingAudio("Brandon Sanderson/Brandon Sanderson - Alcatraz vs The Evil Librarians/2 The Scrivener’s Bones/Chapter01.mp3")
+	file.Media = map[string]any{"album": "Alcatraz 2", "author": "Brandon Sanderson"}
+	result := inferInventoryTree(grouping.Tree{RootID: "audiobooks", Files: []catalog.SourceFile{file}}, grouping.InferTree)
+	if len(result.Books) != 1 || result.Books[0].Title != "The Scrivener’s Bones" || result.Books[0].SeriesPosition != "2" {
+		t.Fatalf("short tag obscured full folder title: %+v", result.Books)
+	}
+}

@@ -22,6 +22,7 @@ import (
 	"bookbox.local/server/internal/grouping"
 	"bookbox.local/server/internal/library"
 	"bookbox.local/server/internal/media"
+	"bookbox.local/server/internal/metadata"
 	"bookbox.local/server/internal/scanner"
 )
 
@@ -690,5 +691,9 @@ func inferInventoryTree(tree grouping.Tree, infer func(grouping.Tree) grouping.R
 			}
 		}
 	}
-	return inferFullInventoryTree(tree, infer)
+	result := inferFullInventoryTree(tree, infer)
+	for i := range result.Books {
+		result.Books[i] = metadata.ResolveFolderSeriesReference(result.Books[i])
+	}
+	return result
 }

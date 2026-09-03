@@ -26,7 +26,7 @@ func SearchTitle(title string) string {
 
 func searchQueries(local catalog.InferredBook) []Query {
 	author := firstNonEmpty(local.Authors)
-	titles := SearchTitles(local.Title)
+	titles := localSearchTitles(local)
 	var queries []Query
 	seen := map[Query]bool{}
 	add := func(q Query) {
@@ -46,6 +46,12 @@ func searchQueries(local catalog.InferredBook) []Query {
 		}
 	}
 	add(Query{Title: strings.TrimSpace(local.Title), Author: author})
+	if series, _ := shortSeriesReference(local.Title); series != "" {
+		add(Query{Title: series, Author: author})
+		for _, hint := range folderAuthorHints(local) {
+			add(Query{Title: series, Author: hint})
+		}
+	}
 	if author != "" || len(folderAuthorHints(local)) > 0 {
 		for _, title := range titles {
 			add(Query{Title: title})
@@ -120,6 +126,7 @@ func (matcher *Matcher) search(ctx context.Context, local catalog.InferredBook) 
 		return decide(nil), nil
 	}
 	var scored []ScoredCandidate
+	var rawCandidates []Candidate
 	seen := map[string]bool{}
 	failed := map[int]bool{}
 	var failures []error
@@ -152,6 +159,7 @@ func (matcher *Matcher) search(ctx context.Context, local catalog.InferredBook) 
 					continue
 				}
 				seen[key] = true
+				rawCandidates = append(rawCandidates, candidate)
 				candidate = candidateWithSeries(candidate, local)
 				candidate = candidateWithNarrators(candidate, local)
 				scored = append(scored, ScoredCandidate{Candidate: candidate, Score: score(scoringBook, candidate)})
@@ -163,6 +171,11 @@ func (matcher *Matcher) search(ctx context.Context, local catalog.InferredBook) 
 		}
 	}
 	d := searchTitleDecision(scoringBook, scored)
+	if d.Selected == nil {
+		if seriesDecision := seriesReferenceDecision(local, rawCandidates); seriesDecision.Selected != nil {
+			d = seriesDecision
+		}
+	}
 	if d.Selected == nil && len(failures) > 0 {
 		return Decision{}, errors.Join(failures...)
 	}
@@ -191,7 +204,7 @@ func searchTitleDecision(local catalog.InferredBook, candidates []ScoredCandidat
 	requireFolderAuthor := len(local.Authors) == 0 && len(folderAuthorHints(local)) > 0
 	local.Authors = corroboratedFolderAuthor(local, candidates)
 	var best Decision
-	for i, title := range SearchTitles(local.Title) {
+	for i, title := range localSearchTitles(local) {
 		variant := local
 		variant.Title = title
 		rescored := make([]ScoredCandidate, len(candidates))
@@ -237,7 +250,7 @@ func folderAuthorHints(local catalog.InferredBook) []string {
 			continue
 		}
 		isTitle := false
-		for _, title := range SearchTitles(local.Title) {
+		for _, title := range localSearchTitles(local) {
 			isTitle = isTitle || normalizeText(title, true) == key
 		}
 		if isTitle || normalizeText(local.Series, true) == key {
@@ -256,7 +269,7 @@ func corroboratedFolderAuthor(local catalog.InferredBook, candidates []ScoredCan
 	// A provider-confirmed existing author remains stronger than a folder hint.
 	for _, candidate := range candidates {
 		if len(local.Authors) > 0 && authorSimilarity(normalizedAuthors(local.Authors), normalizedAuthors(candidate.Authors)) >= 0.8 {
-			for _, title := range SearchTitles(local.Title) {
+			for _, title := range localSearchTitles(local) {
 				variant := local
 				variant.Title = title
 				if sameBookTitle(variant, candidate.Candidate) {
@@ -276,7 +289,7 @@ func corroboratedFolderAuthor(local catalog.InferredBook, candidates []ScoredCan
 			if !authorMatch {
 				continue
 			}
-			for _, title := range SearchTitles(local.Title) {
+			for _, title := range localSearchTitles(local) {
 				variant := local
 				variant.Title = title
 				if sameBookTitle(variant, c.Candidate) {
