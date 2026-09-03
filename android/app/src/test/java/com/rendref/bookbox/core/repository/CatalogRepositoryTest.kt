@@ -118,6 +118,14 @@ class CatalogRepositoryTest {
                         }
                     }
                 }
+
+                val corruptedBook = validBook.replace(
+                    "\"reviewState\":\"confirmed\"",
+                    "\"reviewState\":\"unreviewed\",\"reviewReason\":\"corrupted_metadata\"",
+                )
+                server.enqueue(MockResponse(body = task10CatalogPage(validSnapshot, corruptedBook)))
+                val page = repository.books(BookQuery(rootId = "alpha")).first()
+                assertEquals("corrupted_metadata", page.groups.single().books.single().reviewReason)
             }
         }
 

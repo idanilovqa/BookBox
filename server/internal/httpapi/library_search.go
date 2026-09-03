@@ -151,7 +151,7 @@ func validReviewStateReason(state, reason string) bool {
 	}
 	switch state {
 	case catalog.ReviewUnreviewed:
-		return reason == ""
+		return reason == "" || reason == catalog.ReviewReasonCorrupt
 	case catalog.ReviewConfirmed:
 		return reason == "" || reason == catalog.ReviewReasonCorrupt
 	case catalog.ReviewNeedsReview:

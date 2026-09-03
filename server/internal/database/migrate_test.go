@@ -66,8 +66,8 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 	if err := pool.QueryRow(ctx, "select count(*) from schema_migrations").Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 11 {
-		t.Fatalf("schema migration rows = %d, want 11", applied)
+	if applied != 12 {
+		t.Fatalf("schema migration rows = %d, want 12", applied)
 	}
 
 	for _, constraint := range []string{

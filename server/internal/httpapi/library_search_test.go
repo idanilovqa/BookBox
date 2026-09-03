@@ -284,7 +284,8 @@ func TestBooksSearchRejectsInvalidReviewStateReasonPairs(t *testing.T) {
 
 func TestCorruptedMetadataIsAValidReviewReason(t *testing.T) {
 	if !validReviewStateReason(catalog.ReviewNeedsReview, "corrupted_metadata") ||
-		!validReviewStateReason(catalog.ReviewConfirmed, "corrupted_metadata") {
+		!validReviewStateReason(catalog.ReviewConfirmed, "corrupted_metadata") ||
+		!validReviewStateReason(catalog.ReviewUnreviewed, "corrupted_metadata") {
 		t.Fatal("corrupted metadata review reason was rejected")
 	}
 }
