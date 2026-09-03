@@ -58,6 +58,10 @@ func inferFullInventoryTree(
 	if infer == nil {
 		infer = grouping.InferTree
 	}
+	rootCorrection := false
+	for _, correction := range tree.Corrections {
+		rootCorrection = rootCorrection || correction.SourceFolder == ""
+	}
 	audioScopes := make(map[uuid.UUID]string)
 	scopeSet := make(map[string]struct{})
 	for _, file := range tree.Files {
@@ -65,6 +69,17 @@ func inferFullInventoryTree(
 			continue
 		}
 		scope := fullInventoryAudioScope(file.RelativePath)
+		// Keep explicit cross-folder assignments within their correction scope.
+		for _, correction := range tree.Corrections {
+			corrected := correction.SourceFolder
+			if (corrected == "" || strings.HasPrefix(file.RelativePath, corrected+"/")) && len(corrected) < len(scope) {
+				scope = corrected
+			}
+		}
+		// A partial disc inventory cannot replace a parent book outside its scope.
+		if tree.ScopePath != "" && scope != tree.ScopePath && !strings.HasPrefix(scope, tree.ScopePath+"/") {
+			scope = tree.ScopePath
+		}
 		audioScopes[file.ID] = scope
 		scopeSet[scope] = struct{}{}
 	}
@@ -97,7 +112,7 @@ func inferFullInventoryTree(
 			}
 		}
 		for _, correction := range tree.Corrections {
-			if correction.SourceFolder == scope {
+			if correction.SourceFolder == scope || (scope != "" && strings.HasPrefix(correction.SourceFolder, scope+"/")) || (scope == "" && rootCorrection) {
 				partition.Corrections = append(partition.Corrections, correction)
 			}
 		}
@@ -245,12 +260,7 @@ func (handler *ScanRootHandler) handleInventory(
 	if infer == nil {
 		infer = grouping.InferTree
 	}
-	var grouped grouping.Result
-	if full {
-		grouped = inferFullInventoryTree(tree, infer)
-	} else {
-		grouped = infer(tree)
-	}
+	grouped := inferInventoryTree(tree, infer)
 	if full {
 		if _, err := repository.FinalizeInventoryAndPublish(ctx, catalog.InventoryFinalization{
 			ScanRunID: run.ID, RootID: root.ID, Books: grouped.Books, Evidence: grouped.Evidence,
@@ -527,10 +537,7 @@ func (handler RegroupScopeHandler) Handle(ctx context.Context, job catalog.Worke
 		if loadErr != nil {
 			return loadErr
 		}
-		result := infer(tree)
-		if scope == "" {
-			result = inferFullInventoryTree(tree, infer)
-		}
+		result := inferInventoryTree(tree, infer)
 		generation, refineErr := handler.Repo.ApplyGroupingRefinement(ctx, catalog.GroupingRefinement{
 			RootID: rootID, ScopePath: scope, ExpectedGeneration: expected,
 			Books: result.Books, Evidence: result.Evidence,
@@ -671,4 +678,17 @@ func payloadInt64(payload map[string]any, key string) (int64, error) {
 func optionalPayloadString(payload map[string]any, key string) string {
 	value, _ := payload[key].(string)
 	return strings.TrimSpace(value)
+}
+
+// Incremental author/series scopes must retain the same book-folder boundaries
+// as full inventories. Explicit scoped corrections keep their existing semantics.
+func inferInventoryTree(tree grouping.Tree, infer func(grouping.Tree) grouping.Result) grouping.Result {
+	if tree.ScopePath != "" {
+		for _, correction := range tree.Corrections {
+			if correction.SourceFolder == tree.ScopePath {
+				return infer(tree)
+			}
+		}
+	}
+	return inferFullInventoryTree(tree, infer)
 }
