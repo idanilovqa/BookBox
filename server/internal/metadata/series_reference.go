@@ -15,7 +15,7 @@ func shortSeriesReference(title string) (string, string) {
 	if m == nil {
 		return "", ""
 	}
-	name := strings.TrimSpace(m[1])
+	name := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(m[1]), ","))
 	normalized := normalizeText(name, false)
 	switch normalized {
 	case "book", "volume", "part", "chapter", "track", "disc", "cd", "the", "a":
@@ -49,6 +49,15 @@ func folderSeriesReference(local catalog.InferredBook) (title, series, position 
 	leafName := path.Base(folder)
 	if mediaPartPrefix.MatchString(leafName) {
 		return
+	}
+	for _, split := range chainedSeparator.FindAllStringIndex(leafName, -1) {
+		suffixName, suffixNumber := shortSeriesReference(leafName[split[1]:])
+		if normalizeText(suffixName, false) == normalizeText(name, false) && suffixNumber == number {
+			bookTitle := SearchTitle(leafName[:split[0]])
+			if bookTitle != "" && !mediaPartPrefix.MatchString(bookTitle) {
+				return bookTitle, name, number
+			}
+		}
 	}
 	leaf := numberedSeriesTitle.FindStringSubmatch(leafName)
 	if leaf == nil || normalizedPosition(leaf[1]) != number {

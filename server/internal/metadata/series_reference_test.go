@@ -83,3 +83,36 @@ func TestFolderReferenceRejectsMediaPartNumbers(t *testing.T) {
 		})
 	}
 }
+
+func TestCommaSeriesReferenceAndSuffixFolder(t *testing.T) {
+	for _, folder := range []string{"", "Robert McCammon/Corbett/Robert McCammon - Matthew Corbett Series/King of Shadows - Matthew Corbett Book 8"} {
+		t.Run(folder, func(t *testing.T) {
+			local := catalog.InferredBook{Title: "Matthew Corbett, Book 8", Authors: []string{"Robert McCammon"}, SourceFolder: folder}
+			p := queryProvider(func(_ context.Context, q Query) ([]Candidate, error) {
+				c := Candidate{Provider: ProviderOpenLibrary, ProviderID: "eight", Title: "King of Shadows", Authors: local.Authors}
+				if folder == "" && q.Title == "Matthew Corbett" && q.Author == "Robert McCammon" {
+					c.Series = "Matthew Corbett"
+					c.SeriesPosition = "8"
+					return []Candidate{c}, nil
+				}
+				if folder != "" && q.Title == "King of Shadows" && q.Author == "Robert McCammon" {
+					return []Candidate{c}, nil
+				}
+				return nil, nil
+			})
+			d, err := NewMatcher(p).Match(t.Context(), local)
+			if err != nil || d.Selected == nil {
+				t.Fatalf("not identified: %+v %v", d, err)
+			}
+			if d.Selected.Title != "King of Shadows" || d.Selected.Series != "Matthew Corbett" || d.Selected.SeriesPosition != "8" {
+				t.Fatalf("wrong identity: %+v", d.Selected)
+			}
+		})
+	}
+	for _, suffix := range []string{"Matthew Corbett Book 7", "Different Series Book 8"} {
+		b := catalog.InferredBook{Title: "Matthew Corbett, Book 8", Authors: []string{"Robert McCammon"}, SourceFolder: "Robert McCammon/King of Shadows - " + suffix}
+		if title, _, _ := folderSeriesReference(b); title != "" {
+			t.Fatalf("conflicting suffix accepted: %s", suffix)
+		}
+	}
+}
