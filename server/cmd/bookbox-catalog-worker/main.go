@@ -201,7 +201,10 @@ func runConfiguredProgram(ctx context.Context, cfg config.Config, logger *log.Lo
 	}
 	host, _ := os.Hostname()
 	runtime := &worker.Worker{
-		Repo:         stagedRepository,
+		Repo: &jobLaneRepository{PostgresStagedRepository: stagedRepository, kinds: []string{
+			catalog.JobScanRoot, catalog.JobProbeFile, catalog.JobInspectCompanion, catalog.JobRegroupScope,
+			catalog.JobPublishSearch, catalog.JobReorganizeFiles,
+		}},
 		Roots:        cfg.Roots,
 		WorkerID:     strings.TrimSpace(host) + ":" + uuid.NewString(),
 		ScanInterval: options.scanInterval,
@@ -216,12 +219,21 @@ func runConfiguredProgram(ctx context.Context, cfg config.Config, logger *log.Lo
 			catalog.JobReorganizeFiles:  worker.ReorganizeFilesHandler{Repository: repository, Mover: confinedMover},
 		},
 	}
+	metadataRuntime := &worker.Worker{
+		Repo:                  &jobLaneRepository{PostgresStagedRepository: stagedRepository, kinds: []string{catalog.JobEnrichBook, catalog.JobPublishCover}},
+		WorkerID:              runtime.WorkerID + ":metadata",
+		Handlers:              map[string]worker.Handler{catalog.JobEnrichBook: enrichHandler, catalog.JobPublishCover: publishHandler},
+		SkipFingerprintOutbox: true,
+		Schedule: func(ctx context.Context, _ time.Time) error {
+			return worker.QueueMetadataEnrichment(ctx, stagedRepository, cfg.Roots)
+		},
+	}
 	supervisors := newRootSupervisors(cfg.Roots, func(root config.Root) monitor.Runner {
 		return monitor.New(repository, []config.Root{root})
 	}, func(err error) {
 		logger.Printf("warning: root monitor unavailable: %v", err)
 	})
-	return runWorkerWithMonitors(ctx, runtime, supervisors, func(err error) {
+	return runWorkerWithMonitors(ctx, workerLanes{runtime, metadataRuntime}, supervisors, func(err error) {
 		logger.Printf("warning: %v", err)
 	})
 }

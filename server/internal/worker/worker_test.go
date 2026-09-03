@@ -849,10 +849,11 @@ func (repository *enrichRepositoryFake) SaveMatches(
 	return nil
 }
 
-func (repository *enrichRepositoryFake) ConfirmMatch(
+func (repository *enrichRepositoryFake) ConfirmMatchIfUnchanged(
 	_ context.Context,
 	_ uuid.UUID,
 	matchID uuid.UUID,
+	_ time.Time,
 ) error {
 	repository.confirmed = true
 	repository.confirmedMatch = matchID

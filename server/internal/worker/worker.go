@@ -70,6 +70,9 @@ type Worker struct {
 	Wait         func(context.Context, time.Duration) error
 	GracePeriod  time.Duration
 	ScanInterval time.Duration
+	// Schedule overrides scan scheduling for a dedicated processing lane.
+	Schedule              func(context.Context, time.Time) error
+	SkipFingerprintOutbox bool
 }
 
 func (worker *Worker) Run(ctx context.Context) error {
@@ -94,14 +97,22 @@ func (worker *Worker) Run(ctx context.Context) error {
 		scanInterval = ScanInterval
 	}
 
+	schedule := worker.scheduleScans
+	if worker.Schedule != nil {
+		schedule = worker.Schedule
+	}
+	drain := worker.Repo.DrainReadyFingerprintOutbox
+	if worker.SkipFingerprintOutbox {
+		drain = func(context.Context, time.Time, int) (int, error) { return 0, nil }
+	}
 	now := clock().UTC()
 	if err := worker.Repo.RecoverExpiredJobs(ctx, now); err != nil {
 		return fmt.Errorf("recover expired worker jobs: %w", err)
 	}
-	if err := worker.scheduleScans(ctx, now); err != nil {
+	if err := schedule(ctx, now); err != nil {
 		return fmt.Errorf("schedule startup scans: %w", err)
 	}
-	if _, err := worker.Repo.DrainReadyFingerprintOutbox(ctx, now, 256); err != nil {
+	if _, err := drain(ctx, now, 256); err != nil {
 		return fmt.Errorf("drain fingerprint outbox: %w", err)
 	}
 	nextScan := now.Add(scanInterval)
@@ -111,11 +122,11 @@ func (worker *Worker) Run(ctx context.Context) error {
 			return nil
 		}
 		now = clock().UTC()
-		if _, err := worker.Repo.DrainReadyFingerprintOutbox(ctx, now, 256); err != nil {
+		if _, err := drain(ctx, now, 256); err != nil {
 			return fmt.Errorf("drain fingerprint outbox: %w", err)
 		}
 		if !now.Before(nextScan) {
-			if err := worker.scheduleScans(ctx, now); err != nil {
+			if err := schedule(ctx, now); err != nil {
 				return fmt.Errorf("schedule periodic scans: %w", err)
 			}
 			for !nextScan.After(now) {
@@ -437,7 +448,7 @@ func enrichmentDedupeKey(book catalog.Book) string {
 		Identifiers: book.Identifiers,
 	})
 	fingerprint := sha256.Sum256(identity)
-	return fmt.Sprintf("enrich_book:%s:%x", book.ID, fingerprint[:8])
+	return fmt.Sprintf("enrich_book:v2:%s:%x", book.ID, fingerprint[:8])
 }
 
 func sourceFile(scanRunID uuid.UUID, file scanner.File) catalog.SourceFile {
@@ -481,7 +492,7 @@ type Matcher interface {
 type EnrichRepository interface {
 	GetBook(context.Context, uuid.UUID) (catalog.BookDetail, error)
 	SaveMatches(context.Context, uuid.UUID, []catalog.MetadataMatch) error
-	ConfirmMatch(context.Context, uuid.UUID, uuid.UUID) error
+	ConfirmMatchIfUnchanged(context.Context, uuid.UUID, uuid.UUID, time.Time) error
 	EnqueueDeduplicated(
 		context.Context,
 		catalog.WorkerJob,
@@ -515,6 +526,12 @@ func (handler *EnrichBookHandler) Handle(
 	}
 	if detail.Book.ReviewState == catalog.ReviewConfirmed ||
 		detail.Book.MetadataSource == catalog.MetadataConfirmed {
+		// Confirmation may have committed before an earlier cover enqueue failed.
+		if detail.Book.ConfirmedMatchID != nil {
+			if match, ok := confirmedMatch(detail.Matches, bookID, *detail.Book.ConfirmedMatchID); ok {
+				return handler.queueCover(ctx, bookID, match)
+			}
+		}
 		return nil
 	}
 	if !meaningfulEnrichmentTitle(detail.Book.Title) {
@@ -538,9 +555,19 @@ func (handler *EnrichBookHandler) Handle(
 	if !found {
 		return errors.New("selected metadata match was not persisted")
 	}
-	if err := handler.Repo.ConfirmMatch(ctx, bookID, match.ID); err != nil {
+	if err := handler.Repo.ConfirmMatchIfUnchanged(ctx, bookID, match.ID, detail.Book.UpdatedAt); err != nil {
 		return fmt.Errorf("confirm metadata match: %w", err)
 	}
+	return handler.queueCover(ctx, bookID, match)
+}
+
+func (handler *EnrichBookHandler) queueCover(ctx context.Context, bookID uuid.UUID, match catalog.MetadataMatch) error {
+	return enqueueMatchCover(ctx, handler.Repo, bookID, match)
+}
+
+func enqueueMatchCover(ctx context.Context, repo interface {
+	EnqueueDeduplicated(context.Context, catalog.WorkerJob, string) (catalog.WorkerJob, error)
+}, bookID uuid.UUID, match catalog.MetadataMatch) error {
 	if strings.TrimSpace(match.CoverURL) == "" {
 		return nil
 	}
@@ -552,7 +579,7 @@ func (handler *EnrichBookHandler) Handle(
 			"matchId": match.ID.String(),
 		},
 	}
-	if _, err := handler.Repo.EnqueueDeduplicated(
+	if _, err := repo.EnqueueDeduplicated(
 		ctx,
 		publish,
 		"publish_cover:"+bookID.String()+":"+match.ID.String(),

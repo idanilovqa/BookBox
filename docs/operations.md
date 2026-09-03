@@ -156,6 +156,24 @@ Settings if freshness does not advance after a change. Provider failures do not
 remove local metadata. An empty Google Books key disables Google Books while
 Open Library remains available.
 
+Metadata enrichment runs in a separate background lane alongside scans.
+At startup and every six hours it revisits active unconfirmed books and
+confirmed books missing a cover. Exhausted metadata and cover requests retry
+after a one-day cooldown; completed unresolved searches retry after a week.
+
+Search tries ISBN, cleaned title and author, the original title when different,
+title alone, and a bounded author search. For example, `M01: tHe final Empire`
+is compared with `The Final Empire`. Open Library author results are cached
+and limited to three pages of 100 works. Matching checks title and author
+locally; sequels and collections are retained for review rather than accepted
+on a substring alone. Equivalent provider editions do not count as competing
+book identities. Strong matches apply metadata and queue cover publication
+without an Android action. Source folder names remain unchanged.
+
+Automatic confirmation checks that the book has not changed during the
+provider request. Explicit confirmations stay protected. The API can start
+during a scan without rewriting unchanged root configuration.
+
 Both audiobook and raw search are served entirely from the last completed
 PostgreSQL projection; API requests do not read the source mount. Audiobook
 search may span multiple roots, while raw search is confined to its selected

@@ -150,31 +150,36 @@ func (provider *OpenLibrary) Search(
 		parameters.Set("author", author)
 	case title != "":
 		parameters.Set("q", title)
+	case author != "":
+		parameters.Set("author", author)
 	default:
 		return nil, ErrInvalidQuery
 	}
-	parameters.Set("limit", "10")
-	parameters.Set("fields", strings.Join(openLibraryFields, ","))
-	requestURL.RawQuery = parameters.Encode()
-
-	var response openLibraryResponse
-	if err := getJSON(
-		ctx,
-		provider.client,
-		ProviderOpenLibrary,
-		requestURL.String(),
-		&response,
-	); err != nil {
-		return nil, err
+	pageSize, pages := 10, 1
+	if title == "" && isbn == "" && author != "" {
+		pageSize, pages = 100, 3
 	}
-
-	candidates := make([]Candidate, 0, len(response.Docs))
-	for _, document := range response.Docs {
-		candidate := mapOpenLibraryDocument(document)
-		if candidate.ProviderID == "" || candidate.Title == "" {
-			continue
+	parameters.Set("limit", strconv.Itoa(pageSize))
+	parameters.Set("fields", strings.Join(openLibraryFields, ","))
+	candidates := make([]Candidate, 0, pageSize)
+	for page := 0; page < pages; page++ {
+		if pages > 1 {
+			parameters.Set("offset", strconv.Itoa(page*pageSize))
 		}
-		candidates = append(candidates, candidate)
+		requestURL.RawQuery = parameters.Encode()
+		var response openLibraryResponse
+		if err := getJSON(ctx, provider.client, ProviderOpenLibrary, requestURL.String(), &response); err != nil {
+			return nil, err
+		}
+		for _, document := range response.Docs {
+			candidate := mapOpenLibraryDocument(document)
+			if candidate.ProviderID != "" && candidate.Title != "" {
+				candidates = append(candidates, candidate)
+			}
+		}
+		if len(response.Docs) < pageSize {
+			break
+		}
 	}
 	ttl := openLibraryHitTTL
 	if len(candidates) == 0 {

@@ -58,28 +58,10 @@ func (matcher *Matcher) Match(
 			ReviewState: local.ReviewState,
 		}, nil
 	}
-	query := Query{
-		Title:  local.Title,
-		Author: firstNonEmpty(local.Authors),
-		ISBN:   inferredISBN(local),
+	decision, err := matcher.search(ctx, local)
+	if err != nil {
+		return Decision{}, err
 	}
-	var scored []ScoredCandidate
-	if matcher != nil {
-		for _, provider := range matcher.providers {
-			candidates, err := provider.Search(ctx, query)
-			if err != nil {
-				return Decision{}, err
-			}
-			for _, candidate := range candidates {
-				scored = append(scored, ScoredCandidate{
-					Candidate: candidate,
-					Score:     score(local, candidate),
-				})
-			}
-		}
-	}
-
-	decision := decide(scored)
 	decision.Book = local
 	if len(decision.Candidates) == 0 {
 		decision.ReviewState = local.ReviewState

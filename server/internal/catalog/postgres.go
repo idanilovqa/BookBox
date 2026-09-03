@@ -88,7 +88,11 @@ func (repository *PostgresRepository) SyncRoots(
 	for _, root := range roots {
 		if _, err := transaction.Exec(ctx, `
 			insert into library_roots(id, display_name, scanned_at)
-			values ($1, $2, $3)
+			select $1, $2, $3
+   where not exists (
+    select 1 from library_roots where id=$1 and display_name=$2
+    and ($3::timestamptz is null or scanned_at=$3)
+   )
 			on conflict (id) do update
 			set display_name=excluded.display_name,
 			    scanned_at=coalesce(excluded.scanned_at, library_roots.scanned_at),
@@ -98,7 +102,7 @@ func (repository *PostgresRepository) SyncRoots(
 		}
 		if _, err := transaction.Exec(ctx, `
 			insert into catalog_generations(root_id, generation)
-			values ($1, 1)
+   select $1, 1 where not exists (select 1 from catalog_generations where root_id=$1)
 			on conflict (root_id) do nothing
 		`, root.ID); err != nil {
 			return fmt.Errorf("initialize catalog generation %q: %w", root.ID, err)
@@ -866,11 +870,20 @@ func (repository *PostgresRepository) SaveMatches(
 	return nil
 }
 
-func (repository *PostgresRepository) ConfirmMatch(
-	ctx context.Context,
-	bookID uuid.UUID,
-	matchID uuid.UUID,
-) error {
+func (repository *PostgresRepository) ConfirmMatch(ctx context.Context, bookID, matchID uuid.UUID) error {
+	return repository.confirmMatch(ctx, bookID, matchID, nil)
+}
+
+// ConfirmMatchIfUnchanged prevents background provider results from replacing
+// an identity changed by grouping or an explicit user confirmation.
+func (repository *PostgresRepository) ConfirmMatchIfUnchanged(ctx context.Context, bookID, matchID uuid.UUID, expected time.Time) error {
+	if expected.IsZero() {
+		return ErrInvalidData
+	}
+	return repository.confirmMatch(ctx, bookID, matchID, &expected)
+}
+
+func (repository *PostgresRepository) confirmMatch(ctx context.Context, bookID, matchID uuid.UUID, expected *time.Time) error {
 	if bookID == uuid.Nil || matchID == uuid.Nil {
 		return ErrInvalidData
 	}
@@ -879,6 +892,14 @@ func (repository *PostgresRepository) ConfirmMatch(
 		return fmt.Errorf("begin metadata confirmation: %w", err)
 	}
 	defer transaction.Rollback(ctx)
+	// Use the same book-then-match lock order as SaveMatches.
+	var updatedAt time.Time
+	if err := transaction.QueryRow(ctx, "select updated_at from books where id=$1 and missing_at is null for update", bookID).Scan(&updatedAt); err != nil {
+		return mapNotFound(err, "lock confirmation book")
+	}
+	if expected != nil && !updatedAt.Equal(*expected) {
+		return ErrConflict
+	}
 	var matchBookID uuid.UUID
 	var provider string
 	var providerID string
@@ -1780,10 +1801,9 @@ func (repository *PostgresRepository) EnqueueDeduplicated(
 	if job.MaxAttempts < 1 || job.MaxAttempts > 100 {
 		return WorkerJob{}, ErrInvalidData
 	}
-	// Enrichment is idempotent for a book until its dedupe key changes. Keep the
-	// terminal row as the coordination record so every scan does not recreate
-	// the same completed or exhausted request indefinitely.
-	if job.Kind == JobEnrichBook {
+	// Keep terminal enrichment as a cooldown record. Provider outages and
+	// unresolved searches must eventually retry without a manual search.
+	if job.Kind == JobEnrichBook || job.Kind == JobPublishCover {
 		row := repository.pool.QueryRow(ctx, `
 			select id, kind, payload, status, run_after, attempts, max_attempts,
 			       locked_at, coalesce(locked_by,''), lease_until, lease_token,
@@ -1795,9 +1815,14 @@ func (repository *PostgresRepository) EnqueueDeduplicated(
 		`, job.Kind, dedupeKey)
 		existing, scanErr := scanWorkerJob(row)
 		if scanErr == nil {
-			return existing, nil
-		}
-		if !errors.Is(scanErr, pgx.ErrNoRows) {
+			cooldown := 7 * 24 * time.Hour
+			if existing.Status == JobDead {
+				cooldown = 24 * time.Hour
+			}
+			if (existing.Status != JobDead && existing.Status != JobSucceeded) || repository.now().Before(existing.UpdatedAt.Add(cooldown)) {
+				return existing, nil
+			}
+		} else if !errors.Is(scanErr, pgx.ErrNoRows) {
 			return WorkerJob{}, fmt.Errorf("load prior enrichment job: %w", scanErr)
 		}
 	}
@@ -1820,11 +1845,20 @@ func (repository *PostgresRepository) EnqueueDeduplicated(
 	return enqueued, nil
 }
 
-func (repository *PostgresRepository) ClaimJob(
-	ctx context.Context,
-	workerID string,
-	now time.Time,
+func (repository *PostgresRepository) ClaimJob(ctx context.Context, workerID string, now time.Time) (WorkerJob, error) {
+	return repository.ClaimJobKinds(ctx, workerID, now, nil)
+}
+
+// ClaimJobKinds atomically claims only the work assigned to a processing lane.
+// An empty kind list preserves the general-purpose worker API.
+func (repository *PostgresRepository) ClaimJobKinds(
+	ctx context.Context, workerID string, now time.Time, kinds []string,
 ) (WorkerJob, error) {
+	for _, kind := range kinds {
+		if !jobKinds[kind] {
+			return WorkerJob{}, ErrInvalidData
+		}
+	}
 	if strings.TrimSpace(workerID) == "" || len(workerID) > 200 || now.IsZero() {
 		return WorkerJob{}, ErrInvalidData
 	}
@@ -1839,6 +1873,7 @@ func (repository *PostgresRepository) ClaimJob(
 			select id
 			from worker_jobs
 			where status='queued' and run_after <= $1
+   and (coalesce(cardinality($5::text[]),0)=0 or kind=any($5::text[]))
 			order by case kind
 				when 'reorganize_files' then 10
 				when 'scan_root' then 20
@@ -1869,7 +1904,7 @@ func (repository *PostgresRepository) ClaimJob(
 		          job.attempts, job.max_attempts, job.locked_at, job.locked_by,
 		          job.lease_until, job.lease_token, coalesce(job.last_error,''),
 		          job.created_at, job.updated_at
-	`, now, workerID, now.Add(jobLease), leaseToken)
+	`, now, workerID, now.Add(jobLease), leaseToken, kinds)
 	job, err := scanWorkerJob(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WorkerJob{}, ErrNoJob
