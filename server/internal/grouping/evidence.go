@@ -261,6 +261,30 @@ func coverTitleAgreement(stem, title string) bool {
 }
 
 func inferAutomaticTreeClusters(tree Tree, audio, allFiles []catalog.SourceFile) []treeCluster {
+	identities := make([]treeIdentity, len(audio))
+	allTitlesEmpty := true
+	for index, file := range audio {
+		identities[index] = identityForTreeFile(file)
+		allTitlesEmpty = allTitlesEmpty && identities[index].title == ""
+	}
+	namedTitle := namedTrackSequenceTitle(tree, audio)
+	if allTitlesEmpty && (coherentTrackSequence(audio) || namedTitle != "") {
+		reason, review := "folder_default", catalog.ReviewUnreviewed
+		for _, file := range audio {
+			if file.ProbeStatus == catalog.ProbeFailed || strings.TrimSpace(file.ProbeError) != "" {
+				reason, review = "probe_failed", catalog.ReviewNeedsReview
+				break
+			}
+		}
+		if sequenceAuthorConflict(identities) {
+			reason, review = "conflicting_author", catalog.ReviewNeedsReview
+		}
+		return []treeCluster{{
+			identity: consistentTreeIdentity(audio), displayTitle: namedTitle,
+			audio: audio, reason: reason, review: review,
+		}}
+	}
+
 	resolved := make([]catalog.SourceFile, 0, len(audio))
 	failed := make([]catalog.SourceFile, 0)
 	for _, file := range audio {
@@ -279,29 +303,6 @@ func inferAutomaticTreeClusters(tree Tree, audio, allFiles []catalog.SourceFile)
 		return clusters
 	}
 
-	identities := make([]treeIdentity, len(audio))
-	allTitlesEmpty := true
-	for index, file := range audio {
-		identities[index] = identityForTreeFile(file)
-		allTitlesEmpty = allTitlesEmpty && identities[index].title == ""
-	}
-	namedTitle := namedTrackSequenceTitle(tree, audio)
-	if allTitlesEmpty && (coherentTrackSequence(audio) || namedTitle != "") {
-		if sequenceAuthorConflict(identities) {
-			return []treeCluster{{
-				identity: consistentTreeIdentity(audio), displayTitle: namedTitle,
-				audio:  audio,
-				reason: "conflicting_author",
-				review: catalog.ReviewNeedsReview,
-			}}
-		}
-		return []treeCluster{{
-			identity: consistentTreeIdentity(audio), displayTitle: namedTitle,
-			audio:  audio,
-			reason: "folder_default",
-			review: catalog.ReviewUnreviewed,
-		}}
-	}
 	for index, file := range audio {
 		if identities[index].title == "" {
 			identities[index] = companionIdentityForAudio(file, allFiles)
@@ -557,27 +558,28 @@ func coherentTrackSequence(audio []catalog.SourceFile) bool {
 	if len(audio) < 2 {
 		return false
 	}
-	allM4B := true
+	containsM4B := false
 	numbers := make(map[int]struct{}, len(audio))
-	minimum, maximum := 0, 0
+	minimum, maximum := -1, -1
 	for _, file := range audio {
-		allM4B = allM4B && strings.EqualFold(path.Ext(file.RelativePath), ".m4b")
+		containsM4B = containsM4B || strings.EqualFold(path.Ext(file.RelativePath), ".m4b")
 		number, ok := trackSequenceNumber(file)
-		if !ok || number < 1 {
+		if !ok || number < 0 {
 			return false
 		}
 		if _, duplicate := numbers[number]; duplicate {
 			return false
 		}
 		numbers[number] = struct{}{}
-		if minimum == 0 || number < minimum {
+		if minimum == -1 || number < minimum {
 			minimum = number
 		}
 		if number > maximum {
 			maximum = number
 		}
 	}
-	return !allM4B && minimum == 1 && maximum == len(audio)
+	return !containsM4B && ((minimum == 1 && maximum == len(audio)) ||
+		(minimum == 0 && maximum == len(audio)-1))
 }
 
 func trackSequenceNumber(file catalog.SourceFile) (int, bool) {

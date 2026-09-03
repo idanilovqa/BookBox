@@ -63,6 +63,35 @@ func TestInferTreeGroupsCounterTitledCollectionByFolder(t *testing.T) {
 	}
 }
 
+func TestInferTreeGroupsZeroBasedCourseLecturesByFolder(t *testing.T) {
+	files := make([]catalog.SourceFile, 0, 25)
+	for number := 0; number < 25; number++ {
+		file := treeFile(
+			fmt.Sprintf("The Great Courses/TTC - Art of Reading/%02d. Lecture.mp3", number),
+			catalog.FileKindAudio, "", map[string]any{},
+		)
+		if number == 7 {
+			file.ProbeStatus = catalog.ProbeFailed
+			file.ProbeError = "damaged tag"
+		}
+		files = append(files, file)
+	}
+	result := InferTree(testTree("The Great Courses/TTC - Art of Reading", files...))
+	if len(result.Books) != 1 || result.Books[0].Title != "TTC - Art of Reading" ||
+		len(result.Books[0].SourceFileIDs) != 25 || result.Books[0].ReviewReason != "probe_failed" {
+		t.Fatalf("course=%#v", result.Books)
+	}
+}
+
+func TestInferTreeDoesNotMergeZeroBasedSequenceContainingStandaloneM4B(t *testing.T) {
+	zero := treeFile("Shared/00. Introduction.mp3", catalog.FileKindAudio, "", map[string]any{})
+	one := treeFile("Shared/01. Full Book.m4b", catalog.FileKindAudio, "", map[string]any{})
+	result := InferTree(testTree("Shared", zero, one))
+	if len(result.Books) == 1 && result.Books[0].ReviewState != catalog.ReviewNeedsReview {
+		t.Fatalf("unsafe mixed sequence merge: %#v", result.Books)
+	}
+}
+
 func TestInferTreeDoesNotAutoConfirmCounterSequenceWithConflictingAuthors(t *testing.T) {
 	first := treeFile("Collection/1 - First.mp3", catalog.FileKindAudio, "", map[string]any{
 		"title": "01/02", "track": "1", "author": "First Author",
