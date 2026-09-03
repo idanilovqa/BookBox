@@ -93,12 +93,33 @@ func searchDecision(local catalog.InferredBook, candidates []ScoredCandidate) De
 	all := decide(candidates).Candidates
 	var works []ScoredCandidate
 	identities := map[string]int{}
+	var editionAuthors [][][]string
 	for _, c := range all {
 		key := normalizeText(SearchTitle(c.Title), false) + "\x00" + strings.Join(normalizedAuthors(c.Authors), "\x00")
 		if len(c.Authors) == 0 {
 			key += "\x00" + c.Provider + "\x00" + c.ProviderID
 		}
-		if index, ok := identities[key]; ok {
+		index, ok := identities[key]
+		if !ok {
+			for i, work := range works {
+				if normalizeText(SearchTitle(work.Title), false) != normalizeText(SearchTitle(c.Title), false) {
+					continue
+				}
+				compatible := true
+				for _, authors := range editionAuthors[i] {
+					if !equivalentEditionAuthors(authors, c.Authors) {
+						compatible = false
+						break
+					}
+				}
+				if compatible {
+					index, ok = i, true
+					break
+				}
+			}
+		}
+		if ok {
+			editionAuthors[index] = append(editionAuthors[index], c.Authors)
 			if c.Score == works[index].Score && works[index].CoverURL == "" && c.CoverURL != "" {
 				works[index] = c
 			}
@@ -106,6 +127,7 @@ func searchDecision(local catalog.InferredBook, candidates []ScoredCandidate) De
 		}
 		identities[key] = len(works)
 		works = append(works, c)
+		editionAuthors = append(editionAuthors, [][]string{c.Authors})
 	}
 	d := decide(works)
 	if d.Selected != nil {

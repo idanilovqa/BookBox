@@ -45,6 +45,9 @@ func InferSeriesIdentity(book catalog.InferredBook) (string, string) {
 	if m := explicitSeries.FindStringSubmatch(book.Title); m != nil {
 		return apply(m[1], m[2])
 	}
+	if title, name, number := chainedTitleReference(book); title != "" {
+		return apply(name, number)
+	}
 	if title, name, number := folderSeriesReference(book); title != "" {
 		return apply(name, number)
 	}

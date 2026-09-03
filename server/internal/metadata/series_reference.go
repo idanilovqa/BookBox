@@ -71,6 +71,12 @@ func folderSeriesReference(local catalog.InferredBook) (title, series, position 
 }
 func localSearchTitles(local catalog.InferredBook) []string {
 	titles := SearchTitles(local.Title)
+	if title, _, _ := chainedTitleReference(local); title != "" {
+		titles = append(titles, SearchTitles(title)...)
+		if !strings.HasPrefix(strings.ToLower(title), "the ") {
+			titles = append(titles, "The "+title)
+		}
+	}
 	if title, _, _ := folderSeriesReference(local); title != "" {
 		for _, existing := range titles {
 			if normalizeText(existing, false) == normalizeText(title, false) {
