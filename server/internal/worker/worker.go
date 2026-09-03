@@ -519,9 +519,17 @@ func (handler *EnrichBookHandler) Handle(
 	}
 	detail, err := handler.Repo.GetBook(ctx, bookID)
 	if err != nil {
+		if errors.Is(err, catalog.ErrNotFound) {
+			return nil
+		}
 		return fmt.Errorf("load enrichment book: %w", err)
 	}
-	if detail.Book.ID != bookID || detail.Book.MissingAt != nil {
+	if detail.Book.MissingAt != nil {
+		// Scans can retire a record after its job is queued. That work is obsolete;
+		// the active replacement receives its own enrichment job.
+		return nil
+	}
+	if detail.Book.ID != bookID {
 		return errors.New("enrichment book is unavailable")
 	}
 	if detail.Book.ReviewState == catalog.ReviewConfirmed ||

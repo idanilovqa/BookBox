@@ -74,6 +74,9 @@ func folderSeriesReference(local catalog.InferredBook) (title, series, position 
 }
 func localSearchTitles(local catalog.InferredBook) []string {
 	titles := SearchTitles(local.Title)
+	if title := fullerAuthorFolderTitle(local); title != "" {
+		titles = append(titles, title)
+	}
 	if title := abbreviatedAuthorTitle(local); title != "" {
 		titles = append(titles, title)
 	}

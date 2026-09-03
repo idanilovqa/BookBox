@@ -59,3 +59,29 @@ func chainedFolderReference(local catalog.InferredBook) (title, series, position
 	}
 	return bookSeries + ": " + bookTitle, bookSeries, bookNumber
 }
+
+// A fuller Author - Title folder can disambiguate an abbreviated album tag.
+// Keep it as a search alternative and require the provider to match it exactly.
+func fullerAuthorFolderTitle(local catalog.InferredBook) string {
+	leaf := path.Base(strings.ReplaceAll(local.SourceFolder, "\\", "/"))
+	author, rest, ok := strings.Cut(leaf, " - ")
+	if !ok {
+		return ""
+	}
+	matched := false
+	for _, known := range local.Authors {
+		if normalizeText(author, true) == normalizeText(known, true) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return ""
+	}
+	title := SearchTitle(rest)
+	short := normalizeText(SearchTitle(local.Title), false)
+	if len(strings.Fields(short)) < 2 || !strings.HasPrefix(normalizeText(title, false), short+" ") {
+		return ""
+	}
+	return title
+}

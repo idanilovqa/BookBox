@@ -52,3 +52,24 @@ func TestAdditionalIdentityRejectsConflictingEvidence(t *testing.T) {
 		}
 	}
 }
+
+func TestNovellaSeriesAndFullerFolderTitle(t *testing.T) {
+	for _, tc := range []struct {
+		local catalog.InferredBook
+		title string
+	}{
+		{catalog.InferredBook{Title: "Evershore: Skyward Flight: Novella 3", Authors: []string{"Brandon Sanderson, Janci Patterson"}}, "Evershore"},
+		{catalog.InferredBook{Title: "Infinity Blade (Unabridged)", Authors: []string{"Brandon Sanderson"}, SourceFolder: "Brandon Sanderson/Brandon Sanderson - Infinity Blade Redemption (Unabridged)"}, "Infinity Blade--Redemption"},
+	} {
+		p := queryProvider(func(_ context.Context, q Query) ([]Candidate, error) {
+			if normalizeText(q.Title, false) == normalizeText(tc.title, false) {
+				return []Candidate{{Provider: ProviderOpenLibrary, ProviderID: "work", Title: tc.title, Authors: tc.local.Authors}}, nil
+			}
+			return nil, nil
+		})
+		d, err := NewMatcher(p).Match(t.Context(), tc.local)
+		if err != nil || d.Selected == nil {
+			t.Fatalf("not identified: %s %v", tc.local.Title, err)
+		}
+	}
+}
