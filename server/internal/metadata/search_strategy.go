@@ -10,12 +10,13 @@ import (
 
 var sequencePrefix = regexp.MustCompile(`(?i)^(?:[a-z]{1,4}[0-9]{1,3}|(?:book|vol(?:ume)?|part)\s*[0-9]{1,3}|[0-9]{1,3})\s*[:._)\-]+\s*`)
 var bracketedSequencePrefix = regexp.MustCompile(`^(?:\(\s*#?\s*[0-9]{1,3}\s*\)|\[\s*#?\s*[0-9]{1,3}\s*\]|#\s*[0-9]{1,3})\s+`)
-var editionSuffix = regexp.MustCompile(`(?i)\s*\((?:unabridged|abridged|audiobook)\)\s*$`)
+var editionSuffix = regexp.MustCompile(`(?i)\s*\((?:unabridged|abridged|audiobook|novella|short story)\)\s*$`)
 
 // SearchTitle removes explicit catalog sequence labels, preserving meaningful
 // numbers and the source name. The provider supplies canonical display casing.
 func SearchTitle(title string) string {
 	title = strings.TrimSpace(title)
+	title = prefixSeries.ReplaceAllString(title, "")
 	title = bracketedSequencePrefix.ReplaceAllString(title, "")
 	title = sequencePrefix.ReplaceAllString(title, "")
 	title = editionSuffix.ReplaceAllString(title, "")
@@ -44,11 +45,14 @@ func searchQueries(local catalog.InferredBook) []Query {
 		}
 	}
 	add(Query{Title: strings.TrimSpace(local.Title), Author: author})
-	if author != "" {
+	if author != "" || len(folderAuthorHints(local)) > 0 {
 		for _, title := range titles {
 			add(Query{Title: title})
 		}
 		add(Query{Author: author})
+		for _, hint := range folderAuthorHints(local) {
+			add(Query{Author: hint})
+		}
 	}
 	return queries
 }
@@ -120,7 +124,14 @@ func (matcher *Matcher) search(ctx context.Context, local catalog.InferredBook) 
 	var failures []error
 	scoringBook := local
 	scoringBook.Title = SearchTitle(local.Title)
+	folderHints := folderAuthorHints(local)
+	searchedFolder := len(folderHints) == 0
 	for _, query := range searchQueries(local) {
+		for _, hint := range folderHints {
+			if normalizeText(hint, true) == normalizeText(query.Author, true) {
+				searchedFolder = true
+			}
+		}
 		for index, provider := range matcher.providers {
 			if failed[index] {
 				continue
@@ -141,11 +152,12 @@ func (matcher *Matcher) search(ctx context.Context, local catalog.InferredBook) 
 				}
 				seen[key] = true
 				candidate = candidateWithSeries(candidate, local)
+				candidate = candidateWithNarrators(candidate, local)
 				scored = append(scored, ScoredCandidate{Candidate: candidate, Score: score(scoringBook, candidate)})
 			}
 		}
 		d := searchTitleDecision(scoringBook, scored)
-		if d.Selected != nil {
+		if d.Selected != nil && searchedFolder {
 			return d, nil
 		}
 	}
@@ -208,16 +220,30 @@ var seriesLabelSuffix = regexp.MustCompile(`(?i)\s+\([^()]*[[:alpha:]][^()]*\s+(
 // Folder names are search hints, never persisted as author metadata without a
 // provider result that corroborates the hint and the book title.
 func folderAuthorHints(local catalog.InferredBook) []string {
-	if len(local.Authors) > 0 {
-		return nil
-	}
 	parts := strings.Split(strings.ReplaceAll(local.SourceFolder, "\\", "/"), "/")
 	var hints []string
 	seen := map[string]bool{}
-	for i := len(parts) - 2; i >= 0 && len(hints) < 3; i-- {
-		hint := strings.TrimSpace(parts[i])
-		key := strings.ToLower(hint)
-		if len(strings.Fields(hint)) < 2 || strings.ContainsAny(hint, "0123456789") || seen[key] {
+	for i := len(parts) - 1; i >= 0 && len(hints) < 3; i-- {
+		part := strings.TrimSpace(parts[i])
+		if narratorFromFolder(part) != "" {
+			continue
+		}
+		// Author - Series is a common library folder convention.
+		hint, _, _ := strings.Cut(part, " - ")
+		hint = strings.TrimSpace(hint)
+		key := normalizeText(hint, true)
+		if len(strings.Fields(hint)) < 2 || strings.ContainsAny(hint, "0123456789()[]") || seen[key] {
+			continue
+		}
+		isTitle := false
+		for _, title := range SearchTitles(local.Title) {
+			isTitle = isTitle || normalizeText(title, true) == key
+		}
+		if isTitle || normalizeText(local.Series, true) == key {
+			continue
+		}
+		switch strings.ToLower(hint) {
+		case "audio books", "audio archive", "complete series", "short stories":
 			continue
 		}
 		seen[key] = true
@@ -225,13 +251,24 @@ func folderAuthorHints(local catalog.InferredBook) []string {
 	}
 	return hints
 }
-
 func corroboratedFolderAuthor(local catalog.InferredBook, candidates []ScoredCandidate) []string {
+	// A provider-confirmed existing author remains stronger than a folder hint.
+	for _, candidate := range candidates {
+		if len(local.Authors) > 0 && authorSimilarity(normalizedAuthors(local.Authors), normalizedAuthors(candidate.Authors)) >= 0.8 {
+			for _, title := range SearchTitles(local.Title) {
+				variant := local
+				variant.Title = title
+				if sameBookTitle(variant, candidate.Candidate) {
+					return local.Authors
+				}
+			}
+		}
+	}
 	for _, hint := range folderAuthorHints(local) {
 		for _, c := range candidates {
 			authorMatch := false
 			for _, author := range c.Authors {
-				if normalizeText(author, false) == normalizeText(hint, false) {
+				if normalizeText(author, true) == normalizeText(hint, true) {
 					authorMatch = true
 				}
 			}
@@ -242,7 +279,7 @@ func corroboratedFolderAuthor(local catalog.InferredBook, candidates []ScoredCan
 				variant := local
 				variant.Title = title
 				if sameBookTitle(variant, c.Candidate) {
-					return []string{hint}
+					return c.Authors
 				}
 			}
 		}

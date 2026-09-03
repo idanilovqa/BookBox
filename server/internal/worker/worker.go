@@ -448,7 +448,7 @@ func enrichmentDedupeKey(book catalog.Book) string {
 		Identifiers: book.Identifiers,
 	})
 	fingerprint := sha256.Sum256(identity)
-	return fmt.Sprintf("enrich_book:v3:%s:%x", book.ID, fingerprint[:8])
+	return fmt.Sprintf("enrich_book:v4:%s:%x", book.ID, fingerprint[:8])
 }
 
 func sourceFile(scanRunID uuid.UUID, file scanner.File) catalog.SourceFile {
