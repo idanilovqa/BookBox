@@ -38,6 +38,9 @@ func seriesNameMatches(short, full string) bool {
 	return a != "" && (a == b || strings.HasPrefix(b, a+" "))
 }
 func folderSeriesReference(local catalog.InferredBook) (title, series, position string) {
+	if title, series, position = chainedFolderReference(local); title != "" {
+		return
+	}
 	name, number := shortSeriesReference(local.Title)
 	if name == "" {
 		return
@@ -71,6 +74,9 @@ func folderSeriesReference(local catalog.InferredBook) (title, series, position 
 }
 func localSearchTitles(local catalog.InferredBook) []string {
 	titles := SearchTitles(local.Title)
+	if title := abbreviatedAuthorTitle(local); title != "" {
+		titles = append(titles, title)
+	}
 	if title, _, _ := chainedTitleReference(local); title != "" {
 		titles = append(titles, SearchTitles(title)...)
 		if !strings.HasPrefix(strings.ToLower(title), "the ") {

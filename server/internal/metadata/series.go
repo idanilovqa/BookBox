@@ -9,7 +9,7 @@ import (
 )
 
 var prefixSeries = regexp.MustCompile(`^\[([^\]]*\p{L}[^\]]*?)\s+([0-9]{1,3}(?:\.[0-9]{1,3})?)\]\s+`)
-var colonSeries = regexp.MustCompile(`(?i):\s+([^:()]*\p{L}[^:()]*?)\s*,\s*(?:book|volume)\s+([0-9]{1,3}(?:\.[0-9]{1,3})?)\s*$`)
+var colonSeries = regexp.MustCompile(`(?i):\s+([^:()]*\p{L}[^:()]*?)\s*[,:]\s*(?:book|volume)\s+([0-9]{1,3}(?:\.[0-9]{1,3})?)\s*$`)
 var explicitSeries = regexp.MustCompile(`(?i)\s+\(([^()]*[[:alpha:]][^()]*?)\s*,?\s+(?:book|volume)\s+([0-9]{1,3}(?:\.[0-9]{1,3})?)\)\s*$`)
 var mediaPartPrefix = regexp.MustCompile(`(?i)^(?:cd|disc|disk|part|track|chapter)[\s._-]*[0-9]`)
 var numberedSeriesTitle = regexp.MustCompile(`(?i)^(?:\(\s*#?\s*|\[\s*#?\s*|#\s*|[a-z]{1,4})?([0-9]{1,3}(?:\.[0-9]{1,3})?)(?:\)|\])?(?:\s*[-:._]\s*|\s+)(.+)$`)

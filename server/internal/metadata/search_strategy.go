@@ -229,6 +229,9 @@ var spacedSequencePrefix = regexp.MustCompile(`(?i)^(?:[a-z]{1,4})?[0-9]{1,3}\s+
 func SearchTitles(title string) []string {
 	clean := SearchTitle(title)
 	titles := []string{clean}
+	if strings.HasPrefix(strings.ToLower(clean), "dr. ") {
+		titles = append(titles, "Doctor "+strings.TrimSpace(clean[4:]))
+	}
 	if alternative := strings.TrimSpace(spacedSequencePrefix.ReplaceAllString(clean, "")); alternative != "" && alternative != clean {
 		titles = append(titles, alternative)
 	}
