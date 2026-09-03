@@ -66,8 +66,25 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 	if err := pool.QueryRow(ctx, "select count(*) from schema_migrations").Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 10 {
-		t.Fatalf("schema migration rows = %d, want 10", applied)
+	if applied != 11 {
+		t.Fatalf("schema migration rows = %d, want 11", applied)
+	}
+
+	for _, constraint := range []string{
+		"book_grouping_evidence_reason_code_check",
+		"library_search_documents_review_state_reason_check",
+	} {
+		var allowsCorruptedMetadata bool
+		if err := pool.QueryRow(ctx, `
+			select position('corrupted_metadata' in pg_get_constraintdef(oid)) > 0
+			from pg_constraint
+			where conname=$1
+		`, constraint).Scan(&allowsCorruptedMetadata); err != nil {
+			t.Fatal(err)
+		}
+		if !allowsCorruptedMetadata {
+			t.Fatalf("constraint %s rejects corrupted metadata warnings", constraint)
+		}
 	}
 
 	var rejectsCrossRootScan bool
