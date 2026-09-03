@@ -115,3 +115,38 @@ func TestMatcherRetriesPartialProviderOutageWithoutDecisiveMatch(t *testing.T) {
 		t.Fatal("partial outage with no decisive match must retry")
 	}
 }
+
+func TestSearchTitleCleansBracketedSequencePrefixes(t *testing.T) {
+	for _, title := range []string{"(#11) Reaper Man", "(# 11) Reaper Man", "[#11] Reaper Man", "(11) Reaper Man", "[11] Reaper Man", "#11 Reaper Man"} {
+		t.Run(title, func(t *testing.T) {
+			if got := SearchTitle(title); got != "Reaper Man" {
+				t.Fatalf("SearchTitle(%q) = %q", title, got)
+			}
+		})
+	}
+	for _, title := range []string{"1984", "2001: A Space Odyssey", "(1984) A Novel", "The #1 Ladies' Detective Agency"} {
+		t.Run(title, func(t *testing.T) {
+			if got := SearchTitle(title); got != title {
+				t.Fatalf("meaningful title changed: %q -> %q", title, got)
+			}
+		})
+	}
+}
+
+func TestMatcherAutomaticallySelectsReaperManWithSequencePrefix(t *testing.T) {
+	var queries []Query
+	p := queryProvider(func(_ context.Context, q Query) ([]Candidate, error) {
+		queries = append(queries, q)
+		return []Candidate{
+			{Provider: ProviderOpenLibrary, ProviderID: "/works/OL453654W", Title: "Reaper Man", Authors: []string{"Terry Pratchett"}, CoverURL: "https://covers.openlibrary.org/b/id/14648856-L.jpg"},
+			{Provider: ProviderOpenLibrary, ProviderID: "/works/OL453731W", Title: "Novels. Reaper Man / Guards! Guards!", Authors: []string{"Terry Pratchett"}},
+		}, nil
+	})
+	d, err := NewMatcher(p).Match(t.Context(), catalog.InferredBook{Title: "(#11) Reaper Man", Authors: []string{"Terry Pratchett"}})
+	if err != nil || d.Selected == nil || d.Selected.ProviderID != "/works/OL453654W" || d.Selected.CoverURL == "" {
+		t.Fatalf("correct book with cover was not selected: %+v err=%v", d, err)
+	}
+	if len(queries) != 1 || queries[0].Title != "Reaper Man" || queries[0].Author != "Terry Pratchett" {
+		t.Fatalf("unexpected provider queries: %+v", queries)
+	}
+}

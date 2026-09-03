@@ -9,12 +9,14 @@ import (
 )
 
 var sequencePrefix = regexp.MustCompile(`(?i)^(?:[a-z]{1,4}[0-9]{1,3}|(?:book|vol(?:ume)?|part)\s*[0-9]{1,3}|[0-9]{1,3})\s*[:._)\-]+\s*`)
+var bracketedSequencePrefix = regexp.MustCompile(`^(?:\(\s*#?\s*[0-9]{1,3}\s*\)|\[\s*#?\s*[0-9]{1,3}\s*\]|#\s*[0-9]{1,3})\s+`)
 var editionSuffix = regexp.MustCompile(`(?i)\s*\((?:unabridged|abridged|audiobook)\)\s*$`)
 
 // SearchTitle removes explicit catalog sequence labels, preserving meaningful
 // numbers and the source name. The provider supplies canonical display casing.
 func SearchTitle(title string) string {
 	title = strings.TrimSpace(title)
+	title = bracketedSequencePrefix.ReplaceAllString(title, "")
 	title = sequencePrefix.ReplaceAllString(title, "")
 	return strings.TrimSpace(editionSuffix.ReplaceAllString(title, ""))
 }

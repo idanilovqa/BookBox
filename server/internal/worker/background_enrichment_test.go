@@ -78,3 +78,16 @@ func TestMaintenanceRecoversConfirmedBookMissingCover(t *testing.T) {
 		t.Fatalf("missing cover was not queued: %+v", repo.jobs)
 	}
 }
+
+func TestEnrichmentDedupeKeyUsesCleanSearchTitle(t *testing.T) {
+	book := catalog.Book{ID: uuid.New(), Title: "(#11) Reaper Man", Authors: []string{"Terry Pratchett"}}
+	dirtyKey := enrichmentDedupeKey(book)
+	book.Title = "Reaper Man"
+	if cleanKey := enrichmentDedupeKey(book); cleanKey != dirtyKey {
+		t.Fatalf("equivalent search identities differ: %s != %s", dirtyKey, cleanKey)
+	}
+	book.Title = "Guards! Guards!"
+	if enrichmentDedupeKey(book) == dirtyKey {
+		t.Fatal("different books must not share an enrichment key")
+	}
+}

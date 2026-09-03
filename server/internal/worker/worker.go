@@ -443,7 +443,7 @@ func enrichmentDedupeKey(book catalog.Book) string {
 		Position    string
 		Identifiers map[string]any
 	}{
-		Title: strings.TrimSpace(book.Title), Authors: book.Authors,
+		Title: metadata.SearchTitle(book.Title), Authors: book.Authors,
 		Series: strings.TrimSpace(book.Series), Position: strings.TrimSpace(book.SeriesPosition),
 		Identifiers: book.Identifiers,
 	})
