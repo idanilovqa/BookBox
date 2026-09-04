@@ -198,12 +198,27 @@ fun LibraryScreen(
             }
         }
 
-        state.query.series?.let { series ->
-            FilterChip(
-                selected = true,
-                onClick = { onSeriesChange(null) },
-                label = { Text("Series: $series") },
-            )
+        if (state.query.author != null || state.query.series != null) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                state.query.author?.let { author ->
+                    item {
+                        FilterChip(
+                            selected = true,
+                            onClick = { onAuthorChange(null) },
+                            label = { Text("Author: $author") },
+                        )
+                    }
+                }
+                state.query.series?.let { series ->
+                    item {
+                        FilterChip(
+                            selected = true,
+                            onClick = { onSeriesChange(null) },
+                            label = { Text("Series: $series") },
+                        )
+                    }
+                }
+            }
         }
 
         state.errorMessage?.let { message ->

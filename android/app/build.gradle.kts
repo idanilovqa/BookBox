@@ -4,8 +4,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
-val bookBoxVersionCode = 6
-val bookBoxVersionName = "1.1.4"
+val bookBoxVersionCode = 7
+val bookBoxVersionName = "1.1.5"
 
 android {
     namespace = "com.rendref.bookbox"

@@ -2,6 +2,7 @@ package com.rendref.bookbox.feature.book
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,6 +19,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 
@@ -25,6 +27,8 @@ sealed interface BookReviewAction {
     data class ViewRawFiles(val bookId: String) : BookReviewAction
 
     data class OpenSeries(val series: String) : BookReviewAction
+
+    data class OpenAuthor(val author: String) : BookReviewAction
 
     data object ChooseMetadata : BookReviewAction
 
@@ -126,7 +130,22 @@ fun BookDetailScreen(
                         fontWeight = FontWeight.SemiBold,
                     )
                     detail.subtitle?.let { Text(it) }
-                    Text(detail.authors.joinToString())
+                    if (detail.authors.isEmpty()) {
+                        Text("Unknown author")
+                    } else {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            detail.authors.forEach { author ->
+                                TextButton(
+                                    onClick = { onAction(BookReviewAction.OpenAuthor(author)) },
+                                ) {
+                                    Text(
+                                        text = author,
+                                        textDecoration = TextDecoration.Underline,
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

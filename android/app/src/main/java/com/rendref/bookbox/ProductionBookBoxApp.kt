@@ -282,14 +282,22 @@ internal fun ConnectedApp(
         }
     }
 
-    fun openSeries(series: String) {
+    fun openFilteredLibrary(updateFilter: () -> Unit) {
         libraryReturnSnapshots = ArrayList(libraryReturnSnapshots).apply {
             add(library.navigationSnapshot())
         }
-        library.showSeries(series)
+        updateFilter()
         if (backStack.lastOrNull() != AppRoute.Library) {
             backStack.add(AppRoute.Library)
         }
+    }
+
+    fun openSeries(series: String) = openFilteredLibrary {
+        library.showSeries(series)
+    }
+
+    fun openAuthor(author: String) = openFilteredLibrary {
+        library.showAuthor(author)
     }
 
     fun startCopy(selections: List<TransferSelection>, displayName: String) {
@@ -484,6 +492,7 @@ internal fun ConnectedApp(
                             action = action,
                             openRawFiles = ::openRawFiles,
                             openSeries = ::openSeries,
+                            openAuthor = ::openAuthor,
                         )
                     }
                     when (detailState.pane) {
@@ -644,10 +653,12 @@ private fun handleBookReviewAction(
     action: BookReviewAction,
     openRawFiles: (String) -> Unit,
     openSeries: (String) -> Unit,
+    openAuthor: (String) -> Unit,
 ) {
     when (action) {
         is BookReviewAction.ViewRawFiles -> openRawFiles(action.bookId)
         is BookReviewAction.OpenSeries -> openSeries(action.series)
+        is BookReviewAction.OpenAuthor -> openAuthor(action.author)
         BookReviewAction.ChooseMetadata -> viewModel.openMatchPicker()
         BookReviewAction.ReviewGrouping -> viewModel.openGrouping()
         BookReviewAction.ShowDetail -> viewModel.showDetail()

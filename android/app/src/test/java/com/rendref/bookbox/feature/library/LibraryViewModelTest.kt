@@ -442,6 +442,25 @@ class LibraryViewModelTest {
             assertEquals(8, viewModel.state.value.compactScrollOffset)
         }
 
+    @Test
+    fun `opening an author clears old filters and sorts titles ascending`() =
+        runTest(dispatcher) {
+            val viewModel = LibraryViewModel(SavedStateHandle(), RecordingCatalogSource())
+            viewModel.setSearchText("storm")
+            viewModel.setSeries("The Wheel of Time")
+            viewModel.setGenre("Fantasy")
+            viewModel.saveGridPosition(9, 25)
+
+            viewModel.showAuthor(" Robert Jordan ")
+
+            assertEquals(
+                BookQuery(author = "Robert Jordan", sort = BookSort.TITLE),
+                viewModel.state.value.query,
+            )
+            assertEquals(0, viewModel.state.value.scrollIndex)
+            assertEquals(0, viewModel.state.value.scrollOffset)
+        }
+
     private class RecordingCatalogSource(
         private val response: (BookQuery) -> PagedBooks = { page() },
     ) : CatalogSource {

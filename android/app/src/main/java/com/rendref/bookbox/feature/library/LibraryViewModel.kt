@@ -118,6 +118,13 @@ class LibraryViewModel(
         updateQuery { BookQuery(series = cleaned, sort = BookSort.SERIES) }
     }
 
+    fun showAuthor(author: String) {
+        val cleaned = author.cleanFilter() ?: return
+        saveGridPosition(0, 0)
+        saveCompactPosition(0, 0)
+        updateQuery { BookQuery(author = cleaned, sort = BookSort.TITLE) }
+    }
+
     fun navigationSnapshot(): LibraryNavigationSnapshot = mutableState.value.let { state ->
         LibraryNavigationSnapshot(
             query = state.query,

@@ -203,6 +203,39 @@ class BookReviewTest {
     }
 
     @Test
+    fun detailAuthorOpensTheAuthorLibrary() {
+        val actions = mutableListOf<BookReviewAction>()
+        composeRule.setContent {
+            MaterialTheme {
+                BookDetailScreen(reviewState, onAction = actions::add)
+            }
+        }
+
+        composeRule.onNodeWithText("Frank Herbert").performClick()
+
+        assertEquals(listOf(BookReviewAction.OpenAuthor("Frank Herbert")), actions)
+    }
+
+    @Test
+    fun detailOpensTheSelectedAuthorFromAMultiAuthorBook() {
+        val actions = mutableListOf<BookReviewAction>()
+        val multiAuthorState = reviewState.copy(
+            detail = requireNotNull(reviewState.detail).copy(
+                authors = listOf("Robert Jordan", "Brandon Sanderson"),
+            ),
+        )
+        composeRule.setContent {
+            MaterialTheme {
+                BookDetailScreen(multiAuthorState, onAction = actions::add)
+            }
+        }
+
+        composeRule.onNodeWithText("Brandon Sanderson").performClick()
+
+        assertEquals(listOf(BookReviewAction.OpenAuthor("Brandon Sanderson")), actions)
+    }
+
+    @Test
     fun groupingShowsEvidenceNestedFilesAndCompanionAssignments() {
         val actions = mutableListOf<BookReviewAction>()
         composeRule.setContent {
