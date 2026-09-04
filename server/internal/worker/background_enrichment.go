@@ -31,7 +31,7 @@ func QueueMetadataEnrichment(ctx context.Context, repo enrichmentMaintenanceRepo
 				return err
 			}
 			for _, book := range page.Items {
-				if book.MissingAt == nil && (book.Series == "" || book.SeriesPosition == "") {
+				if book.MissingAt == nil {
 					if writer, ok := repo.(interface {
 						FillMissingBookSeries(context.Context, uuid.UUID, time.Time, string, string) (bool, error)
 					}); ok {

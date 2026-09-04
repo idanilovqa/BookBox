@@ -124,6 +124,22 @@ func TestMaintenanceBackfillsConfirmedSeries(t *testing.T) {
 	}
 }
 
+func TestMaintenanceCorrectsAuthorDecoratedSeries(t *testing.T) {
+	book := catalog.Book{
+		ID: uuid.New(), RootID: "audio", Title: "The Dark Talent",
+		Authors: []string{"Brandon Sanderson"},
+		Series:  "Brandon Sanderson - Alcatraz vs The Evil Librarians", SeriesPosition: "5",
+		SourceFolder: "Brandon Sanderson/Brandon Sanderson - Alcatraz vs The Evil Librarians/5 Dark Talent",
+	}
+	repo := &seriesMaintenanceRepository{coverMaintenanceRepository: coverMaintenanceRepository{stagedRepositoryFake: stagedRepositoryFake{books: []catalog.Book{book}}}}
+	if err := QueueMetadataEnrichment(t.Context(), repo, []config.Root{{ID: "audio"}}); err != nil {
+		t.Fatal(err)
+	}
+	if repo.filledSeries != "Alcatraz vs The Evil Librarians" || repo.filledPosition != "5" {
+		t.Fatalf("series not corrected: %+v", repo)
+	}
+}
+
 func TestMaintenanceSearchesForCoverWhenConfirmedURLIsEmpty(t *testing.T) {
 	id, mid := uuid.New(), uuid.New()
 	b := catalog.Book{ID: id, RootID: "audio", Title: "Reaper Man", ReviewState: catalog.ReviewConfirmed, ConfirmedMatchID: &mid}

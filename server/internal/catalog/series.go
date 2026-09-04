@@ -22,8 +22,9 @@ func seriesSortSQL(prefix string) string {
  )`, prefix)
 }
 
-// FillMissingBookSeries does not overwrite existing values or wait behind a
-// scan holding the book lock. Skipped records are revisited by maintenance.
+// FillMissingBookSeries fills absent values and removes a corroborated author
+// prefix from a series name. It does not wait behind a scan holding the book
+// lock. Skipped records are revisited by maintenance.
 func (r *PostgresRepository) FillMissingBookSeries(ctx context.Context, id uuid.UUID, expected time.Time, series, position string) (bool, error) {
 	series, position = strings.TrimSpace(series), strings.TrimSpace(position)
 	if series == "" {
@@ -53,12 +54,18 @@ func (r *PostgresRepository) FillMissingBookSeries(ctx context.Context, id uuid.
  for update skip locked
  )
  update books b set
- series=case when btrim(coalesce(b.series,''))='' then $3 else b.series end,
+ series=case when btrim(coalesce(b.series,''))='' or lower(btrim(b.series))<>lower($3) then $3 else b.series end,
  series_position=case when btrim(coalesce(b.series_position,''))='' then nullif($4,'') else b.series_position end,
  updated_at=now()
  from available a where b.id=a.id
- and (btrim(coalesce(b.series,''))='' or lower(btrim(b.series))=lower($3))
- and (btrim(coalesce(b.series,''))='' or (btrim(coalesce(b.series_position,''))='' and $4<>''))
+ and (
+  btrim(coalesce(b.series,''))=''
+  or (lower(btrim(b.series))=lower($3) and btrim(coalesce(b.series_position,''))='' and $4<>'')
+  or exists (
+   select 1 from unnest(coalesce(b.authors,'{}'::text[])) author
+   where lower(btrim(b.series))=lower(btrim(author))||' - '||lower($3)
+  )
+ )
  returning coalesce(b.series,''),coalesce(b.series_position,'')
  `, id, expected, series, position).Scan(&currentSeries, &currentPosition)
 	if errors.Is(err, pgx.ErrNoRows) {

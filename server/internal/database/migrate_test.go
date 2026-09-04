@@ -66,8 +66,12 @@ func TestMigrateCreatesCatalogTablesOnce(t *testing.T) {
 	if err := pool.QueryRow(ctx, "select count(*) from schema_migrations").Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 12 {
-		t.Fatalf("schema migration rows = %d, want 12", applied)
+	expectedMigrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied != len(expectedMigrations) {
+		t.Fatalf("schema migration rows = %d, want %d", applied, len(expectedMigrations))
 	}
 
 	for _, constraint := range []string{
@@ -236,8 +240,12 @@ func TestMigrateBackfillsOnlyNeverEnqueuedPendingFingerprints(t *testing.T) {
 	if err := pool.QueryRow(ctx, `select count(*) from schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 10 {
-		t.Fatalf("schema migration rows=%d, want 10", migrationCount)
+	expectedMigrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrationCount != len(expectedMigrations) {
+		t.Fatalf("schema migration rows=%d, want %d", migrationCount, len(expectedMigrations))
 	}
 
 	type fingerprintIntent struct {

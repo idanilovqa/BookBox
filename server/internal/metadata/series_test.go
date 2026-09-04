@@ -19,6 +19,7 @@ func TestInferSeriesIdentity(t *testing.T) {
 		{"standalone", catalog.InferredBook{Title: "01 The Great Train Robbery", Authors: []string{"Michael Crichton"}, SourceFolder: "Michael Crichton/1975 - The Great Train Robbery"}, "", ""},
 		{"numeric title", catalog.InferredBook{Title: "12 Years a Slave", Authors: []string{"Solomon Northup"}, SourceFolder: "Solomon Northup/12 Years a Slave"}, "", ""},
 		{"existing", catalog.InferredBook{Title: "The Great Hunt (Another Series Book 2)", Series: "User Series", SeriesPosition: "4"}, "User Series", "4"},
+		{"author-decorated existing", catalog.InferredBook{Title: "The Dark Talent", Authors: []string{"Brandon Sanderson"}, Series: "Brandon Sanderson - Alcatraz vs The Evil Librarians", SeriesPosition: "5", SourceFolder: "Brandon Sanderson/Brandon Sanderson - Alcatraz vs The Evil Librarians/5 Dark Talent"}, "Alcatraz vs The Evil Librarians", "5"},
 		{"partial", catalog.InferredBook{Title: "The Great Hunt (Volume 1)"}, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,5 +98,33 @@ func TestSeriesFolderWithAuthorDecoration(t *testing.T) {
 		if s, p := InferSeriesIdentity(catalog.InferredBook{Title: "The Final Empire", Authors: []string{"Brandon Sanderson"}, SourceFolder: folder}); s != "" || p != "" {
 			t.Fatalf("author folder became series: %s %s", s, p)
 		}
+	}
+}
+
+func TestAlcatrazSeriesFolderIdentity(t *testing.T) {
+	const series = "Alcatraz vs The Evil Librarians"
+	for _, tc := range []struct {
+		title, leaf, storedSeries, position string
+	}{
+		{"Alcatraz vs The Evil Librarians", "1 Alcatraz vs The Evil Librarians", "", "1"},
+		{"The Scrivener’s Bones", "2 The Scrivener’s Bones", series, "2"},
+		{"The Knights of Crystallia", "3 The Knights of Crystallia", series, "3"},
+		{"Alcatraz versus the Shattered Lens", "4 The Shattered Lens", "Brandon Sanderson - " + series, "4"},
+		{"The Dark Talent", "5 Dark Talent", "Brandon Sanderson - " + series, "5"},
+		{"Bastille vs. the Evil Librarians", "6 Bastille vs. the Evil Librarians", series, "6"},
+	} {
+		t.Run(tc.position, func(t *testing.T) {
+			book := catalog.InferredBook{
+				Title: tc.title, Authors: []string{"Brandon Sanderson"},
+				Series: tc.storedSeries, SeriesPosition: tc.position,
+				SourceFolder: "Brandon Sanderson/Brandon Sanderson - " + series + "/" + tc.leaf,
+			}
+			if tc.storedSeries == "" {
+				book.SeriesPosition = ""
+			}
+			if gotSeries, gotPosition := InferSeriesIdentity(book); gotSeries != series || gotPosition != tc.position {
+				t.Fatalf("got %q %q, want %q %q", gotSeries, gotPosition, series, tc.position)
+			}
+		})
 	}
 }

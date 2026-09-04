@@ -92,6 +92,29 @@ func TestSeriesBackfillPreservesExistingValuesAndRejectsStaleBook(t *testing.T) 
 	}
 }
 
+func TestSeriesBackfillCorrectsExactAuthorDecoratedValue(t *testing.T) {
+	repo, ctx := searchPaginationFixture(t, []searchBookDefinition{{
+		title: "The Dark Talent", folder: "Brandon Sanderson/Alcatraz/5 The Dark Talent",
+		author: "Brandon Sanderson", series: "Brandon Sanderson - Alcatraz vs The Evil Librarians", position: "5",
+	}})
+	page, err := repo.ListBooks(ctx, BookQuery{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	book := page.Items[0]
+	changed, err := repo.FillMissingBookSeries(ctx, book.ID, book.UpdatedAt, "Alcatraz vs The Evil Librarians", "5")
+	if err != nil || !changed {
+		t.Fatalf("author-decorated correction changed=%v err=%v", changed, err)
+	}
+	detail, err := repo.GetBook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Book.Series != "Alcatraz vs The Evil Librarians" || detail.Book.SeriesPosition != "5" {
+		t.Fatalf("series not corrected: %+v", detail.Book)
+	}
+}
+
 func TestSeriesBackfillPublishesSearchAndInvalidatesCursor(t *testing.T) {
 	repo, ctx := searchPaginationFixture(t, []searchBookDefinition{{title: "One", folder: "One"}, {title: "Two", folder: "Two"}})
 	before, err := repo.SearchLibrary(ctx, SearchQuery{RootIDs: []string{"audiobooks"}, Mode: SearchModeAudiobooks, Sort: "series", Limit: 1})

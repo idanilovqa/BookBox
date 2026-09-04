@@ -18,6 +18,9 @@ var numberedSeriesTitle = regexp.MustCompile(`(?i)^(?:\(\s*#?\s*|\[\s*#?\s*|#\s*
 // annotations or a numbered book within a distinct series folder.
 func InferSeriesIdentity(book catalog.InferredBook) (string, string) {
 	series, position := strings.TrimSpace(book.Series), strings.TrimSpace(book.SeriesPosition)
+	if series != "" {
+		series = undecoratedSeriesFolder(series, book.Authors)
+	}
 	if series != "" && position != "" {
 		return series, position
 	}
