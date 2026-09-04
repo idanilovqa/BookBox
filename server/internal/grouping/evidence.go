@@ -261,6 +261,24 @@ func coverTitleAgreement(stem, title string) bool {
 }
 
 func inferAutomaticTreeClusters(tree Tree, audio, allFiles []catalog.SourceFile) []treeCluster {
+	if courseTitle, ok := greatCoursesFolderTitle(tree.ScopePath); ok {
+		reason, review := "folder_default", catalog.ReviewUnreviewed
+		for _, file := range audio {
+			if file.ProbeStatus == catalog.ProbeFailed || strings.TrimSpace(file.ProbeError) != "" {
+				reason, review = "probe_failed", catalog.ReviewNeedsReview
+				break
+			}
+		}
+		displayTitle := ""
+		if treeDisplayValue(audio, "album") == "" {
+			displayTitle = courseTitle
+		}
+		return []treeCluster{{
+			identity: consistentTreeIdentity(audio), displayTitle: displayTitle,
+			audio: audio, reason: reason, review: review,
+		}}
+	}
+
 	identities := make([]treeIdentity, len(audio))
 	allTitlesEmpty := true
 	for index, file := range audio {
@@ -455,6 +473,10 @@ func inferredTreeBook(tree Tree, cluster treeCluster, covers, companions []catal
 		FileRoles: make(map[uuid.UUID]string),
 	}
 	book.Series = treeDisplayValue(cluster.audio, "series")
+	if _, ok := greatCoursesFolderTitle(tree.ScopePath); ok {
+		book.Series = "The Great Courses"
+		book.SeriesPosition = ""
+	}
 	if book.Series == "" && folderSeries != "" && normalizeComparableTitle(title) == normalizeComparableTitle(folderTitle) {
 		book.Series = folderSeries
 		book.SeriesPosition = folderPosition
@@ -476,6 +498,42 @@ func inferredTreeBook(tree Tree, cluster treeCluster, covers, companions []catal
 	}
 	sort.Slice(book.SourceFileIDs, func(i, j int) bool { return book.SourceFileIDs[i].String() < book.SourceFileIDs[j].String() })
 	return book
+}
+
+func greatCoursesFolderTitle(scope string) (string, bool) {
+	parts := strings.Split(strings.Trim(strings.TrimSpace(scope), "/"), "/")
+	if len(parts) == 0 {
+		return "", false
+	}
+	found := false
+	baseTitle := strings.TrimSpace(parts[len(parts)-1])
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		lower := strings.ToLower(trimmed)
+		for _, marker := range []string{"the great courses", "tgc", "ttc"} {
+			if lower == marker {
+				found = true
+				continue
+			}
+			if strings.HasPrefix(lower, marker) {
+				rest := strings.TrimSpace(trimmed[len(marker):])
+				if rest != "" && strings.ContainsRune("-_:–—", []rune(rest)[0]) {
+					found = true
+					if trimmed == baseTitle {
+						baseTitle = strings.TrimSpace(strings.TrimLeft(rest, "-_:–— "))
+					}
+				}
+			}
+		}
+	}
+	if !found || baseTitle == "" {
+		return "", false
+	}
+	baseLower := strings.ToLower(baseTitle)
+	if baseLower == "the great courses" || baseLower == "tgc" || baseLower == "ttc" {
+		return "", false
+	}
+	return baseTitle, true
 }
 
 func treeGroupingEvidence(book catalog.InferredBook, reason string, byID map[uuid.UUID]catalog.SourceFile) catalog.GroupingEvidence {

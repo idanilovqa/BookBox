@@ -77,7 +77,7 @@ func TestInferTreeGroupsZeroBasedCourseLecturesByFolder(t *testing.T) {
 		files = append(files, file)
 	}
 	result := InferTree(testTree("The Great Courses/TTC - Art of Reading", files...))
-	if len(result.Books) != 1 || result.Books[0].Title != "TTC - Art of Reading" ||
+	if len(result.Books) != 1 || result.Books[0].Title != "Art of Reading" ||
 		len(result.Books[0].SourceFileIDs) != 25 || result.Books[0].ReviewReason != "probe_failed" {
 		t.Fatalf("course=%#v", result.Books)
 	}
@@ -89,6 +89,19 @@ func TestInferTreeDoesNotMergeZeroBasedSequenceContainingStandaloneM4B(t *testin
 	result := InferTree(testTree("Shared", zero, one))
 	if len(result.Books) == 1 && result.Books[0].ReviewState != catalog.ReviewNeedsReview {
 		t.Fatalf("unsafe mixed sequence merge: %#v", result.Books)
+	}
+}
+
+func TestInferTreeGroupsGreatCoursesFolderAndSetsSeries(t *testing.T) {
+	files := []catalog.SourceFile{
+		treeFile("The Great Courses/TGC - Art of Reading/00 Professor Bio.mp3", catalog.FileKindAudio, "", map[string]any{}),
+		treeFile("The Great Courses/TGC - Art of Reading/02 Authors.mp3", catalog.FileKindAudio, "", map[string]any{}),
+		treeFile("The Great Courses/TGC - Art of Reading/07 Irony.mp3", catalog.FileKindAudio, "", map[string]any{}),
+	}
+	result := InferTree(testTree("The Great Courses/TGC - Art of Reading", files...))
+	if len(result.Books) != 1 || result.Books[0].Title != "Art of Reading" ||
+		result.Books[0].Series != "The Great Courses" || len(result.Books[0].SourceFileIDs) != 3 {
+		t.Fatalf("course=%#v", result.Books)
 	}
 }
 
