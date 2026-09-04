@@ -55,6 +55,14 @@ data class LibraryState(
         get() = nextCursor != null && paginationError == null
 }
 
+data class LibraryNavigationSnapshot(
+    val query: BookQuery,
+    val scrollIndex: Int,
+    val scrollOffset: Int,
+    val compactScrollIndex: Int,
+    val compactScrollOffset: Int,
+) : java.io.Serializable
+
 class LibraryViewModel(
     private val savedState: SavedStateHandle,
     private val catalog: CatalogSource,
@@ -100,6 +108,31 @@ class LibraryViewModel(
     fun setSearchText(text: String) = updateQuery { copy(text = text) }
 
     fun setAuthor(author: String?) = updateQuery { copy(author = author.cleanFilter()) }
+
+    fun setSeries(series: String?) = updateQuery { copy(series = series.cleanFilter()) }
+
+    fun showSeries(series: String) {
+        val cleaned = series.cleanFilter() ?: return
+        saveGridPosition(0, 0)
+        saveCompactPosition(0, 0)
+        updateQuery { BookQuery(series = cleaned, sort = BookSort.SERIES) }
+    }
+
+    fun navigationSnapshot(): LibraryNavigationSnapshot = mutableState.value.let { state ->
+        LibraryNavigationSnapshot(
+            query = state.query,
+            scrollIndex = state.scrollIndex,
+            scrollOffset = state.scrollOffset,
+            compactScrollIndex = state.compactScrollIndex,
+            compactScrollOffset = state.compactScrollOffset,
+        )
+    }
+
+    fun restoreNavigationSnapshot(snapshot: LibraryNavigationSnapshot) {
+        saveGridPosition(snapshot.scrollIndex, snapshot.scrollOffset)
+        saveCompactPosition(snapshot.compactScrollIndex, snapshot.compactScrollOffset)
+        updateQuery { snapshot.query }
+    }
 
     fun setGenre(genre: String?) = updateQuery { copy(genre = genre.cleanFilter()) }
 

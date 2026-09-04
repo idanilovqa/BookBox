@@ -408,6 +408,40 @@ class LibraryViewModelTest {
             assertEquals(7, restored.state.value.compactScrollOffset)
         }
 
+    @Test
+    fun `opening a series clears old filters and starts at its first position`() =
+        runTest(dispatcher) {
+            val viewModel = LibraryViewModel(SavedStateHandle(), RecordingCatalogSource())
+            viewModel.setSearchText("storm")
+            viewModel.setAuthor("Robert Jordan")
+            viewModel.setGenre("Fantasy")
+            viewModel.saveGridPosition(20, 40)
+            viewModel.saveCompactPosition(12, 8)
+
+            val original = viewModel.navigationSnapshot()
+
+            viewModel.showSeries(" The Wheel of Time ")
+
+            assertEquals(
+                BookQuery(series = "The Wheel of Time", sort = BookSort.SERIES),
+                viewModel.state.value.query,
+            )
+            assertEquals(0, viewModel.state.value.scrollIndex)
+            assertEquals(0, viewModel.state.value.scrollOffset)
+            assertEquals(0, viewModel.state.value.compactScrollIndex)
+            assertEquals(0, viewModel.state.value.compactScrollOffset)
+
+            viewModel.restoreNavigationSnapshot(original)
+
+            assertEquals("storm", viewModel.state.value.query.text)
+            assertEquals("Robert Jordan", viewModel.state.value.query.author)
+            assertEquals("Fantasy", viewModel.state.value.query.genre)
+            assertEquals(20, viewModel.state.value.scrollIndex)
+            assertEquals(40, viewModel.state.value.scrollOffset)
+            assertEquals(12, viewModel.state.value.compactScrollIndex)
+            assertEquals(8, viewModel.state.value.compactScrollOffset)
+        }
+
     private class RecordingCatalogSource(
         private val response: (BookQuery) -> PagedBooks = { page() },
     ) : CatalogSource {

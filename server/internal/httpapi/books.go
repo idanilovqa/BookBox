@@ -143,7 +143,7 @@ func parseLibrarySearchQuery(request *http.Request, roots []config.Root) (catalo
 	}
 	return catalog.SearchQuery{
 		RootIDs: rootIDs, Mode: catalog.SearchModeAudiobooks, Text: book.Search,
-		Author: book.Author, Genre: book.Genre, ReviewState: book.ReviewState,
+		Author: book.Author, Series: book.Series, Genre: book.Genre, ReviewState: book.ReviewState,
 		PublicationYear: book.PublicationYear, Sort: book.Sort, Limit: limit,
 		Cursor: book.Cursor,
 	}, nil
@@ -153,7 +153,7 @@ func parseBookQuery(request *http.Request) (catalog.BookQuery, error) {
 	values := request.URL.Query()
 	query := catalog.BookQuery{
 		Search: values.Get("q"), RootID: values.Get("rootId"),
-		Author: values.Get("author"), Genre: values.Get("genre"),
+		Author: values.Get("author"), Series: values.Get("series"), Genre: values.Get("genre"),
 		ReviewState: values.Get("reviewState"), Sort: values.Get("sort"),
 		Cursor: values.Get("cursor"),
 	}

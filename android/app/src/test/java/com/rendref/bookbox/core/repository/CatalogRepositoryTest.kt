@@ -329,6 +329,7 @@ class CatalogRepositoryTest {
             val page = repository.books(
                 BookQuery(
                     text = "dune",
+                    series = "Dune Chronicles",
                     genre = "Science Fiction",
                     year = 1965,
                     sort = BookSort.YEAR,
@@ -337,7 +338,7 @@ class CatalogRepositoryTest {
             ).first()
 
             assertEquals(
-                "/v1/books?q=dune&genre=Science%20Fiction&year=1965&sort=year&cursor=c1",
+                "/v1/books?q=dune&series=Dune%20Chronicles&genre=Science%20Fiction&year=1965&sort=year&cursor=c1",
                 server.takeRequest().target,
             )
             assertEquals(listOf("Science Fiction"), page.filters.genres)

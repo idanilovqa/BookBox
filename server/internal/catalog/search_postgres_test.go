@@ -612,9 +612,9 @@ func TestSearchLibraryFiltersSortsAndRanksAudiobooks(t *testing.T) {
 	}
 	year1965, year1969, year1990, year2001 := 1965, 1969, 1990, 2001
 	publishSearchDefinitions(t, repository, "audiobooks", []searchBookDefinition{
-		{title: "Dune", folder: "Exact One", author: "Frank Herbert", narrator: "Narrator", genre: "Science Fiction", review: ReviewConfirmed, year: &year1965, duration: 3_600_000},
-		{title: "Dune", folder: "Exact Two", author: "Frank Herbert", narrator: "Narrator", genre: "Science Fiction", review: ReviewConfirmed, year: &year1965, duration: 3_600_001},
-		{title: "Dune Messiah", folder: "Prefix", author: "Frank Herbert", narrator: "Other", genre: "Science Fiction", review: ReviewUnreviewed, year: &year1969, duration: 4_000_000},
+		{title: "Dune", folder: "Exact One", author: "Frank Herbert", narrator: "Narrator", genre: "Science Fiction", review: ReviewConfirmed, series: "Dune", position: "1", year: &year1965, duration: 3_600_000},
+		{title: "Dune", folder: "Exact Two", author: "Frank Herbert", narrator: "Narrator", genre: "Science Fiction", review: ReviewConfirmed, series: "Dune", position: "1", year: &year1965, duration: 3_600_001},
+		{title: "Dune Messiah", folder: "Prefix", author: "Frank Herbert", narrator: "Other", genre: "Science Fiction", review: ReviewUnreviewed, series: "Dune", position: "2", year: &year1969, duration: 4_000_000},
 		{title: "Filename Result", folder: "Shelf", filename: "dune-recording.m4b", author: "Path Author", narrator: "Other", genre: "Reference", review: ReviewUnreviewed, year: &year1990, duration: 5_000_000},
 		{title: "Metadata Result", folder: "Metadata", author: "Dune Writer", narrator: "Other", genre: "Fantasy", review: ReviewNeedsReview, year: &year2001, duration: 6_000_000},
 		{title: "Trigram Result", folder: "Trigram", author: "", narrator: "Other", genre: "", review: ReviewUnreviewed, duration: 7_000_000},
@@ -654,6 +654,26 @@ func TestSearchLibraryFiltersSortsAndRanksAudiobooks(t *testing.T) {
 	if len(filtered.Groups) != 1 || !filtered.Groups[0].Duplicate ||
 		len(filtered.Groups[0].Documents) != 2 {
 		t.Fatalf("filtered groups=%#v", filtered.Groups)
+	}
+
+	seriesQuery := SearchQuery{
+		RootIDs: []string{"audiobooks"}, Mode: SearchModeAudiobooks,
+		Series: "dune", Sort: BookSortSeries, Limit: 2,
+	}
+	seriesPage, err := repository.SearchLibrary(ctx, seriesQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := flattenedTitles(seriesPage); strings.Join(got, "|") != "Dune|Dune" || seriesPage.NextCursor == "" {
+		t.Fatalf("series first page=%v cursor=%q", got, seriesPage.NextCursor)
+	}
+	seriesQuery.Cursor = seriesPage.NextCursor
+	seriesNext, err := repository.SearchLibrary(ctx, seriesQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := flattenedTitles(seriesNext); strings.Join(got, "|") != "Dune Messiah" {
+		t.Fatalf("series next page=%v", got)
 	}
 
 	for _, test := range []struct {
@@ -920,6 +940,7 @@ func TestSearchCursorBindsQueryAndSnapshotsAndRejectsMalformedTokens(t *testing.
 	for name, mutate := range map[string]func(SearchQuery) SearchQuery{
 		"text":   func(q SearchQuery) SearchQuery { q.Text = "alpha"; return q },
 		"author": func(q SearchQuery) SearchQuery { q.Author = "Author"; return q },
+		"series": func(q SearchQuery) SearchQuery { q.Series = "Series"; return q },
 		"genre":  func(q SearchQuery) SearchQuery { q.Genre = "Genre"; return q },
 		"review": func(q SearchQuery) SearchQuery { q.ReviewState = ReviewUnreviewed; return q },
 		"year":   func(q SearchQuery) SearchQuery { value := 2000; q.PublicationYear = &value; return q },
@@ -1388,6 +1409,7 @@ func mutateSearchCursor(t *testing.T, encoded string, mutate func(map[string]any
 
 type searchBookDefinition struct {
 	title, folder, filename, author, narrator, genre, review string
+	series, position                                         string
 	year                                                     *int
 	duration                                                 int64
 }
@@ -1413,6 +1435,8 @@ func publishSearchDefinitions(t *testing.T, repository *PostgresRepository, root
 		book.Authors = []string{definition.author}
 		book.Narrators = []string{definition.narrator}
 		book.Genres = []string{definition.genre}
+		book.Series = definition.series
+		book.SeriesPosition = definition.position
 		book.PublicationYear = definition.year
 		if definition.review != "" {
 			book.ReviewState = definition.review

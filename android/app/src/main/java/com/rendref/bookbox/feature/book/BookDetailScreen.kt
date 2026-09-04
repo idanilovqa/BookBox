@@ -24,6 +24,8 @@ import coil3.compose.AsyncImage
 sealed interface BookReviewAction {
     data class ViewRawFiles(val bookId: String) : BookReviewAction
 
+    data class OpenSeries(val series: String) : BookReviewAction
+
     data object ChooseMetadata : BookReviewAction
 
     data object ReviewGrouping : BookReviewAction
@@ -130,10 +132,12 @@ fun BookDetailScreen(
         }
         detail.series?.let { series ->
             item {
-                Text(
-                    listOfNotNull(series, detail.seriesPosition).joinToString(" · "),
-                    fontWeight = FontWeight.Medium,
-                )
+                TextButton(onClick = { onAction(BookReviewAction.OpenSeries(series)) }) {
+                    Text(
+                        listOfNotNull(series, detail.seriesPosition).joinToString(" · "),
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             }
         }
         if (detail.narrators.isNotEmpty()) {

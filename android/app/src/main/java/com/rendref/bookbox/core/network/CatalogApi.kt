@@ -35,6 +35,8 @@ class CatalogApi(
                 query.text.takeIf(String::isNotBlank)?.let { addQueryParameter("q", it) }
                 query.author?.takeIf(String::isNotBlank)
                     ?.let { addQueryParameter("author", it) }
+                query.series?.takeIf(String::isNotBlank)
+                    ?.let { addQueryParameter("series", it) }
                 query.genre?.takeIf(String::isNotBlank)
                     ?.let { addQueryParameter("genre", it) }
                 query.year?.let { addQueryParameter("year", it.toString()) }

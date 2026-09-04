@@ -338,6 +338,7 @@ type BookQuery struct {
 	Search          string
 	RootID          string
 	Author          string
+	Series          string
 	Genre           string
 	ReviewState     string
 	PublicationYear *int

@@ -144,7 +144,8 @@ func prepareSearchQuery(query SearchQuery) ([]string, string, error) {
 	}
 	if len(query.RootIDs) == 0 || query.Limit < 1 || query.Limit > maxPageSize ||
 		len(query.Text) > maxBookQueryText || len(query.Author) > maxBookQueryText ||
-		len(query.Genre) > maxBookQueryText || len(query.ReviewState) > maxBookQueryText {
+		len(query.Series) > maxBookQueryText || len(query.Genre) > maxBookQueryText ||
+		len(query.ReviewState) > maxBookQueryText {
 		return nil, "", ErrInvalidData
 	}
 	rootSet := make(map[string]struct{}, len(query.RootIDs))
@@ -159,7 +160,8 @@ func prepareSearchQuery(query SearchQuery) ([]string, string, error) {
 	if query.Mode == SearchModeRaw && len(rootIDs) != 1 {
 		return nil, "", ErrInvalidData
 	}
-	if query.Mode == SearchModeRaw && (query.Author != "" || query.Genre != "" ||
+	if query.Mode == SearchModeRaw && (query.Author != "" || query.Series != "" ||
+		query.Genre != "" ||
 		query.ReviewState != "" || query.PublicationYear != nil ||
 		(query.Sort != "" && query.Sort != BookSortTitle)) {
 		return nil, "", ErrInvalidData
@@ -171,6 +173,9 @@ func prepareSearchQuery(query SearchQuery) ([]string, string, error) {
 		return nil, "", ErrInvalidData
 	}
 	if strings.TrimSpace(query.Author) != "" && searchCompact(query.Author) == "" {
+		return nil, "", ErrInvalidData
+	}
+	if strings.TrimSpace(query.Series) != "" && searchCompact(query.Series) == "" {
 		return nil, "", ErrInvalidData
 	}
 	if strings.TrimSpace(query.Genre) != "" && searchCompact(query.Genre) == "" {
@@ -508,6 +513,10 @@ func buildAudiobookSearchStatement(
 	if author := strings.TrimSpace(query.Author); author != "" {
 		placeholder := addArgument(searchCompact(author))
 		conditions = append(conditions, "compact_authors @> array["+placeholder+"]::text[]")
+	}
+	if series := strings.TrimSpace(query.Series); series != "" {
+		conditions = append(conditions,
+			"lower(btrim(coalesce(series,'')))=lower("+addArgument(series)+")")
 	}
 	if genre := strings.TrimSpace(query.Genre); genre != "" {
 		placeholder := addArgument(searchCompact(genre))
@@ -884,6 +893,10 @@ func resolveAudiobookSearchCursorTx(
 	if author := strings.TrimSpace(query.Author); author != "" {
 		conditions = append(conditions, "compact_authors @> array["+addArgument(searchCompact(author))+"]::text[]")
 	}
+	if series := strings.TrimSpace(query.Series); series != "" {
+		conditions = append(conditions,
+			"lower(btrim(coalesce(series,'')))=lower("+addArgument(series)+")")
+	}
 	if genre := strings.TrimSpace(query.Genre); genre != "" {
 		conditions = append(conditions, "compact_genres @> array["+addArgument(searchCompact(genre))+"]::text[]")
 	}
@@ -1091,14 +1104,16 @@ func searchCursorMatchesSnapshots(cursor searchCursor, snapshots []SearchSnapsho
 
 func searchCursorScope(query SearchQuery, rootIDs []string, normalizedText string) string {
 	value := struct {
-		Mode                                   SearchMode `json:"mode"`
-		RootIDs                                []string   `json:"rootIds"`
-		Text, Author, Genre, ReviewState, Sort string
-		PublicationYear                        *int `json:"publicationYear"`
-		Limit                                  int  `json:"limit"`
+		Mode                                           SearchMode `json:"mode"`
+		RootIDs                                        []string   `json:"rootIds"`
+		Text, Author, Series, Genre, ReviewState, Sort string
+		PublicationYear                                *int `json:"publicationYear"`
+		Limit                                          int  `json:"limit"`
 	}{
 		Mode: query.Mode, RootIDs: rootIDs, Text: normalizedText,
-		Author: searchCompact(strings.TrimSpace(query.Author)), Genre: searchCompact(strings.TrimSpace(query.Genre)),
+		Author:      searchCompact(strings.TrimSpace(query.Author)),
+		Series:      strings.ToLower(strings.TrimSpace(query.Series)),
+		Genre:       searchCompact(strings.TrimSpace(query.Genre)),
 		ReviewState: strings.TrimSpace(query.ReviewState), Sort: query.Sort,
 		PublicationYear: copyInt(query.PublicationYear), Limit: query.Limit,
 	}

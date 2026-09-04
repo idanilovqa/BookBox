@@ -22,6 +22,7 @@ enum class BookSort(
 data class BookQuery(
     val text: String = "",
     val author: String? = null,
+    val series: String? = null,
     val genre: String? = null,
     val year: Int? = null,
     val rootId: String? = null,

@@ -111,6 +111,7 @@ type SearchQuery struct {
 	Mode            SearchMode
 	Text            string
 	Author          string
+	Series          string
 	Genre           string
 	ReviewState     string
 	PublicationYear *int

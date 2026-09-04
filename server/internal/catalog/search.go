@@ -106,6 +106,11 @@ func (repository *PostgresRepository) ListBooks(
 		conditions = append(conditions,
 			"exists(select 1 from unnest(b.authors) author where lower(author)=lower("+placeholder+"))")
 	}
+	if query.Series != "" {
+		placeholder := addArgument(query.Series)
+		conditions = append(conditions,
+			"lower(btrim(coalesce(b.series,'')))=lower(btrim("+placeholder+"))")
+	}
 	if query.Genre != "" {
 		placeholder := addArgument(query.Genre)
 		conditions = append(conditions,
@@ -221,12 +226,14 @@ func prepareBookQuery(query *BookQuery) error {
 	query.Search = strings.TrimSpace(query.Search)
 	query.RootID = strings.TrimSpace(query.RootID)
 	query.Author = strings.TrimSpace(query.Author)
+	query.Series = strings.TrimSpace(query.Series)
 	query.Genre = strings.TrimSpace(query.Genre)
 	query.ReviewState = strings.TrimSpace(query.ReviewState)
 	for _, value := range []string{
 		query.Search,
 		query.RootID,
 		query.Author,
+		query.Series,
 		query.Genre,
 		query.ReviewState,
 	} {

@@ -53,6 +53,7 @@ import com.rendref.bookbox.feature.folders.FolderAction
 import com.rendref.bookbox.feature.folders.FoldersScreen
 import com.rendref.bookbox.feature.folders.FoldersViewModel
 import com.rendref.bookbox.feature.library.LibraryAction
+import com.rendref.bookbox.feature.library.LibraryNavigationSnapshot
 import com.rendref.bookbox.feature.library.LibraryScreen
 import com.rendref.bookbox.feature.library.LibraryViewModel
 import com.rendref.bookbox.feature.settings.SettingsAction
@@ -155,6 +156,9 @@ internal fun ConnectedApp(
     var settingsGeneration by rememberSaveable { mutableIntStateOf(0) }
     var permissionRequestPending by rememberSaveable { mutableStateOf(false) }
     var permissionDecision by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    var libraryReturnSnapshots by rememberSaveable {
+        mutableStateOf(arrayListOf<LibraryNavigationSnapshot>())
+    }
 
     val library: LibraryViewModel = viewModel(
         key = "${runtime.instanceKey}-library",
@@ -244,7 +248,14 @@ internal fun ConnectedApp(
         if (route == AppRoute.Transfers) transfers.refresh()
     }
     BackHandler(enabled = backStack.size > 1) {
-        if (
+        if (route == AppRoute.Library && libraryReturnSnapshots.isNotEmpty()) {
+            val snapshot = libraryReturnSnapshots.last()
+            libraryReturnSnapshots = ArrayList(
+                libraryReturnSnapshots.dropLast(1),
+            )
+            library.restoreNavigationSnapshot(snapshot)
+            backStack.removeLastOrNull()
+        } else if (
             route == AppRoute.BookDetail &&
             detailState?.pane?.let { it != ReviewPane.DETAIL } == true
         ) {
@@ -268,6 +279,16 @@ internal fun ConnectedApp(
         folders.viewRawFiles(bookId)
         if (backStack.lastOrNull() != AppRoute.Folders) {
             backStack.add(AppRoute.Folders)
+        }
+    }
+
+    fun openSeries(series: String) {
+        libraryReturnSnapshots = ArrayList(libraryReturnSnapshots).apply {
+            add(library.navigationSnapshot())
+        }
+        library.showSeries(series)
+        if (backStack.lastOrNull() != AppRoute.Library) {
+            backStack.add(AppRoute.Library)
         }
     }
 
@@ -330,6 +351,7 @@ internal fun ConnectedApp(
     AppScaffold(
         route = route,
         onRoute = {
+            libraryReturnSnapshots = arrayListOf()
             backStack.clear()
             backStack.add(it)
         },
@@ -383,6 +405,7 @@ internal fun ConnectedApp(
                     }
                 },
                 onAuthorChange = library::setAuthor,
+                onSeriesChange = library::setSeries,
                 onGenreChange = library::setGenre,
                 onYearChange = library::setYear,
                 onRootChange = library::setRoot,
@@ -460,6 +483,7 @@ internal fun ConnectedApp(
                             viewModel = checkNotNull(detail),
                             action = action,
                             openRawFiles = ::openRawFiles,
+                            openSeries = ::openSeries,
                         )
                     }
                     when (detailState.pane) {
@@ -619,9 +643,11 @@ private fun handleBookReviewAction(
     viewModel: BookDetailViewModel,
     action: BookReviewAction,
     openRawFiles: (String) -> Unit,
+    openSeries: (String) -> Unit,
 ) {
     when (action) {
         is BookReviewAction.ViewRawFiles -> openRawFiles(action.bookId)
+        is BookReviewAction.OpenSeries -> openSeries(action.series)
         BookReviewAction.ChooseMetadata -> viewModel.openMatchPicker()
         BookReviewAction.ReviewGrouping -> viewModel.openGrouping()
         BookReviewAction.ShowDetail -> viewModel.showDetail()

@@ -189,6 +189,20 @@ class BookReviewTest {
     }
 
     @Test
+    fun detailSeriesOpensTheSeriesLibrary() {
+        val actions = mutableListOf<BookReviewAction>()
+        composeRule.setContent {
+            MaterialTheme {
+                BookDetailScreen(reviewState, onAction = actions::add)
+            }
+        }
+
+        composeRule.onNodeWithText("Dune · 1").performScrollTo().performClick()
+
+        assertEquals(listOf(BookReviewAction.OpenSeries("Dune")), actions)
+    }
+
+    @Test
     fun groupingShowsEvidenceNestedFilesAndCompanionAssignments() {
         val actions = mutableListOf<BookReviewAction>()
         composeRule.setContent {

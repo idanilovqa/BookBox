@@ -55,6 +55,7 @@ fun LibraryScreen(
     onSearchTextChange: (String) -> Unit,
     onAction: (LibraryAction) -> Unit,
     onAuthorChange: (String?) -> Unit,
+    onSeriesChange: (String?) -> Unit = {},
     onGenreChange: (String?) -> Unit,
     onYearChange: (Int?) -> Unit,
     onRootChange: (String?) -> Unit,
@@ -195,6 +196,14 @@ fun LibraryScreen(
                     style = MaterialTheme.typography.labelLarge,
                 )
             }
+        }
+
+        state.query.series?.let { series ->
+            FilterChip(
+                selected = true,
+                onClick = { onSeriesChange(null) },
+                label = { Text("Series: $series") },
+            )
         }
 
         state.errorMessage?.let { message ->
@@ -360,6 +369,7 @@ fun LibraryScreen(
         FilterSheet(
             state = state,
             onAuthorChange = onAuthorChange,
+            onSeriesChange = onSeriesChange,
             onGenreChange = onGenreChange,
             onYearChange = onYearChange,
             onRootChange = onRootChange,
@@ -392,6 +402,7 @@ private fun PaginationFooter(state: LibraryState, onRetry: () -> Unit) {
 private fun FilterSheet(
     state: LibraryState,
     onAuthorChange: (String?) -> Unit,
+    onSeriesChange: (String?) -> Unit,
     onGenreChange: (String?) -> Unit,
     onYearChange: (Int?) -> Unit,
     onRootChange: (String?) -> Unit,
@@ -447,6 +458,7 @@ private fun FilterSheet(
             ) {
                 TextButton(onClick = {
                     onAuthorChange(null)
+                    onSeriesChange(null)
                     onGenreChange(null)
                     onYearChange(null)
                     onRootChange(null)

@@ -77,7 +77,7 @@ func TestBooksHandlersReturnCardsDetailsAndRelativeFiles(t *testing.T) {
 	}
 
 	listRequest := newJSONRequest(t, "GET",
-		"/v1/books?q=dune&author=Frank+Herbert&genre=Science+Fiction&year=1965"+
+		"/v1/books?q=dune&author=Frank+Herbert&series=Dune&genre=Science+Fiction&year=1965"+
 			"&rootId=audio&reviewState=confirmed&sort=year&limit=20&cursor=cursor-1",
 		nil)
 	listResponse := performHandler(booksHandler(repository, []config.Root{{ID: "audio"}}), listRequest)
@@ -86,6 +86,7 @@ func TestBooksHandlersReturnCardsDetailsAndRelativeFiles(t *testing.T) {
 	}
 	searchQuery := repository.searchQueries[0]
 	if searchQuery.Text != "dune" || searchQuery.Author != "Frank Herbert" ||
+		searchQuery.Series != "Dune" ||
 		searchQuery.Genre != "Science Fiction" ||
 		searchQuery.PublicationYear == nil || *searchQuery.PublicationYear != 1965 ||
 		len(searchQuery.RootIDs) != 1 || searchQuery.RootIDs[0] != "audio" ||
