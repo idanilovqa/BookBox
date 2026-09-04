@@ -126,14 +126,27 @@ class ConnectedAppWiringTest {
         }
         onNodeWithText("Server A Dune").performClick()
         onNodeWithText("Choose metadata match").assertIsDisplayed()
+        onNodeWithText("Choose metadata match").performClick()
+        onNodeWithText("Search providers").assertIsDisplayed()
         restoration.emulateSaveAndRestore()
-        onNodeWithText("Choose metadata match").assertIsDisplayed()
+        onNodeWithText("Search providers").assertIsDisplayed()
         pressBack()
+        onNodeWithText("Choose metadata match").assertIsDisplayed()
+        onNodeWithText("Search providers").assertDoesNotExist()
+
+        onNodeWithText("Choose metadata match").performClick()
+        onNodeWithText("Search providers").assertIsDisplayed()
+        onNodeWithText("Audiobooks").performClick()
         waitUntil(timeoutMillis = 5_000) {
             onAllNodes(
                 androidx.compose.ui.test.hasText("AUDIOBOOK CATALOG"),
             ).fetchSemanticsNodes().isNotEmpty()
         }
+        onNodeWithText("AUDIOBOOK CATALOG").assertIsDisplayed()
+        onNodeWithText("Server A Dune").performClick()
+        onNodeWithText("Choose metadata match").assertIsDisplayed()
+        onNodeWithText("Search providers").assertDoesNotExist()
+        pressBack()
         onNodeWithText("AUDIOBOOK CATALOG").assertIsDisplayed()
 
         onNodeWithContentDescription("Select Server A Dune").performClick()

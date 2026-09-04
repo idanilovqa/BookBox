@@ -244,10 +244,20 @@ internal fun ConnectedApp(
         if (route == AppRoute.Transfers) transfers.refresh()
     }
     BackHandler(enabled = backStack.size > 1) {
-        backStack.removeLastOrNull()
+        if (
+            route == AppRoute.BookDetail &&
+            detailState?.pane?.let { it != ReviewPane.DETAIL } == true
+        ) {
+            detail.showDetail()
+        } else {
+            backStack.removeLastOrNull()
+        }
     }
 
     fun openBook(bookId: String) {
+        if (currentBookId == bookId) {
+            detail?.showDetail()
+        }
         currentBookId = bookId
         if (backStack.lastOrNull() != AppRoute.BookDetail) {
             backStack.add(AppRoute.BookDetail)
