@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
@@ -32,6 +33,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.rendref.bookbox.core.model.BookCardDto
+
+private val GridCardBodyHeight = 270.dp
 
 sealed interface LibraryAction {
     val bookId: String
@@ -114,89 +117,94 @@ fun AudiobookCard(
                 )
             }
 
-            Column(
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
-                Text(
-                    text = book.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = book.authors.joinToString().ifBlank { "Unknown author" },
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                book.publicationYear?.let { year ->
+            Column(modifier = Modifier.height(GridCardBodyHeight)) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clipToBounds()
+                        .padding(start = 14.dp, end = 14.dp, top = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
                     Text(
-                        text = year.toString(),
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                }
-                book.genres.firstOrNull()?.let { genre ->
-                    Text(
-                        text = genre,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.primaryContainer)
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
+                        text = book.title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                }
-                book.series?.takeIf(String::isNotBlank)?.let { series ->
-                    MetadataLine("Series: $series")
-                }
-                book.narrators.takeIf(List<String>::isNotEmpty)?.let { narrators ->
-                    MetadataLine("Narrated by ${narrators.joinToString()}")
-                }
-                if (duplicate) {
                     Text(
-                        text = "Duplicate book",
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
+                        text = book.authors.joinToString().ifBlank { "Unknown author" },
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                }
-                if (showRoot && book.rootId.isNotBlank()) {
-                    MetadataLine("Library: ${book.rootId}")
-                }
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                if (book.reviewState == "needs_review") {
-                    TextButton(
-                        onClick = { onAction(LibraryAction.ReviewGrouping(book.id)) },
-                        colors = ButtonDefaults.textButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error,
-                        ),
-                        modifier = Modifier.semantics {
-                            contentDescription = "Review audiobook grouping"
-                        },
-                    ) {
-                        Text("!")
+                    book.publicationYear?.let { year ->
+                        Text(
+                            text = year.toString(),
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                    cardChipLabel(book.series, book.genres.firstOrNull())?.let { label ->
+                        Text(
+                            text = label,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer)
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    book.series?.takeIf(String::isNotBlank)?.let { series ->
+                        MetadataLine("Series: $series")
+                    }
+                    book.narrators.takeIf(List<String>::isNotEmpty)?.let { narrators ->
+                        MetadataLine("Narrated by ${narrators.joinToString()}")
+                    }
+                    if (duplicate) {
+                        Text(
+                            text = "Duplicate book",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    if (showRoot && book.rootId.isNotBlank()) {
+                        MetadataLine("Library: ${book.rootId}")
                     }
                 }
-                TextButton(
-                    onClick = { onAction(LibraryAction.ViewRawFiles(book.id)) },
-                    modifier = Modifier.semantics {
-                        contentDescription = "View raw files for ${book.title}$actionContext"
-                    },
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.End,
                 ) {
-                    Text("View raw files")
+                    if (book.reviewState == "needs_review") {
+                        TextButton(
+                            onClick = { onAction(LibraryAction.ReviewGrouping(book.id)) },
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error,
+                            ),
+                            modifier = Modifier.semantics {
+                                contentDescription = "Review audiobook grouping"
+                            },
+                        ) {
+                            Text("!")
+                        }
+                    }
+                    TextButton(
+                        onClick = { onAction(LibraryAction.ViewRawFiles(book.id)) },
+                        modifier = Modifier.semantics {
+                            contentDescription = "View raw files for ${book.title}$actionContext"
+                        },
+                    ) {
+                        Text("View raw files")
+                    }
                 }
             }
         }
@@ -312,3 +320,6 @@ private fun String.displayLabel(): String =
 
 internal fun reviewBadgeLabel(reviewState: String, reviewReason: String?): String =
     (reviewReason?.takeIf(String::isNotBlank) ?: reviewState).displayLabel()
+
+internal fun cardChipLabel(series: String?, genre: String?): String? =
+    if (series?.trim().equals("The Great Courses", ignoreCase = true)) "Lecture" else genre
