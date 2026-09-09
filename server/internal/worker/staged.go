@@ -274,6 +274,7 @@ func (handler *ScanRootHandler) handleInventory(
 		infer = grouping.InferTree
 	}
 	grouped := inferInventoryTree(tree, infer)
+	normalizeInferredSeries(grouped.Books)
 	if full {
 		if _, err := repository.FinalizeInventoryAndPublish(ctx, catalog.InventoryFinalization{
 			ScanRunID: run.ID, RootID: root.ID, Books: grouped.Books, Evidence: grouped.Evidence,
@@ -551,6 +552,7 @@ func (handler RegroupScopeHandler) Handle(ctx context.Context, job catalog.Worke
 			return loadErr
 		}
 		result := inferInventoryTree(tree, infer)
+		normalizeInferredSeries(result.Books)
 		generation, refineErr := handler.Repo.ApplyGroupingRefinement(ctx, catalog.GroupingRefinement{
 			RootID: rootID, ScopePath: scope, ExpectedGeneration: expected,
 			Books: result.Books, Evidence: result.Evidence,

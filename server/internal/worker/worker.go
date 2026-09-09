@@ -339,6 +339,7 @@ func (handler *ScanRootHandler) Handle(
 	for _, folder := range result.Folders {
 		books = append(books, grouping.Infer(folder)...)
 	}
+	normalizeInferredSeries(books)
 	if err := handler.Repo.FinalizeSuccessfulScan(ctx, run.ID, books); err != nil {
 		return handler.failScan(ctx, run.ID, "search projection publication failed", err)
 	}
@@ -346,6 +347,17 @@ func (handler *ScanRootHandler) Handle(
 		return fmt.Errorf("queue metadata enrichment: %w", err)
 	}
 	return nil
+}
+
+func normalizeInferredSeries(books []catalog.InferredBook) {
+	for index := range books {
+		series, position := metadata.InferSeriesIdentity(books[index])
+		if series == "" {
+			continue
+		}
+		books[index].Series = series
+		books[index].SeriesPosition = position
+	}
 }
 
 func (handler *ScanRootHandler) failScan(

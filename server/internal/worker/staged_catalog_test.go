@@ -52,6 +52,40 @@ func TestScanRootPublishesProvisionalCatalogBeforeProbeJobs(t *testing.T) {
 	}
 }
 
+func TestScanRootNormalizesSeriesBeforePublishingCatalog(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 123, time.UTC)
+	audio := stagedSourceFile("Brandon Sanderson/Brandon Sanderson - Alcatraz vs The Evil Librarians/1 Alcatraz vs The Evil Librarians/book.m4b", catalog.FileKindAudio, now)
+	repository := &stagedRepositoryFake{
+		run:        catalog.ScanRun{ID: uuid.New(), RootID: "audiobooks"},
+		generation: catalog.CatalogGeneration{RootID: "audiobooks", Value: 2},
+		tree:       grouping.Tree{RootID: "audiobooks", ScopePath: "", Files: []catalog.SourceFile{audio}},
+	}
+	handler := stagedScanHandler(repository, scanner.InventoryResult{
+		RootID: "audiobooks", Scope: scanner.FullScope(),
+		Files: []scanner.InventoryFile{stagedInventoryFile(audio)},
+	})
+	handler.InferTree = func(grouping.Tree) grouping.Result {
+		return grouping.Result{Books: []catalog.InferredBook{{
+			RootID:       "audiobooks",
+			SourceFolder: "Brandon Sanderson/Brandon Sanderson - Alcatraz vs The Evil Librarians/1 Alcatraz vs The Evil Librarians",
+			GroupingKey:  "alcatraz-1", Title: "Alcatraz vs The Evil Librarians",
+			Authors: []string{"Brandon Sanderson"}, MetadataSource: catalog.MetadataInferred,
+			ReviewState: catalog.ReviewUnreviewed,
+		}}}
+	}
+
+	if err := handler.Handle(context.Background(), stagedScanJob("audiobooks", "", true)); err != nil {
+		t.Fatal(err)
+	}
+	if len(repository.lastFinalization.Books) != 1 {
+		t.Fatalf("published books=%#v, want one", repository.lastFinalization.Books)
+	}
+	book := repository.lastFinalization.Books[0]
+	if book.Series != "Alcatraz vs The Evil Librarians" || book.SeriesPosition != "1" {
+		t.Fatalf("published series=%q position=%q", book.Series, book.SeriesPosition)
+	}
+}
+
 func TestScanRootPartialInventoryDoesNotFinalizeOrMarkComplete(t *testing.T) {
 	repository := &stagedRepositoryFake{run: catalog.ScanRun{ID: uuid.New(), RootID: "audiobooks"}}
 	result := scanner.InventoryResult{
