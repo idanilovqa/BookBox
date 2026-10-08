@@ -91,4 +91,4 @@
 - [x] Run focused Go and Android tests, then the nearest full Go and Android unit-test gates one process at a time.
 - [x] Review the complete diff and resolve all critical or important findings.
 - [x] Audit tracked files, ignored local state, remotes, and commit-facing configuration for credentials and private artifacts.
-- [ ] Commit only task-owned files, create the public GitHub repository, push the verified history as `main`, and verify visibility/default branch/remote state.
+- [x] Commit only task-owned files, create the public GitHub repository, push the verified history as `main`, and verify visibility/default branch/remote state.
