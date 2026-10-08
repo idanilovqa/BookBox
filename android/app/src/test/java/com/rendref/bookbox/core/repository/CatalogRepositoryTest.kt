@@ -378,7 +378,7 @@ class CatalogRepositoryTest {
 
             assertEquals("Dune", page.groups.single().books.single().title)
             assertEquals(
-                server.url("/v1/books/33333333-3333-3333-3333-333333333333/cover").toString(),
+                server.url("/v1/books/33333333-3333-3333-3333-333333333333/cover?v=1").toString(),
                 page.groups.single().books.single().coverUrl,
             )
             assertEquals("page-2", page.nextCursor)

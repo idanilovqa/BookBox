@@ -10,12 +10,13 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
-	"github.com/google/uuid"
 	"bookbox.local/server/internal/catalog"
 	"bookbox.local/server/internal/library"
+	"github.com/google/uuid"
 )
 
 type BookRepository interface {
@@ -183,7 +184,8 @@ func (builder *CatalogBuilder) bookFiles(
 			assignedM4B++
 		}
 	}
-	split := strings.HasPrefix(detail.Book.GroupingKey, "m4b-") ||
+	split := detail.Book.SourceFolder == "" ||
+		strings.HasPrefix(detail.Book.GroupingKey, "m4b-") ||
 		totalM4B > 1 && assignedM4B > 0 && assignedM4B < totalM4B
 	if !split {
 		folderManifest, err := builder.folders.Build(ctx, Request{Selections: []Selection{{
@@ -201,19 +203,7 @@ func (builder *CatalogBuilder) bookFiles(
 		return result, nil
 	}
 
-	destinationName := ""
-	for _, file := range assignedAudio {
-		if strings.EqualFold(path.Ext(file.RelativePath), ".m4b") {
-			destinationName = sanitizeWithFallback(
-				strings.TrimSuffix(path.Base(file.RelativePath), path.Ext(file.RelativePath)),
-				detail.Book.Title,
-			)
-			break
-		}
-	}
-	if destinationName == "" {
-		destinationName = sanitizeWithFallback(detail.Book.Title, "Audiobook")
-	}
+	destinationName := bookDestinationName(detail.Book, assignedAudio)
 	result := make([]bookManifestPath, 0, len(assignedAudio)+2)
 	stems := make(map[string]struct{}, len(assignedAudio))
 	for _, file := range assignedAudio {
@@ -259,6 +249,37 @@ func (builder *CatalogBuilder) bookFiles(
 		})
 	}
 	return result, nil
+}
+
+func bookDestinationName(book catalog.Book, assignedAudio []catalog.SourceFile) string {
+	fallback := ""
+	for _, file := range assignedAudio {
+		if strings.EqualFold(path.Ext(file.RelativePath), ".m4b") {
+			fallback = strings.TrimSuffix(
+				path.Base(file.RelativePath),
+				path.Ext(file.RelativePath),
+			)
+			break
+		}
+	}
+	if fallback == "" && len(assignedAudio) > 0 {
+		name := path.Base(assignedAudio[0].RelativePath)
+		fallback = strings.TrimSuffix(name, path.Ext(name))
+	}
+	if book.SourceFolder == "" && book.ConfirmedMatchID != nil {
+		title := strings.TrimSpace(book.Title)
+		if title != "" {
+			name := title
+			if len(book.Authors) > 0 && strings.TrimSpace(book.Authors[0]) != "" {
+				name = strings.TrimSpace(book.Authors[0]) + " - " + name
+			}
+			if book.PublicationYear != nil && *book.PublicationYear > 0 {
+				name += " (" + strconv.Itoa(*book.PublicationYear) + ")"
+			}
+			return sanitizeWithFallback(name, fallback)
+		}
+	}
+	return sanitizeWithFallback(fallback, book.Title)
 }
 
 func recognizedSharedCover(entries []os.DirEntry) string {

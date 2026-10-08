@@ -37,6 +37,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import com.rendref.bookbox.core.network.TransferSelection
+import com.rendref.bookbox.core.storage.DestinationPermissionRevoked
 import com.rendref.bookbox.core.transfer.FileState
 import com.rendref.bookbox.core.transfer.TransferStartRequest
 import com.rendref.bookbox.core.transfer.TransferStartResult
@@ -68,6 +69,7 @@ import com.rendref.bookbox.feature.transfers.TransferSetupContent
 import com.rendref.bookbox.feature.transfers.TransferSetupState
 import com.rendref.bookbox.feature.transfers.TransfersScreen
 import com.rendref.bookbox.feature.transfers.TransfersViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
@@ -108,6 +110,37 @@ internal fun startAfterNotificationDecision(
     }
 }
 
+internal sealed interface CopyStartOutcome {
+    val message: String
+
+    data class Started(override val message: String) : CopyStartOutcome
+
+    data class Failed(override val message: String) : CopyStartOutcome
+}
+
+internal suspend fun prepareCopy(
+    source: com.rendref.bookbox.core.transfer.TransferStartSource,
+    request: TransferStartRequest,
+): CopyStartOutcome = try {
+    when (source.startFromVisibleCopyAction(request)) {
+        is TransferStartResult.Scheduled -> CopyStartOutcome.Started("Copy scheduled")
+        is TransferStartResult.ScheduleRejected -> CopyStartOutcome.Started(
+            "Copy saved but Android could not schedule it",
+        )
+    }
+} catch (failure: CancellationException) {
+    throw failure
+} catch (_: DestinationPermissionRevoked) {
+    CopyStartOutcome.Failed("Choose an Android destination before copying")
+} catch (_: Exception) {
+    CopyStartOutcome.Failed(
+        "Unable to prepare the copy. Check the server and try again.",
+    )
+}
+
+internal fun connectedRuntimeKey(saved: com.rendref.bookbox.core.storage.SavedConnection): String =
+    connectionInstanceKey(saved)
+
 @Composable
 internal fun ProductionBookBoxApp() {
     val context = LocalContext.current
@@ -125,7 +158,9 @@ internal fun ProductionBookBoxApp() {
         val connected = saved
         if (connectState == ConnectState.Ready && connected != null) {
             ConnectedApp(
-                runtime = remember(connected) { runtime.connected(connected) },
+                runtime = remember(connectedRuntimeKey(connected)) {
+                    runtime.connected(connected)
+                },
                 onConnectionReset = { connectionGeneration += 1 },
             )
         } else {
@@ -300,27 +335,24 @@ internal fun ConnectedApp(
         library.showAuthor(author)
     }
 
-    fun startCopy(selections: List<TransferSelection>, displayName: String) {
-        if (selections.isEmpty()) return
+    fun startCopy(draft: CopyDraft) {
+        if (draft.selections.isEmpty()) return
         scope.launch {
-            val message = runCatching {
-                runtime.starter.startFromVisibleCopyAction(
-                    TransferStartRequest(selections, displayName),
+            when (
+                val outcome = prepareCopy(
+                    runtime.starter,
+                    TransferStartRequest(draft.selections, draft.displayName),
                 )
-            }.fold(
-                onSuccess = { result ->
-                    when (result) {
-                        is TransferStartResult.Scheduled -> "Copy scheduled"
-                        is TransferStartResult.ScheduleRejected ->
-                            "Copy saved but Android could not schedule it"
-                    }
-                },
-                onFailure = { "Choose an Android destination before copying" },
-            )
-            snackbar.showSnackbar(message)
-            transfers.refresh()
-            backStack.clear()
-            backStack.add(AppRoute.Transfers)
+            ) {
+                is CopyStartOutcome.Failed -> snackbar.showSnackbar(outcome.message)
+                is CopyStartOutcome.Started -> {
+                    snackbar.showSnackbar(outcome.message)
+                    copyDraft = null
+                    transfers.refresh()
+                    backStack.clear()
+                    backStack.add(AppRoute.Transfers)
+                }
+            }
         }
     }
 
@@ -333,8 +365,7 @@ internal fun ConnectedApp(
                 )
             }
         }
-        startCopy(draft.selections, draft.displayName)
-        copyDraft = null
+        startCopy(draft)
     }
 
     LaunchedEffect(permissionRequestPending, permissionDecision, copyDraft) {
@@ -533,8 +564,7 @@ internal fun ConnectedApp(
                                         }
                                     },
                                     start = {
-                                        startCopy(draft.selections, draft.displayName)
-                                        copyDraft = null
+                                        startCopy(draft)
                                     },
                                 )
                                 context.checkSelfPermission(

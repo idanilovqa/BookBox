@@ -8,6 +8,7 @@ import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import java.io.IOException
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.HttpUrl
 import okhttp3.Response
 
 /**
@@ -20,27 +21,27 @@ import okhttp3.Response
 internal fun rememberProviderCoverImageLoader(): ImageLoader {
     val context = LocalContext.current
     return remember(context) {
-        val publicCalls = OkHttpClient.Builder()
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .addInterceptor(PublicCoverInterceptor)
-            .build()
         ImageLoader.Builder(context)
             .components {
-                add(OkHttpNetworkFetcherFactory(publicCalls))
+                add(OkHttpNetworkFetcherFactory(providerCoverClient()))
             }
             .build()
     }
 }
 
-private object PublicCoverInterceptor : Interceptor {
+internal fun providerCoverClient(): OkHttpClient = OkHttpClient.Builder()
+    .addNetworkInterceptor(PublicCoverInterceptor)
+    .build()
+
+internal fun trustedProviderCoverUrl(url: HttpUrl): Boolean =
+    url.isHttps &&
+        url.encodedUsername.isEmpty() &&
+        url.encodedPassword.isEmpty()
+
+internal object PublicCoverInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val url = chain.request().url
-        if (
-            !url.isHttps ||
-            url.encodedUsername.isNotEmpty() ||
-            url.encodedPassword.isNotEmpty()
-        ) {
+        if (!trustedProviderCoverUrl(url)) {
             throw IOException("Provider cover URL is not trusted")
         }
         return chain.proceed(chain.request())

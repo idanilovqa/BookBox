@@ -77,8 +77,18 @@ class CatalogApi(
                 throw IOException("Catalog response is invalid")
             }
             validatePage(decoded, query)
+            val catalogGenerations = decoded.snapshots.associate {
+                it.rootId to it.catalogGeneration
+            }
             val groups = decoded.groups.map { group ->
-                group.copy(books = group.books.map(::normalizeCoverUrl))
+                group.copy(
+                    books = group.books.map { book ->
+                        normalizeCoverUrl(
+                            book = book,
+                            catalogGeneration = checkNotNull(catalogGenerations[book.rootId]),
+                        )
+                    },
+                )
             }
             PagedBooks(
                 groups = groups,
@@ -89,7 +99,10 @@ class CatalogApi(
         }
     }
 
-    private fun normalizeCoverUrl(book: BookCardDto): BookCardDto {
+    private fun normalizeCoverUrl(
+        book: BookCardDto,
+        catalogGeneration: Long,
+    ): BookCardDto {
         val rawCoverUrl = book.coverUrl ?: return book
         val resolved = baseUrl.resolve(rawCoverUrl)
             ?: throw IOException("Catalog response contains an invalid cover URL")
@@ -109,7 +122,10 @@ class CatalogApi(
         ) {
             throw IOException("Catalog response contains an untrusted cover URL")
         }
-        return book.copy(coverUrl = resolved.toString())
+        val revised = resolved.newBuilder()
+            .addQueryParameter("v", catalogGeneration.toString())
+            .build()
+        return book.copy(coverUrl = revised.toString())
     }
 
     private fun validatePage(page: BooksPageDto, query: BookQuery) {

@@ -9,10 +9,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/google/uuid"
 	"bookbox.local/server/internal/catalog"
 	"bookbox.local/server/internal/config"
 	"bookbox.local/server/internal/library"
+	"github.com/google/uuid"
 )
 
 func TestBookManifestPreservesFolderOrUsesM4BStemForSplit(t *testing.T) {
@@ -85,6 +85,48 @@ func TestBookManifestPreservesFolderOrUsesM4BStemForSplit(t *testing.T) {
 			t.Fatalf("destinations = %v, want %v", got, want)
 		}
 	})
+}
+
+func TestBookManifestCreatesMetadataFolderForRootLevelBook(t *testing.T) {
+	t.Parallel()
+
+	fixture := newBookManifestFixture(t,
+		"origin.m4b",
+		"origin.cue",
+		"unrelated.mp3",
+	)
+	book := fixture.addBook("", "root-origin", "Origin",
+		"origin.m4b",
+	)
+	detail := fixture.repository.details[book.ID]
+	matchID := uuid.New()
+	year := 2017
+	detail.Book.Authors = []string{"Dan Brown", "Second Author"}
+	detail.Book.PublicationYear = &year
+	detail.Book.ConfirmedMatchID = &matchID
+	fixture.repository.details[book.ID] = detail
+
+	manifest := fixture.build(t, book.ID)
+	if got, want := destinations(manifest), []string{
+		"Dan Brown - Origin (2017)/origin.cue",
+		"Dan Brown - Origin (2017)/origin.m4b",
+	}; !slices.Equal(got, want) {
+		t.Fatalf("destinations = %v, want %v", got, want)
+	}
+}
+
+func TestBookManifestRootLevelFolderFallsBackToAudioStem(t *testing.T) {
+	t.Parallel()
+
+	fixture := newBookManifestFixture(t, "origin.m4b")
+	book := fixture.addBook("", "root-origin", "Folder-derived title",
+		"origin.m4b",
+	)
+
+	manifest := fixture.build(t, book.ID)
+	if got, want := destinations(manifest), []string{"origin/origin.m4b"}; !slices.Equal(got, want) {
+		t.Fatalf("destinations = %v, want %v", got, want)
+	}
 }
 
 func TestBookManifestSanitizesSplitDestinationAndFallsBackToTitle(t *testing.T) {
