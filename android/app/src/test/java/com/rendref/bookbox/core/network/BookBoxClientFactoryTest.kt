@@ -2,6 +2,7 @@ package com.rendref.bookbox.core.network
 
 import com.rendref.bookbox.core.storage.SavedConnection
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.Headers.Companion.headersOf
@@ -12,6 +13,19 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class BookBoxClientFactoryTest {
+    @Test
+    fun `client allows slow manifest preparation`() {
+        val server = MockWebServer()
+        server.start()
+        try {
+            val client = factoryFor(server)
+
+            assertEquals(TimeUnit.MINUTES.toMillis(5).toInt(), client.readTimeoutMillis)
+        } finally {
+            server.close()
+        }
+    }
+
     @Test
     fun `client follows a same-origin GET redirect`() {
         val server = MockWebServer()

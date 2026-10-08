@@ -2,6 +2,7 @@ package com.rendref.bookbox.core.network
 
 import com.rendref.bookbox.core.storage.SavedConnection
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
@@ -17,6 +18,7 @@ class BookBoxClientFactory {
             "Server URL must not contain credentials"
         }
         return OkHttpClient.Builder()
+            .readTimeout(5, TimeUnit.MINUTES)
             .followRedirects(false)
             .followSslRedirects(false)
             .addInterceptor(SameOriginRedirectInterceptor(baseUrl))
